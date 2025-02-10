@@ -1,0 +1,9 @@
+{
+    "id": "devtools",
+    "version": "0.1.0",
+    "name": "devtools lkw",
+    "description": "Installs and update / upgrade apt packages and set some wsl settings.",
+    "init": true,
+    "installsAfter": [
+		]
+}
