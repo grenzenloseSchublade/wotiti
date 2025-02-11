@@ -1,9 +1,18 @@
 import sqlite3
 from sqlite3 import Error
+import os 
+from config import DATABASE_PATH
 
-def create_connection(db_file):
+def create_connection(db_file=DATABASE_PATH):
     """Create a database connection to the SQLite database specified by db_file."""
     print(f"Creating database connection to {db_file}...")
+    
+    # Überprüfen, ob das Verzeichnis bereits existiert
+    directory = os.path.dirname(db_file)
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+        print(f"Das Verzeichnis '{directory}' wurde erstellt.")
+
     conn = None
     try:
         conn = sqlite3.connect(db_file)

@@ -2,10 +2,7 @@
 __pycache__
 
 # Code files
-src.database.*
-src.database.app_database.db
-src/database/*
-src/database/app_database.db
+database
 
 # Build files
 poetry.lock

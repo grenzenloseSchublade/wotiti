@@ -1,7 +1,9 @@
 from tkinter import Button, Text, Scrollbar, VERTICAL, END, Frame
 import sys
+import os
 import time
 from db_helper import create_connection, create_table, insert_data
+from config import DATABASE_PATH
 # import plotly.graph_objects as go
 
 class App:
@@ -69,7 +71,7 @@ class App:
 
         # Database connection
         try:
-            self.db_conn = create_connection("src/database/app_database.db")
+            self.db_conn = create_connection("database/app_database.db")
             if self.db_conn:
                 create_table(self.db_conn)
         except Exception as e:
