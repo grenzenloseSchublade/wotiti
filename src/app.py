@@ -2,7 +2,7 @@ from tkinter import Button, Text, Scrollbar, VERTICAL, END, Frame
 import sys
 import time
 from db_helper import create_connection, create_table, insert_data
-import plotly.graph_objects as go
+# import plotly.graph_objects as go
 
 class App:
     def __init__(self, master):

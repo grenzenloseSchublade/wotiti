@@ -4,19 +4,18 @@ This project is a simple Python application that features a graphical user inter
 
 ## TODO 
 
-1. create devcontainer CHECK
-2. test app CHECK
-3. create Repo CHECK
-4. git login credentials setzen CHECK
-5. use poetry CHECK
-6. make standalone app (linux, windows) 
+1. create devcontainer CHECK 
+2. test app CHECK 
+3. create Repo CHECK 
+4. git login credentials setzen CHECK 
+5. use poetry CHECK 
+6. make standalone app (linux, später: windows) -> ubuntu: CHECK
 7. develop logic + create fancy gui 
 8. create dummy data in database 
 9. use plotly to make fancy statistics 
-10. create gui plots -> plotly ?
+10. create gui plots -> plotly ? 
 11. create multiple users 
-12. make fancy data analysis and further plots
-13. 
+12. make fancy data analysis and further plots 
 
 ## Project Structure
 
@@ -25,7 +24,7 @@ my-python-gui-app
 ├── src
 │   ├── main.py          # Entry point of the application
 │   ├── gui
-│   │   └── app.py      # Contains the GUI implementation
+│   │   └── app.py       # Contains the GUI implementation
 │   ├── database
 │   │   └── db_helper.py # Database helper functions
 ├── requirements.txt     # Project dependencies
@@ -55,6 +54,33 @@ This will launch the GUI application. Click the button to trigger the associated
 - `tkinter`: For creating the GUI.
 - `sqlite3`: For database operations.
 
+## Build / Executable 
+
+1. Use `"image": "mcr.microsoft.com/devcontainers/python:3.10-bullseye"` - Debian 11 (GLIBC 2.31). Any newer GLIBC versions will cause troubles on OS.
+2. Install pyinstaller:
+   ```
+   pip install pyinstaller==6.12
+   ```
+3. Run:
+   ```
+   pyinstaller --windowed --onefile src/main.py
+   ```
+
+### Alternative using Poetry
+
+1. Add the Poetry shell plugin:
+   ```
+   poetry self add poetry-plugin-shell
+   ```
+2. Enter the Poetry shell:
+   ```
+   poetry shell
+   ```
+3. Run the PyInstaller command in the Poetry shell:
+   ```
+   pyinstaller --windowed --onefile src/main.py
+   ```
+
 ## Using Poetry
 
 To manage dependencies and virtual environments, this project uses Poetry. Here are some essential commands:
@@ -74,4 +100,5 @@ To manage dependencies and virtual environments, this project uses Poetry. Here 
    - Select `Python: Select Interpreter`.
    - Choose the interpreter from the `.venv` directory created by Poetry.
 
-For more information, refer to the [Poetry documentation](https://python-poetry.org/docs/) and [Poetry Usage](https://python-poetry.org/docs/basic-usage)
+For more information, refer to the [Poetry documentation](https://python-poetry.org/docs/) and [Poetry Usage](https://python-poetry.org/docs/basic-usage).
+

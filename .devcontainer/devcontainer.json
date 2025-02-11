@@ -1,6 +1,6 @@
 {
   "name": "WorkTimeTimer",
-  "image": "mcr.microsoft.com/devcontainers/python:3.12-bookworm",
+  "image": "mcr.microsoft.com/devcontainers/python:3.10-bullseye", // Debian 11 (GLIBC 2.31)
   "features": {
     "ghcr.io/devcontainers/features/common-utils:2": {
       "username": "vscode"

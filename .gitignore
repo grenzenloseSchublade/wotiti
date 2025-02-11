@@ -11,4 +11,3 @@ src/database/app_database.db
 poetry.lock
 main.spec
 build/*
-dist/*
