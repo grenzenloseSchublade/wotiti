@@ -1,11 +1,14 @@
-
+# Byte-compiled / optimized / DLL files
 __pycache__
-poetry.lock
+
+# Code files
 src.database.*
 src.database.app_database.db
 src/database/*
 src/database/app_database.db
 
+# Build files
+poetry.lock
 main.spec
 build/*
 dist/*
