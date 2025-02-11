@@ -69,7 +69,7 @@ class App:
 
         # Database connection
         try:
-            self.db_conn = create_connection("wotiti/src/database/app_database.db")
+            self.db_conn = create_connection("src/database/app_database.db")
             if self.db_conn:
                 create_table(self.db_conn)
         except Exception as e:
@@ -98,7 +98,7 @@ class App:
         self.console.configure(state='normal')
         if error:
             self.console.insert(END, message, 'error')
-            self.console.tag_config('error', foreground='red')
+            self.console.tag_config('error', font='red')
         else:
             self.console.insert(END, message)
         self.console.configure(state='disabled')

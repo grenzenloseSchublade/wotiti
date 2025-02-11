@@ -10,7 +10,7 @@ This project is a simple Python application that features a graphical user inter
 4. git login credentials setzen CHECK
 5. use poetry CHECK
 6. make standalone app (linux, windows) 
-7. create fancy gui 
+7. develop logic + create fancy gui 
 8. create dummy data in database 
 9. use plotly to make fancy statistics 
 10. create gui plots -> plotly ?
@@ -74,4 +74,4 @@ To manage dependencies and virtual environments, this project uses Poetry. Here 
    - Select `Python: Select Interpreter`.
    - Choose the interpreter from the `.venv` directory created by Poetry.
 
-For more information, refer to the [Poetry documentation](https://python-poetry.org/docs/).
+For more information, refer to the [Poetry documentation](https://python-poetry.org/docs/) and [Poetry Usage](https://python-poetry.org/docs/basic-usage)
