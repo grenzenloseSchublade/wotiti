@@ -3,5 +3,9 @@ __pycache__
 poetry.lock
 src.database.*
 src.database.app_database.db
+src/database/*
 src/database/app_database.db
-src/database/app_database.db
+
+main.spec
+build/*
+dist/*
