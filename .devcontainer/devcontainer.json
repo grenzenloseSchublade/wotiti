@@ -5,6 +5,7 @@
     "ghcr.io/devcontainers/features/common-utils:2": {
       "username": "vscode"
     },
+    "ghcr.io/devcontainers-extra/features/poetry:2": {},
     "ghcr.io/devcontainers/features/github-cli:1": {},
     "./local-features/devtools": {}
   },
@@ -25,7 +26,9 @@
         "ms-python.debugpy",
         "ms-python.pylint",
         "ms-python.black-formatter",
-        "yzhang.markdown-all-in-one"
+        "yzhang.markdown-all-in-one",
+        "qwtel.sqlite-viewer",
+        "GitHub.copilot"
       ]
     }
   },

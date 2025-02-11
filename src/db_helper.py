@@ -32,7 +32,7 @@ def create_table(conn):
 
 def insert_data(conn, value):
     """Insert a new row into the data table."""
-    print(f"Inserting data into the table: {value}")
+    print("Insert data...")
     sql = '''INSERT INTO data(value) VALUES(?)'''
     try:
         cur = conn.cursor()
