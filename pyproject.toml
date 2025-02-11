@@ -1,14 +1,31 @@
 [tool.poetry]
-name = "my-python-gui-app"
+name = "wotiti"
 version = "0.1.0"
-description = "A Python GUI application using Tkinter."
-authors = ["Your Name <youremail@example.com>"]
+description = "Small UI to track worktime"
+authors = ["grenzenloseSchublade <hans.mueller@rub.de>"]
 license = "MIT"
+repository = "https://github.com/grenzenloseSchublade/wotiti"
+
+package-mode = false
+
+# README file(s) are used as the package description
+readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.8"
-tkinter = "*"
+python = "^3.12"
+numpy = "^2.2.0"
+plotly = "^6.0.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "*"
+pytest-cov = "*"
+flake8 = "*"
+black = "*"
+pre-commit = "*"
 
 [build-system]
-requires = ["poetry-core>=1.0.0"]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+[scripts]
+wotiti = "wotiti.__main__:main"

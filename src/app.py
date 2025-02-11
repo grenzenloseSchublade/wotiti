@@ -1,7 +1,8 @@
-from tkinter import Button, Text, Scrollbar, VERTICAL, END, Frame, Tk
+from tkinter import Button, Text, Scrollbar, VERTICAL, END, Frame
 import sys
 import time
 from db_helper import create_connection, create_table, insert_data
+import plotly.graph_objects as go
 
 class App:
     def __init__(self, master):
@@ -72,7 +73,7 @@ class App:
             if self.db_conn:
                 create_table(self.db_conn)
         except Exception as e:
-            print(f"Failed to connect to the database: {e}")
+            self.write(f"Failed to connect to the database: {e}", error=True)
             self.db_conn = None
 
     def on_button_click(self):
@@ -89,13 +90,17 @@ class App:
         self.console.delete(1.0, END)
         self.console.configure(state='disabled')
 
-    def write(self, message):
+    def write(self, message, error=False):
         """Writes a message to the console with a timestamp."""
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         if message.strip():
             message = f"[{timestamp}] {message}"
         self.console.configure(state='normal')
-        self.console.insert(END, message)
+        if error:
+            self.console.insert(END, message, 'error')
+            self.console.tag_config('error', foreground='red')
+        else:
+            self.console.insert(END, message)
         self.console.configure(state='disabled')
         self.console.see(END)
 

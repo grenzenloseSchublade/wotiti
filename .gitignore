@@ -1,3 +1,5 @@
-# Byte-compiled / optimized / DLL files
-__pycache__
 
+__pycache__
+poetry.lock
+src.database.*
+src/database/app_database.db

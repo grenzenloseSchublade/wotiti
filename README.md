@@ -8,7 +8,7 @@ This project is a simple Python application that features a graphical user inter
 2. test app CHECK
 3. create Repo CHECK
 4. git login credentials setzen CHECK
-5. use poetry 
+5. use poetry CHECK
 6. make standalone app (linux, windows) 
 7. create fancy gui 
 8. create dummy data in database 
@@ -17,8 +17,6 @@ This project is a simple Python application that features a graphical user inter
 11. create multiple users 
 12. make fancy data analysis and further plots
 13. 
-
-
 
 ## Project Structure
 
@@ -56,3 +54,24 @@ This will launch the GUI application. Click the button to trigger the associated
 
 - `tkinter`: For creating the GUI.
 - `sqlite3`: For database operations.
+
+## Using Poetry
+
+To manage dependencies and virtual environments, this project uses Poetry. Here are some essential commands:
+
+1. **Install dependencies**:
+   ```
+   poetry install
+   ```
+
+2. **Show detailed information about installed packages**:
+   ```
+   poetry show -v
+   ```
+
+3. **Set the Python interpreter in VSCode to the created virtual environment**:
+   - Open the command palette (Ctrl+Shift+P).
+   - Select `Python: Select Interpreter`.
+   - Choose the interpreter from the `.venv` directory created by Poetry.
+
+For more information, refer to the [Poetry documentation](https://python-poetry.org/docs/).
