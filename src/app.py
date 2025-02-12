@@ -1,16 +1,15 @@
 from tkinter import Button, Text, Scrollbar, VERTICAL, END, Frame, Entry, Label, Listbox
 import sys
-import os
 import time
 from datetime import datetime
-from db_helper import create_connection, create_main_table, create_user_table, insert_user, log_start, log_stop, calculate_duration
+from db_helper import create_connection, create_main_table, create_user_table, check_user, log_start, log_stop, calculate_duration
 from config import DATABASE_PATH
 
 class App:
     def __init__(self, master):
         print("Initializing the application GUI...")
         self.master = master
-        master.title("Fancy GUI App")
+        master.title("WOTITI - WOrkTImeTImer")
         master.configure(bg='#C0C0C0')  # Windows 98 background color
 
         # Set window size based on screen resolution
@@ -47,6 +46,7 @@ class App:
         # Stop button
         self.stop_button = Button(self.button_frame, text="Stop", command=self.stop_session, bg='#D4D0C8', fg='black', font=('MS Sans Serif', 10))
         self.stop_button.grid(row=0, column=3, pady=5, padx=5, sticky="ew")
+        self.stop_button.config(state="disabled", bg='#A9A9A9')
 
         # Calculate Duration button
         self.calculate_button = Button(self.button_frame, text="Calculate Duration", command=self.calculate_duration, bg='#D4D0C8', fg='black', font=('MS Sans Serif', 10))
@@ -71,7 +71,7 @@ class App:
         self.date_entry.insert(0, str(datetime.today().strftime('%Y-%m-%d')))  # Default value
 
         # project label and entry
-        self.project_label = Label(self.entry_frame, text="project:", bg='#C0C0C0', fg='black', font=('MS Sans Serif', 10))
+        self.project_label = Label(self.entry_frame, text="Projekt:", bg='#C0C0C0', fg='black', font=('MS Sans Serif', 10))
         self.project_label.grid(row=0, column=4, pady=5, padx=5, sticky="w")
         self.project_entry = Entry(self.entry_frame, bg='#FFFFFF', fg='black', font=('MS Sans Serif', 10))
         self.project_entry.grid(row=0, column=5, pady=5, padx=5, sticky="ew")
@@ -82,7 +82,7 @@ class App:
         self.timer_frame.grid(row=2, column=0, columnspan=6, pady=5, padx=5, sticky="ew")
 
         # Timer label
-        self.timer_label = Label(self.timer_frame, text="Timer: 00:00:00", bg='#C0C0C0', fg='red', font=('MS Sans Serif', 10))
+        self.timer_label = Label(self.timer_frame, text="Timer: 00:00:00", bg='#C0C0C0', fg='red', font=('MS Sans Serif<', 16, 'bold'))
         self.timer_label.grid(row=0, column=0, pady=5, padx=5, sticky="w")
 
         # Database content frame
@@ -134,8 +134,8 @@ class App:
             self.db_conn = create_connection(DATABASE_PATH)
             if self.db_conn:
                 create_main_table(self.db_conn)
-                insert_user(self.db_conn, "hans")
-                create_user_table(self.db_conn, "hans")
+                check_user(self.db_conn, "hans")
+                #create_user_table(self.db_conn, "hans")
                 self.update_db_content()
         except Exception as e:
             self.write(f"Failed to connect to the database: {e}", error=True)
@@ -159,7 +159,7 @@ class App:
                     self.write("Session already started. Please stop the session before starting again.", error=True)
                 else:
                     print("Starting session...")
-                    user_id = insert_user(self.db_conn, name)
+                    user_id = check_user(self.db_conn, name)
                     if user_id is not None:
                         cursor = self.db_conn.cursor()
                         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (f"{name}_events",))
@@ -260,7 +260,7 @@ class App:
                 elapsed_time = duration
             minutes, seconds = divmod(elapsed_time, 60)
             hours, minutes = divmod(minutes, 60)
-            self.timer_label.config(text=f"Timer ({name}, project {project}): {int(hours):02}:{int(minutes):02}:{int(seconds):02}")
+            self.timer_label.config(text=f"Timer ({name}, Projekt {project}): {int(hours):02}:{int(minutes):02}:{int(seconds):02}")
         else:
             self.timer_label.config(text="Timer: 00:00:00")
         self.master.after(1000, self.update_timer)

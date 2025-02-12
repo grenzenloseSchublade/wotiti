@@ -59,9 +59,9 @@ def create_user_table(conn, name):
     except Error as e:
         print(f"Error creating table for user '{name}': {e}")
 
-def insert_user(conn, name):
+def check_user(conn, name):
     """Insert a new user into the main table if not already exists."""
-    print(f"Inserting user '{name}' into the main table...")
+    print(f"Check user '{name}'...")
     sql_check_user = '''SELECT id FROM users WHERE name = ?'''
     sql_insert_user = '''INSERT INTO users(name) VALUES(?)'''
     try:
@@ -87,7 +87,14 @@ def log_start(project=1, name="hans", date=None, conn=None):
         return
 
     # Ensure the user table exists
-    create_user_table(conn, name)
+    cursor = conn.cursor()
+    cursor.execute(f'''
+        SELECT name FROM sqlite_master WHERE type='table' AND name='{name}_events';
+    ''')
+    table_exists = cursor.fetchone()
+
+    if table_exists is None:
+        create_user_table(conn, name)
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cursor = conn.cursor()
@@ -104,11 +111,21 @@ def log_stop(project=1, name="hans", date=None, conn=None):
         print("Name and date are required to log a session.")
         return
 
-    # Ensure the user table exists
-    create_user_table(conn, name)
-
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Check if a start entry exists
     cursor = conn.cursor()
+    cursor.execute(f'''
+        SELECT id FROM {name}_events
+        WHERE project = ? AND event_type = 'start' AND date = ?
+        ORDER BY timestamp DESC LIMIT 1
+    ''', (project, date))
+    start_entry = cursor.fetchone()
+
+    if start_entry is None:
+        print(f"No start entry found for project {project} on {date} for user '{name}'.")
+        return 
+
     cursor.execute(f'''
         INSERT INTO {name}_events (project, event_type, timestamp, date)
         VALUES (?, ?, ?, ?)
