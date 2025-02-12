@@ -24,70 +24,111 @@ def create_connection(db_file=DATABASE_PATH):
 
     return conn
 
-def create_table(conn):
-    """Create a table in the SQLite database."""
-    print("Creating table in the database...")
+def create_main_table(conn):
+    """Create the main table in the SQLite database."""
+    print("Creating main table in the database...")
     try:
-        sql_create_table = '''
-                            CREATE TABLE IF NOT EXISTS events (
-                                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                                name TEXT,
-                                session_id INTEGER NOT NULL,
-                                event_type TEXT CHECK(event_type IN ('start', 'stop')),
-                                timestamp DATETIME NOT NULL
-                            );
-                        '''
+        sql_create_main_table = '''
+                                CREATE TABLE IF NOT EXISTS users (
+                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    name TEXT UNIQUE NOT NULL
+                                );
+                            '''
         cursor = conn.cursor()
-        cursor.execute(sql_create_table)
-        print("Table created successfully.")
+        cursor.execute(sql_create_main_table)
+        print("Main table created successfully.")
     except Error as e:
-        print(f"Error creating table: {e}")
+        print(f"Error creating main table: {e}")
 
-def insert_data(conn, value):
-    """Insert a new row into the data table."""
-    print("Insert data...")
-    sql = '''INSERT INTO data(value) VALUES(?)'''
+def create_user_table(conn, name):
+    """Create a subtable for a user in the SQLite database."""
+    print(f"Creating table for user '{name}' in the database...")
+    try:
+        sql_create_user_table = f'''
+                                CREATE TABLE IF NOT EXISTS {name}_events (
+                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    project INTEGER NOT NULL,
+                                    event_type TEXT CHECK(event_type IN ('start', 'stop')),
+                                    timestamp DATETIME NOT NULL,
+                                    date TEXT NOT NULL
+                                );
+                            '''
+        cursor = conn.cursor()
+        cursor.execute(sql_create_user_table)
+        print(f"Table for user '{name}' created successfully.")
+    except Error as e:
+        print(f"Error creating table for user '{name}': {e}")
+
+def insert_user(conn, name):
+    """Insert a new user into the main table if not already exists."""
+    print(f"Inserting user '{name}' into the main table...")
+    sql_check_user = '''SELECT id FROM users WHERE name = ?'''
+    sql_insert_user = '''INSERT INTO users(name) VALUES(?)'''
     try:
         cur = conn.cursor()
-        cur.execute(sql, (value,))
-        conn.commit()
-        print("Data inserted successfully.")
-        return cur.lastrowid
+        cur.execute(sql_check_user, (name,))
+        user = cur.fetchone()
+        if user is None:
+            cur.execute(sql_insert_user, (name,))
+            conn.commit()
+            print(f"User '{name}' inserted successfully.")
+            return cur.lastrowid
+        else:
+            print(f"User '{name}' already exists.")
+            return user[0]
     except sqlite3.Error as e:
-        print(f"Error inserting data: {e}")
+        print(f"Error inserting user '{name}': {e}")
         return None
 
-def log_start(session_id=1, name=None, conn=None):
+def log_start(project=1, name="hans", date=None, conn=None):
     """Log the start time of a session."""
+    if name is None or date is None:
+        print("Name and date are required to log a session.")
+        return
+
+    # Ensure the user table exists
+    create_user_table(conn, name)
+
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO events (name, session_id, event_type, timestamp)
+    cursor.execute(f'''
+        INSERT INTO {name}_events (project, event_type, timestamp, date)
         VALUES (?, ?, ?, ?)
-    ''', (name, session_id, 'start', timestamp))
+    ''', (project, 'start', timestamp, date))
     conn.commit()
-    print(f"Start time for session {session_id} logged: {timestamp}")
+    print(f"Start time for project {project} logged for user '{name}' on {date}: {timestamp}")
 
-def log_stop(session_id=1, name=None, conn=None):
+def log_stop(project=1, name="hans", date=None, conn=None):
     """Log the stop time of a session."""
+    if name is None or date is None:
+        print("Name and date are required to log a session.")
+        return
+
+    # Ensure the user table exists
+    create_user_table(conn, name)
+
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO events (name, session_id, event_type, timestamp)
+    cursor.execute(f'''
+        INSERT INTO {name}_events (project, event_type, timestamp, date)
         VALUES (?, ?, ?, ?)
-    ''', (name, session_id, 'stop', timestamp))
+    ''', (project, 'stop', timestamp, date))
     conn.commit()
-    print(f"Stop time for session {session_id} logged: {timestamp}")
+    print(f"Stop time for project {project} logged for user '{name}' on {date}: {timestamp}")
 
-def calculate_duration(session_id=1, conn=None):
+def calculate_duration(project=1, name="hans", conn=None):
     """Calculate the total duration of a session."""
+    if name is None:
+        print("Name is required to calculate session duration.")
+        return
+
     cursor = conn.cursor()
-    cursor.execute('''
+    cursor.execute(f'''
         SELECT event_type, timestamp
-        FROM events
-        WHERE session_id = ?
+        FROM {name}_events
+        WHERE project = ?
         ORDER BY timestamp
-    ''', (session_id,))
+    ''', (project,))
     
     events = cursor.fetchall()
     total_duration = 0
@@ -104,6 +145,5 @@ def calculate_duration(session_id=1, conn=None):
             duration = (stop_time - start_time).total_seconds()
             total_duration += duration
             start_time = None
-    
-    print(f"Total duration for session {session_id}: {total_duration} seconds")
+            
     return total_duration

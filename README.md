@@ -11,9 +11,10 @@ This project is a simple Python application that features a graphical user inter
 5. use poetry CHECK 
 6. make standalone app (linux, später: windows) -> ubuntu: CHECK
 7. make standalone app with database CHECK 
-8. develop logic + create fancy gui 
-9. create dummy data in database 
-10. use plotly to make fancy statistics 
+8. develop logic + create fancy gui (database table, etc. ) CHECK
+9. Debug and test 
+10. create dummy data in database 
+11. use plotly to make fancy statistics 
 11. create gui plots -> plotly ? 
 12. create multiple users 
 13. make fancy data analysis and further plots 

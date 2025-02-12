@@ -1,3 +1,3 @@
 # Global configuration file
 
-DATABASE_PATH = "/src/database/app_database.db" # Update this path as needed
+DATABASE_PATH = "database/app_database.db" # Update this path as needed
