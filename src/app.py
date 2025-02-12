@@ -49,7 +49,7 @@ class App:
         self.stop_button.config(state="disabled", bg='#A9A9A9')
 
         # Calculate Duration button
-        self.calculate_button = Button(self.button_frame, text="Calculate Duration", command=self.calculate_duration, bg='#D4D0C8', fg='black', font=('MS Sans Serif', 10))
+        self.calculate_button = Button(self.button_frame, text="Update TimyTime", command=self.calculate_duration, bg='#D4D0C8', fg='black', font=('MS Sans Serif', 10))
         self.calculate_button.grid(row=0, column=4, pady=5, padx=5, sticky="ew")
 
         # Entry frame
@@ -61,7 +61,7 @@ class App:
         self.name_label.grid(row=0, column=0, pady=5, padx=5, sticky="w")
         self.name_entry = Entry(self.entry_frame, bg='#FFFFFF', fg='black', font=('MS Sans Serif', 10))
         self.name_entry.grid(row=0, column=1, pady=5, padx=5, sticky="ew")
-        self.name_entry.insert(0, "hans")  # Default value
+        self.name_entry.insert(0, "Hans")  # Default value
 
         # Datum label and entry
         self.date_label = Label(self.entry_frame, text="Datum:", bg='#C0C0C0', fg='black', font=('MS Sans Serif', 10))
@@ -70,11 +70,15 @@ class App:
         self.date_entry.grid(row=0, column=3, pady=5, padx=5, sticky="ew")
         self.date_entry.insert(0, str(datetime.today().strftime('%Y-%m-%d')))  # Default value
 
+        # Heute button
+        self.heute_button = Button(self.entry_frame, text="Heute", command=self.set_today_date, bg='#D4D0C8', fg='black', font=('MS Sans Serif', 10))
+        self.heute_button.grid(row=0, column=4, pady=5, padx=5, sticky="ew")
+
         # project label and entry
         self.project_label = Label(self.entry_frame, text="Projekt:", bg='#C0C0C0', fg='black', font=('MS Sans Serif', 10))
-        self.project_label.grid(row=0, column=4, pady=5, padx=5, sticky="w")
+        self.project_label.grid(row=0, column=5, pady=5, padx=5, sticky="w")
         self.project_entry = Entry(self.entry_frame, bg='#FFFFFF', fg='black', font=('MS Sans Serif', 10))
-        self.project_entry.grid(row=0, column=5, pady=5, padx=5, sticky="ew")
+        self.project_entry.grid(row=0, column=6, pady=5, padx=5, sticky="ew")
         self.project_entry.insert(0, "1")  # Default value
 
         # Timer frame
@@ -120,6 +124,7 @@ class App:
         self.frame.grid_columnconfigure(3, weight=1)
         self.frame.grid_columnconfigure(4, weight=1)
         self.frame.grid_columnconfigure(5, weight=1)
+        self.frame.grid_columnconfigure(6, weight=1)
         self.console_frame.grid_rowconfigure(0, weight=1)
         self.console_frame.grid_columnconfigure(0, weight=1)
         self.db_content_frame.grid_rowconfigure(0, weight=1)
@@ -134,8 +139,8 @@ class App:
             self.db_conn = create_connection(DATABASE_PATH)
             if self.db_conn:
                 create_main_table(self.db_conn)
-                check_user(self.db_conn, "hans")
-                #create_user_table(self.db_conn, "hans")
+                check_user(self.db_conn, "Hans")
+                create_user_table(self.db_conn, "Hans")
                 self.update_db_content()
         except Exception as e:
             self.write(f"Failed to connect to the database: {e}", error=True)
@@ -144,7 +149,7 @@ class App:
         self.session_active = {}
         self.timer_running = False
         self.timer_start_time = None
-        self.update_timer()
+        self.update_timer_realtime()
 
     def on_button_click(self):
         print("Button clicked!")
@@ -198,10 +203,11 @@ class App:
                 print("Calculating duration...")
                 duration = calculate_duration(project=project, name=name, conn=self.db_conn)
                 print(f"Total duration: {duration} seconds")
+                self.update_timer(duration)
 
     def get_project(self):
         try:
-            return int(self.project_entry.get())
+            return self.project_entry.get()
         except ValueError:
             self.write("Invalid project ID. Please enter an integer.", error=True)
             return None
@@ -211,6 +217,11 @@ class App:
 
     def get_date(self):
         return self.date_entry.get()
+
+    def set_today_date(self):
+        """Sets the date entry to today's date."""
+        self.date_entry.delete(0, END)
+        self.date_entry.insert(0, str(datetime.today().strftime('%Y-%m-%d')))
 
     def clear_console(self):
         """Clears the console text widget."""
@@ -246,13 +257,14 @@ class App:
                 events = cursor.fetchall()
                 for event in events:
                     project, event_type, timestamp = event
-                    self.db_content_listbox.insert(END, f"  Session {project}: {event_type} at {timestamp}")
+                    self.db_content_listbox.insert(END, f"  Projekt {project}: {event_type} at {timestamp}")
 
-    def update_timer(self):
+    def update_timer_realtime(self):
         """Update the timer label with the elapsed time."""
         project = self.get_project()
         name = self.get_name()
-        if project is not None and name:
+
+        if project is not None and name and self.session_active.get((name, project)):
             duration = calculate_duration(project=project, name=name, conn=self.db_conn) if self.db_conn else 0
             if self.timer_running:
                 elapsed_time = time.time() - self.timer_start_time + duration
@@ -261,6 +273,24 @@ class App:
             minutes, seconds = divmod(elapsed_time, 60)
             hours, minutes = divmod(minutes, 60)
             self.timer_label.config(text=f"Timer ({name}, Projekt {project}): {int(hours):02}:{int(minutes):02}:{int(seconds):02}")
-        else:
-            self.timer_label.config(text="Timer: 00:00:00")
-        self.master.after(1000, self.update_timer)
+        # TODO was wenn datenbank noch komplett leer? 
+        # else:
+        #     self.timer_label.config(text="Timer: 00:00:00")
+
+        # Update rate in ms 
+        self.master.after(1000, self.update_timer_realtime)
+
+    def update_timer(self, duration):
+        """Update the timer label with the elapsed time."""
+        project = self.get_project()
+        name = self.get_name()
+
+        if project is not None and name:
+            #duration = calculate_duration(project=project, name=name, conn=self.db_conn) if self.db_conn else 0
+            if self.timer_running:
+                elapsed_time = time.time() - self.timer_start_time + duration
+            else:
+                elapsed_time = duration
+            minutes, seconds = divmod(elapsed_time, 60)
+            hours, minutes = divmod(minutes, 60)
+            self.timer_label.config(text=f"Timer ({name}, Projekt {project}): {int(hours):02}:{int(minutes):02}:{int(seconds):02}")

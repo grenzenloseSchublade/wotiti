@@ -47,7 +47,7 @@ def create_user_table(conn, name):
         sql_create_user_table = f'''
                                 CREATE TABLE IF NOT EXISTS {name}_events (
                                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                                    project INTEGER NOT NULL,
+                                    project TEXT NOT NULL,
                                     event_type TEXT CHECK(event_type IN ('start', 'stop')),
                                     timestamp DATETIME NOT NULL,
                                     date TEXT NOT NULL
@@ -80,7 +80,7 @@ def check_user(conn, name):
         print(f"Error inserting user '{name}': {e}")
         return None
 
-def log_start(project=1, name="hans", date=None, conn=None):
+def log_start(project="1", name="hans", date=None, conn=None):
     """Log the start time of a session."""
     if name is None or date is None:
         print("Name and date are required to log a session.")
@@ -105,7 +105,7 @@ def log_start(project=1, name="hans", date=None, conn=None):
     conn.commit()
     print(f"Start time for project {project} logged for user '{name}' on {date}: {timestamp}")
 
-def log_stop(project=1, name="hans", date=None, conn=None):
+def log_stop(project="1", name="hans", date=None, conn=None):
     """Log the stop time of a session."""
     if name is None or date is None:
         print("Name and date are required to log a session.")
@@ -133,7 +133,7 @@ def log_stop(project=1, name="hans", date=None, conn=None):
     conn.commit()
     print(f"Stop time for project {project} logged for user '{name}' on {date}: {timestamp}")
 
-def calculate_duration(project=1, name="hans", conn=None):
+def calculate_duration(project="1", name="hans", conn=None):
     """Calculate the total duration of a session."""
     if name is None:
         print("Name is required to calculate session duration.")

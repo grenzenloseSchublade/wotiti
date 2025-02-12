@@ -12,7 +12,7 @@ This project is a simple Python application that features a graphical user inter
 6. make standalone app (linux, später: windows) -> ubuntu: CHECK
 7. make standalone app with database CHECK 
 8. develop logic + create fancy gui (database table, etc. ) CHECK
-9. Debug and test 
+9. Debug and test CHECK 
 10. create dummy data in database 
 11. use plotly to make fancy statistics 
 11. create gui plots -> plotly ? 
