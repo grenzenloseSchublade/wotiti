@@ -80,7 +80,7 @@ def check_user(conn, name):
         print(f"Error inserting user '{name}': {e}")
         return None
 
-def log_start(project="1", name="hans", date=None, conn=None):
+def log_start(project="1", name="Hans", date=None, conn=None):
     """Log the start time of a session."""
     if name is None or date is None:
         print("Name and date are required to log a session.")
@@ -105,7 +105,7 @@ def log_start(project="1", name="hans", date=None, conn=None):
     conn.commit()
     print(f"Start time for project {project} logged for user '{name}' on {date}: {timestamp}")
 
-def log_stop(project="1", name="hans", date=None, conn=None):
+def log_stop(project="1", name="Hans", date=None, conn=None):
     """Log the stop time of a session."""
     if name is None or date is None:
         print("Name and date are required to log a session.")
@@ -113,7 +113,7 @@ def log_stop(project="1", name="hans", date=None, conn=None):
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Check if a start entry exists
+    # Ensure the user table name exists
     cursor = conn.cursor()
     cursor.execute(f'''
         SELECT id FROM {name}_events
@@ -133,13 +133,26 @@ def log_stop(project="1", name="hans", date=None, conn=None):
     conn.commit()
     print(f"Stop time for project {project} logged for user '{name}' on {date}: {timestamp}")
 
-def calculate_duration(project="1", name="hans", conn=None):
+def calculate_duration(project="1", name="Hans", conn=None):
     """Calculate the total duration of a session."""
     if name is None:
         print("Name is required to calculate session duration.")
         return
 
     cursor = conn.cursor()
+ 
+    # Ensure the user table name exists
+    cursor.execute(f'''
+        SELECT name FROM sqlite_master WHERE type='table' AND name='{name}_events';
+    ''')
+    table_exists = cursor.fetchone()
+    if table_exists is None:
+        print(f"No table found for user '{name}'.")
+
+        create_user_table(conn, name)
+    else:
+        print(f"Table found for user '{name}'.")
+        
     cursor.execute(f'''
         SELECT event_type, timestamp
         FROM {name}_events

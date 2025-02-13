@@ -13,11 +13,18 @@ This project is a simple Python application that features a graphical user inter
 7. make standalone app with database CHECK 
 8. develop logic + create fancy gui (database table, etc. ) CHECK
 9. Debug and test CHECK 
-10. create dummy data in database 
-11. use plotly to make fancy statistics 
-11. create gui plots -> plotly ? 
-12. create multiple users 
-13. make fancy data analysis and further plots 
+10. Was wenn vergessen wurde Zeit zu stoppen???
+11. GUI so einfach wie möglich halten -> Was wenn vergessen wurde Zeit zu stoppen???
+    - 1. Reiter: Eingabe -> Name, Datum, Projekt
+    - 2. Reiter: Ausgabe
+    - 3. Reiter: Statistiken
+13. Einträge bearbeiten können (neuer reiter)
+14. Stastiken (neuer Reiter) -> plotly
+15. create dummy data in database 
+16. use plotly to make fancy statistics 
+17. create gui plots -> plotly ? 
+18. create multiple users 
+19. make fancy data analysis and further plots 
 
 ## Project Structure
 
@@ -76,7 +83,7 @@ The application uses an SQLite database to store data. The database file is loca
 
 1. Run:
    ```
-   poetry run pyinstaller --add-data "src/database/app_database.db:data" --onefile --windowed src/main.py
+   poetry run pyinstaller --onefile --windowed src/main.py
    ```
 
 ### Using pip

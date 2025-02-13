@@ -48,8 +48,8 @@ class App:
         self.stop_button.grid(row=0, column=3, pady=5, padx=5, sticky="ew")
         self.stop_button.config(state="disabled", bg='#A9A9A9')
 
-        # Calculate Duration button
-        self.calculate_button = Button(self.button_frame, text="Update TimyTime", command=self.calculate_duration, bg='#D4D0C8', fg='black', font=('MS Sans Serif', 10))
+        # Update Duration button
+        self.calculate_button = Button(self.button_frame, text="Update TimyTime", command=self.update_duration, bg='#D4D0C8', fg='black', font=('MS Sans Serif', 10))
         self.calculate_button.grid(row=0, column=4, pady=5, padx=5, sticky="ew")
 
         # Entry frame
@@ -84,8 +84,6 @@ class App:
         # Timer frame
         self.timer_frame = Frame(self.frame, bg='#C0C0C0')
         self.timer_frame.grid(row=2, column=0, columnspan=6, pady=5, padx=5, sticky="ew")
-
-        # Timer label
         self.timer_label = Label(self.timer_frame, text="Timer: 00:00:00", bg='#C0C0C0', fg='red', font=('MS Sans Serif<', 16, 'bold'))
         self.timer_label.grid(row=0, column=0, pady=5, padx=5, sticky="w")
 
@@ -195,7 +193,7 @@ class App:
                     self.start_button.config(state="normal", bg='#D4D0C8')
                     self.stop_button.config(state="disabled", bg='#A9A9A9')
 
-    def calculate_duration(self):
+    def update_duration(self):
         if self.db_conn:
             project = self.get_project()
             name = self.get_name()
@@ -204,24 +202,35 @@ class App:
                 duration = calculate_duration(project=project, name=name, conn=self.db_conn)
                 print(f"Total duration: {duration} seconds")
                 self.update_timer(duration)
+            else:
+                self.write("Invalid duration. Please try again.", error=True)
+                return None
 
     def get_project(self):
         try:
             return self.project_entry.get()
         except ValueError:
-            self.write("Invalid project ID. Please enter an integer.", error=True)
+            self.write("Invalid project ID. Please try again.", error=True)
             return None
 
     def get_name(self):
-        return self.name_entry.get()
+        try:
+            return self.name_entry.get()
+        except ValueError:
+            self.write("Invalid name. Please try again.", error=True)
+            return None
 
     def get_date(self):
-        return self.date_entry.get()
+        try:
+            return self.date_entry.get()
+        except ValueError:
+            self.write("Invalid date. Please try again.", error=True)
+            return None
 
     def set_today_date(self):
         """Sets the date entry to today's date."""
         self.date_entry.delete(0, END)
-        self.date_entry.insert(0, str(datetime.today().strftime('%Y-%m-%d')))
+        self.date_entry.insert(0, str(datetime.today().strftime('%d-%m-%Y')))
 
     def clear_console(self):
         """Clears the console text widget."""
@@ -231,7 +240,7 @@ class App:
 
     def write(self, message, error=False):
         """Writes a message to the console with a timestamp."""
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = time.strftime("%d-%m-%Y %H:%M:%S")
         if message.strip():
             message = f"[{timestamp}] {message}"
         self.console.configure(state='normal')
@@ -273,10 +282,6 @@ class App:
             minutes, seconds = divmod(elapsed_time, 60)
             hours, minutes = divmod(minutes, 60)
             self.timer_label.config(text=f"Timer ({name}, Projekt {project}): {int(hours):02}:{int(minutes):02}:{int(seconds):02}")
-        # TODO was wenn datenbank noch komplett leer? 
-        # else:
-        #     self.timer_label.config(text="Timer: 00:00:00")
-
         # Update rate in ms 
         self.master.after(1000, self.update_timer_realtime)
 
@@ -286,7 +291,6 @@ class App:
         name = self.get_name()
 
         if project is not None and name:
-            #duration = calculate_duration(project=project, name=name, conn=self.db_conn) if self.db_conn else 0
             if self.timer_running:
                 elapsed_time = time.time() - self.timer_start_time + duration
             else:
@@ -294,3 +298,5 @@ class App:
             minutes, seconds = divmod(elapsed_time, 60)
             hours, minutes = divmod(minutes, 60)
             self.timer_label.config(text=f"Timer ({name}, Projekt {project}): {int(hours):02}:{int(minutes):02}:{int(seconds):02}")
+        else:
+            self.write("Invalid project or name. Please try again.", error=True)
