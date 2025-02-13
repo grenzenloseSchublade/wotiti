@@ -16,7 +16,7 @@ def db_conn():
     yield conn
     conn.close()
     if os.path.exists(TEST_DB_PATH):
-        os.remove(TEST_DB_PATH)
+        os.remove(os.path.dirname(TEST_DB_PATH))
 
 def test_create_connection(db_conn):
     """Test creating a database connection."""

@@ -2,10 +2,12 @@ import pytest
 from tkinter import Tk, END
 import sys
 import os
-import time
 from datetime import datetime
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
 from app import App
+from config import DATABASE_PATH
+
 
 @pytest.fixture
 def app():
@@ -13,6 +15,8 @@ def app():
     root = Tk()
     app = App(root)
     yield app
+    print(os.path.abspath(os.path.dirname(DATABASE_PATH)))
+    #os.remove(os.path.abspath(os.path.dirname(DATABASE_PATH)))
     root.destroy()
 
 def test_start_session(app):
@@ -25,10 +29,6 @@ def test_start_session(app):
     app.date_entry.insert(0, "1991-01-01")
     app.start_session()
     assert app.session_active.get(("test_user", 1), True) is True
-
-
-############################################################
-
 
 def test_set_today_date(app):
     """Test setting today's date."""
