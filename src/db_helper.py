@@ -96,7 +96,7 @@ def log_start(project="1", name="Hans", date=None, conn=None):
     if table_exists is None:
         create_user_table(conn, name)
 
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
     cursor = conn.cursor()
     cursor.execute(f'''
         INSERT INTO {name}_events (project, event_type, timestamp, date)
@@ -111,7 +111,7 @@ def log_stop(project="1", name="Hans", date=None, conn=None):
         print("Name and date are required to log a session.")
         return
 
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
     # Ensure the user table name exists
     cursor = conn.cursor()
@@ -148,10 +148,10 @@ def calculate_duration(project="1", name="Hans", conn=None):
     table_exists = cursor.fetchone()
     if table_exists is None:
         print(f"No table found for user '{name}'.")
-
         create_user_table(conn, name)
     else:
-        print(f"Table found for user '{name}'.")
+        pass 
+        #print(f"Table found for user '{name}'.")
         
     cursor.execute(f'''
         SELECT event_type, timestamp
@@ -166,7 +166,7 @@ def calculate_duration(project="1", name="Hans", conn=None):
     
     for event in events:
         event_type, timestamp_str = event
-        timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+        timestamp = datetime.strptime(timestamp_str, "%d-%m-%Y %H:%M:%S")
         
         if event_type == 'start':
             start_time = timestamp

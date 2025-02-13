@@ -40,20 +40,20 @@ class App:
         self.clear_button.grid(row=0, column=1, pady=5, padx=5, sticky="ew")
 
         # Start button
-        self.start_button = Button(self.button_frame, text="Start", command=self.start_session, bg='#D4D0C8', fg='black', font=('MS Sans Serif', 10))
+        self.start_button = Button(self.button_frame, text="Start", height = 2, width = 8, command=self.start_session, bg='#D4D0C8', fg='black', font=('MS Sans Serif', 10))
         self.start_button.grid(row=0, column=2, pady=5, padx=5, sticky="ew")
 
         # Stop button
-        self.stop_button = Button(self.button_frame, text="Stop", command=self.stop_session, bg='#D4D0C8', fg='black', font=('MS Sans Serif', 10))
+        self.stop_button = Button(self.button_frame, text="Stop", height = 2, width = 8, command=self.stop_session, bg='#D4D0C8', fg='black', font=('MS Sans Serif', 10))
         self.stop_button.grid(row=0, column=3, pady=5, padx=5, sticky="ew")
         self.stop_button.config(state="disabled", bg='#A9A9A9')
 
         # Update Duration button
-        self.calculate_button = Button(self.button_frame, text="Update TimyTime", command=self.update_duration, bg='#D4D0C8', fg='black', font=('MS Sans Serif', 10))
+        self.calculate_button = Button(self.button_frame, text="Update TimyTimer", command=self.update_duration, bg='#D4D0C8', fg='black', font=('MS Sans Serif', 10))
         self.calculate_button.grid(row=0, column=4, pady=5, padx=5, sticky="ew")
 
         # Entry frame
-        self.entry_frame = Frame(self.frame, bg='#C0C0C0')
+        self.entry_frame = Frame(self.frame, bg='#C0C0C0', border=2, relief="sunken", padx=2, pady=2)
         self.entry_frame.grid(row=1, column=0, columnspan=6, pady=5, padx=5, sticky="ew")
 
         # Name label and entry
@@ -68,7 +68,7 @@ class App:
         self.date_label.grid(row=0, column=2, pady=5, padx=5, sticky="w")
         self.date_entry = Entry(self.entry_frame, bg='#FFFFFF', fg='black', font=('MS Sans Serif', 10))
         self.date_entry.grid(row=0, column=3, pady=5, padx=5, sticky="ew")
-        self.date_entry.insert(0, str(datetime.today().strftime('%Y-%m-%d')))  # Default value
+        self.date_entry.insert(0, str(datetime.today().strftime('%d-%m-%Y')))  # Default value
 
         # Heute button
         self.heute_button = Button(self.entry_frame, text="Heute", command=self.set_today_date, bg='#D4D0C8', fg='black', font=('MS Sans Serif', 10))
@@ -82,9 +82,9 @@ class App:
         self.project_entry.insert(0, "1")  # Default value
 
         # Timer frame
-        self.timer_frame = Frame(self.frame, bg='#C0C0C0')
+        self.timer_frame = Frame(self.frame, bg='#C0C0C0', border=2, relief="sunken", padx=5, pady=5)
         self.timer_frame.grid(row=2, column=0, columnspan=6, pady=5, padx=5, sticky="ew")
-        self.timer_label = Label(self.timer_frame, text="Timer: 00:00:00", bg='#C0C0C0', fg='red', font=('MS Sans Serif<', 16, 'bold'))
+        self.timer_label = Label(self.timer_frame, text="[Zeit] 00:00:00 \t [Name] \t\t [Projekt]", bg='#C0C0C0', fg='red', font=('MS Sans Serif<', 16, 'bold'))
         self.timer_label.grid(row=0, column=0, pady=5, padx=5, sticky="w")
 
         # Database content frame
@@ -281,7 +281,7 @@ class App:
                 elapsed_time = duration
             minutes, seconds = divmod(elapsed_time, 60)
             hours, minutes = divmod(minutes, 60)
-            self.timer_label.config(text=f"Timer ({name}, Projekt {project}): {int(hours):02}:{int(minutes):02}:{int(seconds):02}")
+            self.timer_label.config(text=f"[Zeit] {int(hours):02}:{int(minutes):02}:{int(seconds):02} \t [Name] {name} \t [Projekt] {project}")
         # Update rate in ms 
         self.master.after(1000, self.update_timer_realtime)
 
@@ -297,6 +297,6 @@ class App:
                 elapsed_time = duration
             minutes, seconds = divmod(elapsed_time, 60)
             hours, minutes = divmod(minutes, 60)
-            self.timer_label.config(text=f"Timer ({name}, Projekt {project}): {int(hours):02}:{int(minutes):02}:{int(seconds):02}")
+            self.timer_label.config(text=f"[Zeit] {int(hours):02}:{int(minutes):02}:{int(seconds):02} \t [Name] {name} \t [Projekt] {project}")
         else:
             self.write("Invalid project or name. Please try again.", error=True)
