@@ -1,2 +1,11 @@
-numpy
 pytest
+numpy
+pandas
+# Calculations
+scipy
+scikit-learn
+statsmodels
+# Visualisation
+plotly
+#chart_studio
+dash

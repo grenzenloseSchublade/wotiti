@@ -80,7 +80,7 @@ def check_user(conn, name):
         print(f"Error inserting user '{name}': {e}")
         return None
 
-def log_start(project="1", name="Hans", date=None, conn=None):
+def log_start(project="1", name="Hans", timestamp=None, date=None, conn=None):
     """Log the start time of a session."""
     if name is None or date is None:
         print("Name and date are required to log a session.")
@@ -96,7 +96,11 @@ def log_start(project="1", name="Hans", date=None, conn=None):
     if table_exists is None:
         create_user_table(conn, name)
 
-    timestamp = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+    if timestamp is None:
+        timestamp = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+    else:
+        timestamp = timestamp.strftime("%d-%m-%Y %H:%M:%S")
+
     cursor = conn.cursor()
     cursor.execute(f'''
         INSERT INTO {name}_events (project, event_type, timestamp, date)
@@ -105,13 +109,16 @@ def log_start(project="1", name="Hans", date=None, conn=None):
     conn.commit()
     print(f"Start time for project {project} logged for user '{name}' on {date}: {timestamp}")
 
-def log_stop(project="1", name="Hans", date=None, conn=None):
+def log_stop(project="1", name="Hans", timestamp=None, date=None, conn=None):
     """Log the stop time of a session."""
     if name is None or date is None:
         print("Name and date are required to log a session.")
         return
 
-    timestamp = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+    if timestamp is None:
+        timestamp = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+    else:
+        timestamp = timestamp.strftime("%d-%m-%Y %H:%M:%S")
 
     # Ensure the user table name exists
     cursor = conn.cursor()

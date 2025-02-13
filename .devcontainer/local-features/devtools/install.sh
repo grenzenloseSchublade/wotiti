@@ -9,7 +9,10 @@ fi
 packages="portaudio19-dev
           libsndfile1
 		      tk
-          xauth
+          liblapack-dev
+          libblas-dev
+          libatlas-base-dev 
+          gfortran
           "
 
 # Install and update packages
