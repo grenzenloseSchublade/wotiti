@@ -2,7 +2,10 @@
 __pycache__
 
 # Code files
+
+#data
 database
+dataOLD
 
 # Build files
 poetry.lock

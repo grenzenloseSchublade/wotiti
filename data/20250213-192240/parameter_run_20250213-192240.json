@@ -1,0 +1,13 @@
+{
+    "num_users": 4,
+    "num_entries_per_user": 17,
+    "storage_type": "both",
+    "timeblock_min": 56,
+    "start_date": "06-02-2025",
+    "end_date": "12-02-2025",
+    "project_max": 1,
+    "fixed_interval": "02:00-18:00",
+    "min_entries_per_day": 1,
+    "path_to_save": "data/20250213-192240",
+    "add_to_existing": false
+}

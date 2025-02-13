@@ -3,11 +3,12 @@ import os
 import pandas as pd
 from datetime import datetime, timedelta
 import random
-from config import GENERATE_DATABASE_NAME
+
 from db_helper import create_connection, create_main_table, create_user_table, check_user, log_start, log_stop
 import json
+from config import GENERATE_DATABASE_PATH, PATH_TO_DATA
 
-def read_database(db_path=GENERATE_DATABASE_NAME):
+def read_database(db_path=GENERATE_DATABASE_PATH):
     """Read the SQLite database and return the data as a pandas DataFrame."""
     try:
         conn = sqlite3.connect(db_path)
@@ -41,7 +42,7 @@ def save_to_csv(data, csv_path):
     except Exception as e:
         print(f"Error saving data to CSV: {e}")
 
-def generate_sample_data(num_users, num_entries_per_user, storage_type, timeblock_min, start_date, end_date, project_max=10, fixed_interval=None, path_to_save=GENERATE_DATABASE_NAME, add_to_existing=False, entries_per_day=1):
+def generate_sample_data(num_users, num_entries_per_user, storage_type, timeblock_min, start_date, end_date, project_max=10, fixed_interval=None, min_entries_per_day=1, path_to_save=GENERATE_DATABASE_PATH, add_to_existing=False):
     """
     Generate sample data and store it in the specified format.
     
@@ -56,17 +57,24 @@ def generate_sample_data(num_users, num_entries_per_user, storage_type, timebloc
     - fixed_interval: Fixed time interval per day for start and stop times (format: 'HH:MM-HH:MM').
     - path_to_save: Path to save the generated data.
     - add_to_existing: Whether to add to existing data or overwrite.
-    - entries_per_day: Number of entries to generate per day.
+    - min_entries_per_day: Minimum number of entries to generate per day.
     """
+
+
+    # # save_dir = f"{path_to_save}/generate_database_{timestamp}.db"
+    # json_filename = f"{directory}/parameter_run_{timestamp}.json"
+
+    database_path = f"{path_to_save}/generate_database.db"
+    csv_path = f"{path_to_save}/generate_database.csv"
+
     try:
-        conn = create_connection(GENERATE_DATABASE_NAME)
+        # TODO 
+        conn = create_connection(database_path)
         if conn:
             create_main_table(conn)
             start_date = datetime.strptime(start_date, "%d-%m-%Y")
             end_date = datetime.strptime(end_date, "%d-%m-%Y")
-            date_range = (end_date - start_date).days
-            if date_range == 0:
-                date_range = 1  # Avoid division by zero
+            date_range = (end_date - start_date).days + 1  # Include end_date in the range
 
             data = []
             for user_id in range(1, num_users + 1):
@@ -75,7 +83,7 @@ def generate_sample_data(num_users, num_entries_per_user, storage_type, timebloc
                 create_user_table(conn, user_name)
                 
                 for entry_id in range(1, num_entries_per_user + 1):
-                    date = start_date + timedelta(days=(entry_id // entries_per_day) % date_range)
+                    date = start_date + timedelta(days=(entry_id // min_entries_per_day) % date_range)
                     date_str = date.strftime("%d-%m-%Y")
                     
                     project = f"projekt_{random.randint(1, project_max)}"
@@ -117,16 +125,14 @@ def generate_sample_data(num_users, num_entries_per_user, storage_type, timebloc
 
             if storage_type in ["csv", "both"]:
                 df = pd.DataFrame(data)
-                path_to_save = os.path.dirname(GENERATE_DATABASE_NAME) + "/generate_database.csv"
-                
-                if os.path.exists(path_to_save) and add_to_existing:
-                    df.to_csv(path_to_save, mode='a', header=False, index=False)
+                if add_to_existing:
+                    df.to_csv(csv_path, mode='a', header=False, index=False)
                 else:
-                    save_to_csv(df, path_to_save)
+                    save_to_csv(df, csv_path)
             
             if storage_type in ["db", "both"]:
                 conn.commit()
-                print(f"Sample data inserted into the database at {GENERATE_DATABASE_NAME} successfully.")
+                print(f"Sample data inserted into the database at {database_path} successfully.")
             
             conn.close()
     except Exception as e:
@@ -137,7 +143,7 @@ def generate_random_sample_data():
     """Generate sample data with random values for start_date, end_date, and fixed_interval."""
     num_users = random.randint(1, 10)
     num_entries_per_user = random.randint(15, 20)
-    storage_type = random.choice(["both"])
+    storage_type = "both"
     timeblock_min = random.randint(10, 60)
     
     start_date = datetime.now() - timedelta(days=random.randint(1, 30))
@@ -149,20 +155,16 @@ def generate_random_sample_data():
     start_hour = random.randint(0, 23)
     end_hour = random.randint(start_hour + 1, 24)
     fixed_interval = f"{start_hour:02d}:00-{end_hour:02d}:00"
+    min_entries_per_day = 1
     add_to_existing = False
     
-    params = {
-        "num_users": num_users,
-        "num_entries_per_user": num_entries_per_user,
-        "storage_type": storage_type,
-        "timeblock_min": timeblock_min,
-        "start_date": start_date_str,
-        "end_date": end_date_str,
-        "project_max": project_max,
-        "fixed_interval": fixed_interval,
-        "add_to_existing": add_to_existing
-    }
-    
+    # Create directory for the generated data
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    directory = PATH_TO_DATA + f"/{timestamp}"
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+        print(f"Directory '{directory}' created.")
+
     generate_sample_data(
         num_users=num_users,
         num_entries_per_user=num_entries_per_user,
@@ -172,12 +174,27 @@ def generate_random_sample_data():
         end_date=end_date_str,
         project_max=project_max,
         fixed_interval=fixed_interval,
+        min_entries_per_day=min_entries_per_day,
+        path_to_save=directory,
         add_to_existing=add_to_existing
     )
 
     # Save parameters to JSON file
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    json_filename = f"{os.path.dirname(GENERATE_DATABASE_NAME)}/run_{timestamp}.json"
+    params = {
+        "num_users": num_users,
+        "num_entries_per_user": num_entries_per_user,
+        "storage_type": storage_type,
+        "timeblock_min": timeblock_min,
+        "start_date": start_date_str,
+        "end_date": end_date_str,
+        "project_max": project_max,
+        "fixed_interval": fixed_interval,
+        "min_entries_per_day": min_entries_per_day,
+        "path_to_save": directory,
+        "add_to_existing": add_to_existing
+    }
+
+    json_filename = f"{directory}/parameter_run_{timestamp}.json"
     with open(json_filename, 'w') as json_file:
         json.dump(params, json_file, indent=4)
 
