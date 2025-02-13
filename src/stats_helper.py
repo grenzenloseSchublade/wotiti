@@ -41,7 +41,7 @@ def save_to_csv(data, csv_path):
     except Exception as e:
         print(f"Error saving data to CSV: {e}")
 
-def generate_sample_data(num_users, num_entries_per_user, storage_type, timeblock_min, start_date, end_date, fixed_interval=None, path_to_save=GENERATE_DATABASE_NAME, add_to_existing=False):
+def generate_sample_data(num_users, num_entries_per_user, storage_type, timeblock_min, start_date, end_date, project_max=10, fixed_interval=None, path_to_save=GENERATE_DATABASE_NAME, add_to_existing=False, entries_per_day=1):
     """
     Generate sample data and store it in the specified format.
     
@@ -52,9 +52,11 @@ def generate_sample_data(num_users, num_entries_per_user, storage_type, timebloc
     - timeblock_min: Minimum time block in minutes between start and stop times.
     - start_date: Start date for the entries (format: 'dd-mm-yyyy').
     - end_date: End date for the entries (format: 'dd-mm-yyyy').
+    - project_max: Maximum number of projects to generate.
     - fixed_interval: Fixed time interval per day for start and stop times (format: 'HH:MM-HH:MM').
     - path_to_save: Path to save the generated data.
     - add_to_existing: Whether to add to existing data or overwrite.
+    - entries_per_day: Number of entries to generate per day.
     """
     try:
         conn = create_connection(GENERATE_DATABASE_NAME)
@@ -73,10 +75,10 @@ def generate_sample_data(num_users, num_entries_per_user, storage_type, timebloc
                 create_user_table(conn, user_name)
                 
                 for entry_id in range(1, num_entries_per_user + 1):
-                    date = start_date + timedelta(days=entry_id % date_range)
+                    date = start_date + timedelta(days=(entry_id // entries_per_day) % date_range)
                     date_str = date.strftime("%d-%m-%Y")
                     
-                    project = f"projekt_{random.randint(1, 10)}"
+                    project = f"projekt_{random.randint(1, project_max)}"
                     
                     if fixed_interval:
                         start_time_str, stop_time_str = fixed_interval.split('-')
@@ -131,7 +133,6 @@ def generate_sample_data(num_users, num_entries_per_user, storage_type, timebloc
         print(f"Error generating sample data: {e}")
 
 
-# TODO mache Projekt random
 def generate_random_sample_data():
     """Generate sample data with random values for start_date, end_date, and fixed_interval."""
     num_users = random.randint(1, 10)
@@ -143,6 +144,7 @@ def generate_random_sample_data():
     end_date = start_date + timedelta(days=random.randint(1, 10))
     start_date_str = start_date.strftime("%d-%m-%Y")
     end_date_str = end_date.strftime("%d-%m-%Y")
+    project_max = random.randint(1, 5)
     
     start_hour = random.randint(0, 23)
     end_hour = random.randint(start_hour + 1, 24)
@@ -156,6 +158,7 @@ def generate_random_sample_data():
         "timeblock_min": timeblock_min,
         "start_date": start_date_str,
         "end_date": end_date_str,
+        "project_max": project_max,
         "fixed_interval": fixed_interval,
         "add_to_existing": add_to_existing
     }
@@ -167,6 +170,7 @@ def generate_random_sample_data():
         timeblock_min=timeblock_min,
         start_date=start_date_str,
         end_date=end_date_str,
+        project_max=project_max,
         fixed_interval=fixed_interval,
         add_to_existing=add_to_existing
     )
