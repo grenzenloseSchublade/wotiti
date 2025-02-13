@@ -1,6 +1,54 @@
-# My Python GUI App
+# WOTITI - Work Time Timer
 
-This project is a simple Python application that features a graphical user interface (GUI) with a single button. It integrates an SQLite database to demonstrate basic database operations.
+WOTITI is a simple Python application that features a graphical user interface (GUI) to track work time. It integrates an SQLite database to store and manage user sessions.
+
+## Features
+
+- **Start/Stop Session**: Log the start and stop times of work sessions.
+- **Update Timer**: Calculate and display the total duration of sessions.
+- **Multiple Users**: Support for multiple users with individual session tracking.
+- **Database Integration**: Store session data in an SQLite database.
+- **Console Output**: Display messages and errors in a console within the GUI.
+- **Set Today's Date**: Quickly set the date entry to today's date with a button click.
+
+## Project Structure
+
+```
+wotiti
+├── src
+│   ├── main.py          # Entry point of the application
+│   ├── app.py           # Contains the GUI implementation
+│   ├── db_helper.py     # Database helper functions
+│   ├── config.py        # Configuration file
+├── tests                # Test files
+│   ├── test_app.py      # Tests for the GUI application
+│   ├── test_db_helper.py# Tests for the database helper functions
+├── pyproject.toml       # Poetry configuration file
+└── README.md            # Project documentation
+```
+
+## Setup Instructions
+
+1. Clone the repository or download the project files.
+2. Navigate to the project directory.
+3. Install the required dependencies by running:
+   ```
+   poetry install
+   ```
+
+## Usage
+
+To run the application, execute the following command in your terminal:
+```
+poetry run python src/main.py
+```
+or use the build file in the dist folder.
+```
+./main
+```
+
+This will launch the GUI application. Use the buttons to start/stop sessions, update the timer, and interact with the SQLite database.
+
 
 ## TODO 
 
@@ -28,51 +76,22 @@ This project is a simple Python application that features a graphical user inter
 16. Was wenn vergessen wurde Zeit zu stoppen??? -> Einträge bearbeiten können (neuer reiter)
 17. Performance: Timer asynchron machen und Datenbankzugriff nur dann wenn nötig
 18. make further fancy data analysis and further plots 
-
-## Project Structure
-
-```
-my-python-gui-app
-├── src
-│   ├── main.py          # Entry point of the application
-│   ├── gui
-│   │   └── app.py       # Contains the GUI implementation
-│   ├── database
-│   │   └── db_helper.py # Database helper functions
-│   ├── config.py        # Configuration file
-├── requirements.txt     # Project dependencies
-├── pyproject.toml       # Poetry configuration file
-└── README.md            # Project documentation
-```
-
-## Setup Instructions
-
-1. Clone the repository or download the project files.
-2. Navigate to the project directory.
-3. Install the required dependencies by running:
-   ```
-   poetry install
-   ```
-
-## Usage
-
-To run the application, execute the following command in your terminal:
-```
-poetry run python src/main.py
-```
-
-This will launch the GUI application. Click the button to trigger the associated action, which interacts with the SQLite database.
+19. 
 
 ## Functionality
 
-The application provides a simple GUI with the following features:
-- **Click Me Button**: Displays a message in the console when clicked.
-- **Insert Default Entry Button**: Inserts a default entry into the SQLite database.
+### GUI Components
+
+- **Start Button**: Starts a new session for the specified user, project, and date.
+- **Stop Button**: Stops the current session for the specified user, project, and date.
+- **Update Timer Button**: Calculates and displays the total duration of sessions.
+- **Set Today's Date Button**: Sets the date entry to today's date.
 - **Clear Console Button**: Clears the console output.
+- **Console**: Displays messages and errors.
 
 ### Database
 
-The application uses an SQLite database to store data. The database file is located at `src/database/app_database.db`. When running the standalone executable, the database will be created and used in the same location relative to the executable.
+The application uses an SQLite database to store session data. The database file is located at `src/database/app_database.db`. When running the standalone executable, the database will be created and used in the same location relative to the executable.
 
 ## Dependencies
 
@@ -80,7 +99,7 @@ The application uses an SQLite database to store data. The database file is loca
 - `sqlite3`: For database operations.
 - `poetry`: For managing dependencies and virtual environments.
 
-## Build / Executable 
+## Build Executable 
 
 ### Using Poetry - Easy 
 
@@ -136,4 +155,24 @@ To manage dependencies and virtual environments, this project uses Poetry. Here 
    - Choose the interpreter from the `.venv` directory created by Poetry.
 
 For more information, refer to the [Poetry documentation](https://python-poetry.org/docs/) and [Poetry Usage](https://python-poetry.org/docs/basic-usage).
+
+## Testing
+
+This project includes tests for both the GUI application and the database helper functions. To run the tests, use the following command:
+```
+poetry run pytest
+```
+
+### Test Files
+
+- `tests/test_app.py`: Contains tests for the GUI application.
+- `tests/test_db_helper.py`: Contains tests for the database helper functions.
+
+## Contributing
+
+Contributions are welcome! Please fork the repository and submit a pull request with your changes.
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
