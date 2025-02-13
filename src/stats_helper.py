@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import random
 from config import GENERATE_DATABASE_NAME
 from db_helper import create_connection, create_main_table, create_user_table, check_user, log_start, log_stop
+import json
 
 def read_database(db_path=GENERATE_DATABASE_NAME):
     """Read the SQLite database and return the data as a pandas DataFrame."""
@@ -75,6 +76,8 @@ def generate_sample_data(num_users, num_entries_per_user, storage_type, timebloc
                     date = start_date + timedelta(days=entry_id % date_range)
                     date_str = date.strftime("%d-%m-%Y")
                     
+                    project = f"projekt_{random.randint(1, 10)}"
+                    
                     if fixed_interval:
                         start_time_str, stop_time_str = fixed_interval.split('-')
                         min_start_time = datetime.strptime(f"{date_str} {start_time_str}", "%d-%m-%Y %H:%M")
@@ -92,19 +95,19 @@ def generate_sample_data(num_users, num_entries_per_user, storage_type, timebloc
                         start_time = date + timedelta(hours=random.randint(0, 23), minutes=random.randint(0, 59))
                         stop_time = start_time + timedelta(minutes=random.randint(timeblock_min, 120))
 
-                    log_start(project=1, name=user_name, timestamp=start_time, date=date_str, conn=conn)
-                    log_stop(project=1, name=user_name, timestamp=stop_time, date=date_str, conn=conn)
+                    log_start(project=project, name=user_name, timestamp=start_time, date=date_str, conn=conn)
+                    log_stop(project=project, name=user_name, timestamp=stop_time, date=date_str, conn=conn)
                     
                     data.append({
                         "user": user_name,
-                        "project": 1,
+                        "project": project,
                         "event_type": "start",
                         "timestamp": start_time.strftime("%d-%m-%Y %H:%M:%S"),
                         "date": date_str
                     })
                     data.append({
                         "user": user_name,
-                        "project": 1,
+                        "project": project,
                         "event_type": "stop",
                         "timestamp": stop_time.strftime("%d-%m-%Y %H:%M:%S"),
                         "date": date_str
@@ -127,11 +130,13 @@ def generate_sample_data(num_users, num_entries_per_user, storage_type, timebloc
     except Exception as e:
         print(f"Error generating sample data: {e}")
 
+
+# TODO mache Projekt random
 def generate_random_sample_data():
     """Generate sample data with random values for start_date, end_date, and fixed_interval."""
     num_users = random.randint(1, 10)
-    num_entries_per_user = random.randint(5, 20)
-    storage_type = random.choice(["csv", "db", "both"])
+    num_entries_per_user = random.randint(15, 20)
+    storage_type = random.choice(["both"])
     timeblock_min = random.randint(10, 60)
     
     start_date = datetime.now() - timedelta(days=random.randint(1, 30))
@@ -142,6 +147,18 @@ def generate_random_sample_data():
     start_hour = random.randint(0, 23)
     end_hour = random.randint(start_hour + 1, 24)
     fixed_interval = f"{start_hour:02d}:00-{end_hour:02d}:00"
+    add_to_existing = False
+    
+    params = {
+        "num_users": num_users,
+        "num_entries_per_user": num_entries_per_user,
+        "storage_type": storage_type,
+        "timeblock_min": timeblock_min,
+        "start_date": start_date_str,
+        "end_date": end_date_str,
+        "fixed_interval": fixed_interval,
+        "add_to_existing": add_to_existing
+    }
     
     generate_sample_data(
         num_users=num_users,
@@ -151,14 +168,20 @@ def generate_random_sample_data():
         start_date=start_date_str,
         end_date=end_date_str,
         fixed_interval=fixed_interval,
-        add_to_existing=True
+        add_to_existing=add_to_existing
     )
+
+    # Save parameters to JSON file
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    json_filename = f"{os.path.dirname(GENERATE_DATABASE_NAME)}/run_{timestamp}.json"
+    with open(json_filename, 'w') as json_file:
+        json.dump(params, json_file, indent=4)
 
 
 # Example usage
 if __name__ == "__main__":
     generate_random_sample_data()
-    generate_sample_data(num_users=5, num_entries_per_user=10, storage_type="both", timeblock_min=15, start_date="01-01-2023", end_date="10-01-2023", fixed_interval="09:00-17:00", add_to_existing=True)
+    #generate_sample_data(num_users=5, num_entries_per_user=10, storage_type="both", timeblock_min=15, start_date="01-01-2023", end_date="10-01-2023", fixed_interval="09:00-17:00", add_to_existing=True)
     # data = read_database()
     # if not data.empty:
     #     save_to_csv(data, "database/generate_database.csv")
