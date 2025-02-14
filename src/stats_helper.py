@@ -12,7 +12,6 @@ from config import GENERATE_DATABASE_PATH, PATH_TO_DATA
 def read_database(db_path=PATH_TO_DATA):
     """Read the SQLite database and return the data as a pandas DataFrame."""
     try:
-        db_path = db_path + "/generate_database.db"
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
@@ -163,12 +162,12 @@ def generate_sample_data(num_users, storage_type, timeblock_min, start_date, end
 # TODO Teste Werte für die Parameter um ideale Daten zu generieren
 def generate_random_sample_data():
     """Generate sample data with random values for start_date, end_date, and fixed_interval."""
-    num_users = random.randint(1, 2)
+    num_users = random.randint(4, 9)
     storage_type = "both"
     timeblock_min = random.randint(30, 120)
     
     start_date = datetime.now() - timedelta(days=random.randint(1, 30))
-    end_date = start_date + timedelta(days=random.randint(10, 10))
+    end_date = start_date + timedelta(days=random.randint(30, 30)) # 1 Monat
     start_date_str = start_date.strftime("%d-%m-%Y")
     end_date_str = end_date.strftime("%d-%m-%Y")
     project_max = random.randint(2, 4)
@@ -193,7 +192,6 @@ def generate_random_sample_data():
         timeblock_min=timeblock_min,
         start_date=start_date_str,
         end_date=end_date_str,
-        #min_entries_per_day=min_entries_per_day,
         project_max=project_max,
         fixed_interval=fixed_interval,
         path_to_save=directory,
@@ -207,7 +205,6 @@ def generate_random_sample_data():
         "timeblock_min": timeblock_min,
         "start_date": start_date_str,
         "end_date": end_date_str,
-        #"min_entries_per_day": min_entries_per_day,
         "project_max": project_max,
         "fixed_interval": fixed_interval,
         "path_to_save": directory,
@@ -221,7 +218,10 @@ def generate_random_sample_data():
 
 # Example usage
 if __name__ == "__main__":
+
     generate_random_sample_data()
-    # data = read_database()
+
+    # db_path = PATH_TO_DATA + "/generate_database.db"
+    # data = read_database(db_path)
     # if not data.empty:
     #     save_to_csv(data, "database/generate_database.csv")

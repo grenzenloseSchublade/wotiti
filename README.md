@@ -64,7 +64,7 @@ This will launch the GUI application. Use the buttons to start/stop sessions, up
 9. create multiple users CHECK 
 10. Debug and test CHECK 
 11. Stastiken (neuer Reiter oder qt window?) -> plotly, pandas???
-12. create dummy data in database 
+12. create dummy data in database CHECK
 13. use plotly to make fancy statistics?
 14. create gui plots -> plotly, matplotlib ? 
 
