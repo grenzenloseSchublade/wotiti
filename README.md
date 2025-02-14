@@ -203,6 +203,26 @@ This function generates sample data with random values for start_date, end_date,
 - **Directory Creation**: Creates a new directory for each run to store the generated data and parameters.
 - **Parameter Logging**: Saves the parameters used for data generation in a JSON file, making it easy to reproduce or analyze the generated data.
 
+#### Sample Data Representation
+
+Here is an example of what the generated data might look like:
+
+| user     | project    | event_type | timestamp           | date       |
+|----------|------------|------------|---------------------|------------|
+| user_1   | projekt_3  | start      | 01-01-2023 09:00:00 | 01-01-2023 |
+| user_1   | projekt_3  | stop       | 01-01-2023 10:30:00 | 01-01-2023 |
+| user_2   | projekt_1  | start      | 01-01-2023 11:00:00 | 01-01-2023 |
+| user_2   | projekt_1  | stop       | 01-01-2023 12:45:00 | 01-01-2023 |
+| user_1   | projekt_2  | start      | 02-01-2023 08:15:00 | 02-01-2023 |
+| user_1   | projekt_2  | stop       | 02-01-2023 09:45:00 | 02-01-2023 |
+
+This table shows the user, project, event type (start or stop), timestamp of the event, and the date of the event.
+
+## Statistics and Data Analysis
+
+## Plots and Visualizations
+
+
 ## Contributing
 
 Contributions are welcome! Please fork the repository and submit a pull request with your changes.
