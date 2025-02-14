@@ -9,6 +9,15 @@ import json
 DATABASE_PATH = PATH_TO_DATA + "/20250214-010326/generate_database.db"
 PARAMETERS_PATH = PATH_TO_DATA + "/20250214-010326/parameter_run_20250214-010326.json"
 
+# Define Synthwave neon colors
+SYNTHWAVE_COLORS = {
+    'background': '#ffffff', # White
+    'text': '#000000', # Black
+    'blue': '#00d4ff', # Blue
+    'pink': '#ff00ff', # Pink
+    'yellow': '#ffff00' # Yellow
+}
+
 def read_database(db_path=DATABASE_PATH):
     """Read the SQLite database and return the data as a pandas DataFrame."""
     try:
@@ -63,26 +72,33 @@ def calculate_hours_per_project(data):
 def plot_hours_per_project(hours, user):
     """Plot a pie chart of hours per project for a specific user."""
     user_data = hours[hours['user'] == user]
-    fig = px.pie(user_data, names='project', values='total_hours', title=f'Hours per Project for {user}')
+    fig = px.pie(user_data, names='project', values='total_hours', title=f'Hours per Project for {user}', 
+                 color_discrete_sequence=[SYNTHWAVE_COLORS['blue'], SYNTHWAVE_COLORS['pink'], SYNTHWAVE_COLORS['yellow']])
+    fig.update_layout(
+        title_font=dict(size=18, color=SYNTHWAVE_COLORS['text'], family='Arial, sans-serif')
+    )
     return fig
+
 
 # Dash App
 app = Dash(__name__)
 
 app.layout = html.Div([
-    html.H1("Hours per Project per User"),
+    html.H1("WoTITI Stats", style={'color': SYNTHWAVE_COLORS['text'], 'text-align': 'pretty'}),
     html.Div(id='parameters-table'),
+    html.H2("Hours per Project", style={'color': SYNTHWAVE_COLORS['text'], 'text-align': 'pretty'}),
     html.Div([
         html.Div([
-            dcc.Dropdown(id='left-user-dropdown', placeholder="Select a user"),
+            dcc.Dropdown(id='left-user-dropdown', placeholder="Select a user", style={'background-color': SYNTHWAVE_COLORS['background'], 'color': SYNTHWAVE_COLORS['text']}),
             dcc.Graph(id='left-pie-chart')
-        ], style={'width': '48%', 'display': 'inline-block'}),
+        ], style={'width': '48%', 'display': 'inline-block', 'padding': '10px'}),
         html.Div([
-            dcc.Dropdown(id='right-user-dropdown', placeholder="Select a user"),
+            dcc.Dropdown(id='right-user-dropdown', placeholder="Select a user", style={'background-color': SYNTHWAVE_COLORS['background'], 'color': SYNTHWAVE_COLORS['text']}),
             dcc.Graph(id='right-pie-chart')
-        ], style={'width': '48%', 'display': 'inline-block'})
-    ], style={'display': 'flex', 'flex-wrap': 'wrap'})
-])
+        ], style={'width': '48%', 'display': 'inline-block', 'padding': '10px'})
+    ], style={'display': 'flex', 'flex-wrap': 'wrap', 'justify-content': 'space-between'})
+], style={'background-color': SYNTHWAVE_COLORS['background'], 'font-family': 'Arial, sans-serif'})
+
 
 @app.callback(
     Output('parameters-table', 'children'),
@@ -91,9 +107,9 @@ app.layout = html.Div([
 def update_parameters_table(_):
     parameters = read_parameters()
     if parameters:
-        table_header = [html.Tr([html.Th(key, style={'border': '1px solid black', 'padding': '8px', 'background-color': '#f2f2f2'}) for key in parameters.keys()])]
-        table_body = [html.Tr([html.Td(value, style={'border': '1px solid black', 'padding': '8px'}) for value in parameters.values()])]
-        table = html.Table(table_header + table_body, style={'width': '100%', 'border': '1px solid black', 'border-collapse': 'collapse', 'margin-top': '20px'})
+        table_header = [html.Tr([html.Th(key, style={'border': '1px solid black', 'padding': '4px', 'background-color': '#f2f2f2'}) for key in parameters.keys()])]
+        table_body = [html.Tr([html.Td(value, style={'border': '1px solid black', 'padding': '4px'}) for value in parameters.values()])]
+        table = html.Table(table_header + table_body, style={'width': '100%', 'border': '1px solid black', 'border-collapse': 'collapse', 'margin-bottom': '10px'})
         return table
     return "No parameters found."
 
