@@ -6,8 +6,8 @@ from dash.dependencies import Input, Output
 from config import PATH_TO_DATA
 import json
 
-DATABASE_PATH = PATH_TO_DATA + "/20250214-010326/generate_database.db"
-PARAMETERS_PATH = PATH_TO_DATA + "/20250214-010326/parameter_run_20250214-010326.json"
+DATABASE_PATH = "wotiti/" + PATH_TO_DATA + "/20250214-010326/generate_database.db"
+PARAMETERS_PATH = "wotiti/" + PATH_TO_DATA + "/20250214-010326/parameter_run_20250214-010326.json"
 
 # Define Synthwave neon colors
 SYNTHWAVE_COLORS = {
@@ -69,6 +69,39 @@ def calculate_hours_per_project(data):
     
     return pd.DataFrame(hours)
 
+def calculate_average_hours(data, period='D'):
+    """Calculate the average hours per user for a given period (day, week, month).
+    Ensure that each day has the same number of start and stop events.
+    If a start event begins on one day and the stop event goes into the next day,
+    count it towards the initial day and do not integrate it into the following day.
+    """
+    data['timestamp'] = pd.to_datetime(data['timestamp'], format="%d-%m-%Y %H:%M:%S")
+    data = data.sort_values(by=['user', 'timestamp'])
+    data['period'] = data['timestamp'].dt.to_period(period)
+    
+    hours = []
+    for (user, user_period), group in data.groupby(['user', 'period']):
+        start_times = group[group['event_type'] == 'start']['timestamp']
+        stop_times = group[group['event_type'] == 'stop']['timestamp']
+        
+        # Ensure the same number of start and stop events per day
+        if len(start_times) > len(stop_times):
+            start_times = start_times[:-1]
+        elif len(stop_times) > len(start_times):
+            stop_times = stop_times[1:]
+        
+        total_hours = (
+            (stop_times.values - start_times.values)
+            .sum()
+            .astype('timedelta64[h]')
+            .astype(int)
+        )
+        hours.append({'user': user, 'period': user_period, 'total_hours': total_hours})
+    
+    df = pd.DataFrame(hours)
+    average_hours = df.groupby('user')['total_hours'].mean().reset_index()
+    return average_hours
+
 def plot_hours_per_project(hours, user):
     """Plot a pie chart of hours per project for a specific user."""
     user_data = hours[hours['user'] == user]
@@ -79,6 +112,24 @@ def plot_hours_per_project(hours, user):
     )
     return fig
 
+def plot_average_hours(data):
+    """Plot a bar chart of average hours per day, week, and month for a user."""
+    periods = ['D', 'W', 'M']
+    average_hours = []
+    
+    for period in periods:
+        avg_hours = calculate_average_hours(data, period)
+        avg_hours['period'] = period
+        average_hours.append(avg_hours)
+    
+    average_hours_df = pd.concat(average_hours)
+    fig = px.bar(average_hours_df, x='period', y='total_hours', title='Average Hours per Period', 
+                 labels={'period': 'Period', 'total_hours': 'Average Hours'}, 
+                 color_discrete_sequence=[SYNTHWAVE_COLORS['blue'], SYNTHWAVE_COLORS['pink'], SYNTHWAVE_COLORS['yellow']])
+    fig.update_layout(
+        title_font=dict(size=18, color=SYNTHWAVE_COLORS['text'], family='Arial, sans-serif')
+    )
+    return fig
 
 # Dash App
 app = Dash(__name__)
@@ -96,9 +147,10 @@ app.layout = html.Div([
             dcc.Dropdown(id='right-user-dropdown', placeholder="Select a user", style={'background-color': SYNTHWAVE_COLORS['background'], 'color': SYNTHWAVE_COLORS['text']}),
             dcc.Graph(id='right-pie-chart')
         ], style={'width': '48%', 'display': 'inline-block', 'padding': '10px'})
-    ], style={'display': 'flex', 'flex-wrap': 'wrap', 'justify-content': 'space-between'})
+    ], style={'display': 'flex', 'flex-wrap': 'wrap', 'justify-content': 'space-between'}),
+    html.H2("Average Hours per Period", style={'color': SYNTHWAVE_COLORS['text'], 'text-align': 'pretty'}),
+    dcc.Graph(id='average-hours-chart')
 ], style={'background-color': SYNTHWAVE_COLORS['background'], 'font-family': 'Arial, sans-serif'})
-
 
 @app.callback(
     Output('parameters-table', 'children'),
@@ -146,6 +198,15 @@ def update_right_pie_chart(selected_user):
     hours = calculate_hours_per_project(data)
     right_pie_chart = plot_hours_per_project(hours, selected_user)
     return right_pie_chart
+
+@app.callback(
+    Output('average-hours-chart', 'figure'),
+    [Input('average-hours-chart', 'id')]
+)
+def update_average_hours_chart(_):
+    data = read_database()
+    average_hours_chart = plot_average_hours(data)
+    return average_hours_chart
 
 if __name__ == '__main__':
     app.run_server(debug=True)

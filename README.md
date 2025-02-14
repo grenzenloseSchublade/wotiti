@@ -63,10 +63,13 @@ This will launch the GUI application. Use the buttons to start/stop sessions, up
 8. develop logic + create fancy gui (database table, etc. ) CHECK
 9. create multiple users CHECK 
 10. Debug and test CHECK 
-11. Stastiken (neuer Reiter oder qt window?) -> plotly, pandas???
-12. create dummy data in database CHECK
-13. use plotly to make fancy statistics?
-14. create gui plots -> plotly, matplotlib ? 
+11. Stastiken -> plotly dash 
+    1.  create dummy data in database CHECK 
+    2.  create gui plots -> plotly dash CHECK
+    3.  use pandas scipy to make fancy statistics 
+        1.  Triviale Berechnungen (Summen, Durchschnitte etc.)
+        2.  Triviale Zusammenhänge (Korrelationen etc.)
+        3.  Komplexe Berechnungen und Zusammenhänge (Regressionen, ML  etc.)
 
 ### Improvements and Features
 15. GUI so einfach wie möglich halten -> Was wenn vergessen wurde Zeit zu stoppen???
