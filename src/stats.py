@@ -1,85 +1,135 @@
 import sqlite3
 import pandas as pd
-from datetime import datetime
 import plotly.express as px
-import plotly.graph_objects as go
 from dash import Dash, dcc, html
 from dash.dependencies import Input, Output
-from stats_helper import read_database, save_to_csv
-
 from config import PATH_TO_DATA
+import json
 
-# TODO Do statistics on data: wotiti/data/20250214-010326 (1 month)
-# 
+DATABASE_PATH = PATH_TO_DATA + "/20250214-010326/generate_database.db"
+PARAMETERS_PATH = PATH_TO_DATA + "/20250214-010326/parameter_run_20250214-010326.json"
 
-# 1. **Datenaufbereitung**: Pandas + NumPy.  
-# 2. **Statistische Analyse**: SciPy/StatsModels für Hypothesentests, Scikit-learn für ML-Modelle.  
-# 3. **Visualisierung**:  
-#    - **Einfache Plots**: Seaborn/Matplotlib.  
-#    - **Interaktivität**: Plotly + Dash für Dashboards .  
+def read_database(db_path=DATABASE_PATH):
+    """Read the SQLite database and return the data as a pandas DataFrame."""
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Get all user tables
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
+        tables = cursor.fetchall()
+        
+        data = []
+        for table in tables:
+            table_name = table[0]
+            cursor.execute(f"SELECT * FROM {table_name};")
+            rows = cursor.fetchall()
+            columns = [description[0] for description in cursor.description]
+            table_data = pd.DataFrame(rows, columns=columns)
+            table_data['user'] = table_name.replace('_events', '')
+            data.append(table_data)
+        
+        conn.close()
+        return pd.concat(data, ignore_index=True)
+    except sqlite3.Error as e:
+        print(f"Error reading database: {e}")
+        return pd.DataFrame()
 
+def read_parameters(file_path=PARAMETERS_PATH):
+    """Read parameters from a JSON file."""
+    try:
+        with open(file_path, 'r') as file:
+            parameters = json.load(file)
+        return parameters
+    except Exception as e:
+        print(f"Error reading parameters: {e}")
+        return {}
 
-
-# Calculations
-def calculate_total_duration(data):
-    """Calculate the total duration for each user and project."""
+def calculate_hours_per_project(data):
+    """Calculate the total hours per project for each user."""
     data['timestamp'] = pd.to_datetime(data['timestamp'], format="%d-%m-%Y %H:%M:%S")
     data = data.sort_values(by=['user', 'project', 'timestamp'])
     
-    durations = []
+    hours = []
     for user, group in data.groupby('user'):
         for project, project_group in group.groupby('project'):
             start_times = project_group[project_group['event_type'] == 'start']['timestamp']
             stop_times = project_group[project_group['event_type'] == 'stop']['timestamp']
-            total_duration = (stop_times.values - start_times.values).sum().astype('timedelta64[s]').astype(int)
-            durations.append({'user': user, 'project': project, 'total_duration': total_duration})
+            total_hours = (stop_times.values - start_times.values).sum().astype('timedelta64[h]').astype(int)
+            hours.append({'user': user, 'project': project, 'total_hours': total_hours})
     
-    return pd.DataFrame(durations)
+    return pd.DataFrame(hours)
 
-# Visualizations
-def plot_total_duration(durations):
-    """Plot the total duration for each user and project."""
-    fig = px.bar(durations, x='user', y='total_duration', color='project', title='Total Duration per User and Project')
-    return fig
-
-def plot_duration_over_time(data):
-    """Plot the duration over time for each user and project."""
-    data['timestamp'] = pd.to_datetime(data['timestamp'], format="%d-%m-%Y %H:%M:%S")
-    data = data.sort_values(by=['user', 'project', 'timestamp'])
-    
-    fig = go.Figure()
-    for user, group in data.groupby('user'):
-        for project, project_group in group.groupby('project'):
-            start_times = project_group[project_group['event_type'] == 'start']['timestamp']
-            stop_times = project_group[project_group['event_type'] == 'stop']['timestamp']
-            durations = (stop_times.values - start_times.values).astype('timedelta64[s]').astype(int)
-            fig.add_trace(go.Scatter(x=start_times, y=durations, mode='lines+markers', name=f'{user} - {project}'))
-    
-    fig.update_layout(title='Duration Over Time', xaxis_title='Time', yaxis_title='Duration (seconds)')
+def plot_hours_per_project(hours, user):
+    """Plot a pie chart of hours per project for a specific user."""
+    user_data = hours[hours['user'] == user]
+    fig = px.pie(user_data, names='project', values='total_hours', title=f'Hours per Project for {user}')
     return fig
 
 # Dash App
 app = Dash(__name__)
 
 app.layout = html.Div([
-    html.H1("Work Time Tracker Statistics"),
-    dcc.Graph(id='total-duration-graph'),
-    dcc.Graph(id='duration-over-time-graph')
+    html.H1("Hours per Project per User"),
+    html.Div(id='parameters-table'),
+    html.Div([
+        html.Div([
+            dcc.Dropdown(id='left-user-dropdown', placeholder="Select a user"),
+            dcc.Graph(id='left-pie-chart')
+        ], style={'width': '48%', 'display': 'inline-block'}),
+        html.Div([
+            dcc.Dropdown(id='right-user-dropdown', placeholder="Select a user"),
+            dcc.Graph(id='right-pie-chart')
+        ], style={'width': '48%', 'display': 'inline-block'})
+    ], style={'display': 'flex', 'flex-wrap': 'wrap'})
 ])
 
 @app.callback(
-    [Output('total-duration-graph', 'figure'),
-     Output('duration-over-time-graph', 'figure')],
-    [Input('total-duration-graph', 'id')]
+    Output('parameters-table', 'children'),
+    [Input('parameters-table', 'id')]
 )
-def update_graphs(_):
+def update_parameters_table(_):
+    parameters = read_parameters()
+    if parameters:
+        table_header = [html.Tr([html.Th(key, style={'border': '1px solid black', 'padding': '8px', 'background-color': '#f2f2f2'}) for key in parameters.keys()])]
+        table_body = [html.Tr([html.Td(value, style={'border': '1px solid black', 'padding': '8px'}) for value in parameters.values()])]
+        table = html.Table(table_header + table_body, style={'width': '100%', 'border': '1px solid black', 'border-collapse': 'collapse', 'margin-top': '20px'})
+        return table
+    return "No parameters found."
 
-    path_to_db = PATH_TO_DATA + "/20250214-010326/generate_database.db"
-    data = read_database(path_to_db)
-    durations = calculate_total_duration(data)
-    total_duration_fig = plot_total_duration(durations)
-    duration_over_time_fig = plot_duration_over_time(data)
-    return total_duration_fig, duration_over_time_fig
+@app.callback(
+    [Output('left-user-dropdown', 'options'),
+     Output('left-user-dropdown', 'value'),
+     Output('right-user-dropdown', 'options'),
+     Output('right-user-dropdown', 'value')],
+    [Input('left-user-dropdown', 'id')]
+)
+def update_dropdowns(_):
+    data = read_database()
+    users = data['user'].unique()
+    options = [{'label': user, 'value': user} for user in users]
+    default_value = users[0] if len(users) > 0 else None
+    return options, default_value, options, default_value
+
+@app.callback(
+    Output('left-pie-chart', 'figure'),
+    [Input('left-user-dropdown', 'value')]
+)
+def update_left_pie_chart(selected_user):
+    data = read_database()
+    hours = calculate_hours_per_project(data)
+    left_pie_chart = plot_hours_per_project(hours, selected_user)
+    return left_pie_chart
+
+@app.callback(
+    Output('right-pie-chart', 'figure'),
+    [Input('right-user-dropdown', 'value')]
+)
+def update_right_pie_chart(selected_user):
+    data = read_database()
+    hours = calculate_hours_per_project(data)
+    right_pie_chart = plot_hours_per_project(hours, selected_user)
+    return right_pie_chart
 
 if __name__ == '__main__':
     app.run_server(debug=True)
