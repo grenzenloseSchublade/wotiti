@@ -20,6 +20,7 @@ wotiti
 │   ├── app.py           # Contains the GUI implementation
 │   ├── db_helper.py     # Database helper functions
 │   ├── config.py        # Configuration file
+│   ├── stats_helper.py  # Functions for generating and handling sample data
 ├── tests                # Test files
 │   ├── test_app.py      # Tests for the GUI application
 │   ├── test_db_helper.py# Tests for the database helper functions
@@ -48,7 +49,6 @@ or use the build file in the dist folder.
 ```
 
 This will launch the GUI application. Use the buttons to start/stop sessions, update the timer, and interact with the SQLite database.
-
 
 ## TODO 
 
@@ -167,6 +167,41 @@ poetry run pytest
 
 - `tests/test_app.py`: Contains tests for the GUI application.
 - `tests/test_db_helper.py`: Contains tests for the database helper functions.
+
+## Generating Sample Data
+
+The `stats_helper.py` module includes functions to generate sample data for testing and development purposes.
+
+### `generate_sample_data()`
+
+This function generates sample data based on the specified parameters:
+- **num_users**: Number of users to generate data for.
+- **storage_type**: Type of storage ('csv', 'db', or 'both').
+- **timeblock_min**: Minimum time block in minutes between start and stop times.
+- **start_date**: Start date for the entries (format: 'dd-mm-yyyy').
+- **end_date**: End date for the entries (format: 'dd-mm-yyyy').
+- **project_max**: Maximum number of projects to generate.
+- **fixed_interval**: Fixed time interval per day for start and stop times (format: 'HH:MM-HH:MM').
+- **path_to_save**: Path to save the generated data.
+- **add_to_existing**: Whether to add to existing data or overwrite.
+
+#### Features and Usage
+
+- **Flexible Data Generation**: Allows you to specify the number of users, the number of entries per user, and the date range for the entries.
+- **Randomized Projects**: Generates random project names in the format "projekt_{number}".
+- **Fixed or Random Intervals**: You can specify a fixed time interval for start and stop times or let the function generate random times within the day.
+- **Storage Options**: Choose to store the generated data in a CSV file, a database, or both.
+- **Appending Data**: Optionally add to existing data instead of overwriting it.
+
+### `generate_random_sample_data()`
+
+This function generates sample data with random values for start_date, end_date, and fixed_interval. It creates a directory for the generated data and saves the parameters used for generation in a JSON file. This is useful for quickly generating diverse datasets for testing and development.
+
+#### Features and Usage
+
+- **Randomized Parameters**: Automatically generates random values for the number of users, entries per user, date range, and time intervals.
+- **Directory Creation**: Creates a new directory for each run to store the generated data and parameters.
+- **Parameter Logging**: Saves the parameters used for data generation in a JSON file, making it easy to reproduce or analyze the generated data.
 
 ## Contributing
 
