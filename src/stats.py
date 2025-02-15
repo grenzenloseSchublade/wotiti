@@ -69,6 +69,24 @@ def calculate_hours_per_project(data):
     
     return pd.DataFrame(hours)
 
+
+
+def plot_hours_per_project(hours, user):
+    """Plot a pie chart of hours per project for a specific user."""
+    user_data = hours[hours['user'] == user]
+    fig = px.pie(user_data, names='project', values='total_hours', title=f'Hours per Project for {user}', 
+                 color_discrete_sequence=[SYNTHWAVE_COLORS['blue'], SYNTHWAVE_COLORS['pink'], SYNTHWAVE_COLORS['yellow']])
+    fig.update_layout(
+        title_font=dict(size=18, color=SYNTHWAVE_COLORS['text'], family='Arial, sans-serif')
+    )
+    return fig
+
+
+
+# TODO Berechnung fixen
+# TODO zeige die betrachtete period an
+# TODO zeige die user an 
+#  
 def calculate_average_hours(data, period='D'):
     """Calculate the average hours per user for a given period (day, week, month).
     Ensure that each day has the same number of start and stop events.
@@ -101,16 +119,6 @@ def calculate_average_hours(data, period='D'):
     df = pd.DataFrame(hours)
     average_hours = df.groupby('user')['total_hours'].mean().reset_index()
     return average_hours
-
-def plot_hours_per_project(hours, user):
-    """Plot a pie chart of hours per project for a specific user."""
-    user_data = hours[hours['user'] == user]
-    fig = px.pie(user_data, names='project', values='total_hours', title=f'Hours per Project for {user}', 
-                 color_discrete_sequence=[SYNTHWAVE_COLORS['blue'], SYNTHWAVE_COLORS['pink'], SYNTHWAVE_COLORS['yellow']])
-    fig.update_layout(
-        title_font=dict(size=18, color=SYNTHWAVE_COLORS['text'], family='Arial, sans-serif')
-    )
-    return fig
 
 def plot_average_hours(data):
     """Plot a bar chart of average hours per day, week, and month for a user."""
@@ -207,6 +215,11 @@ def update_average_hours_chart(_):
     data = read_database()
     average_hours_chart = plot_average_hours(data)
     return average_hours_chart
+
+
+# TODO plotly und pandas lernen 
+# TODO update_average_hours_chart -> Zeitraum aufzeigen 
+# TODO User bei update_average_hours_chart einfügen 
 
 if __name__ == '__main__':
     app.run_server(debug=True)
