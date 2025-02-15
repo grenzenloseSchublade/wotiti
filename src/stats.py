@@ -83,10 +83,11 @@ def plot_hours_per_project(hours, user):
 
 
 
-# TODO Berechnung fixen
-# TODO zeige die betrachtete period an
-# TODO zeige die user an 
-#  
+# TODO Berechnung hinzufügen von minimum und maximum Stunden pro Tag, Woche und Monat
+# -> so darstellen, dass min, max und average auf einer Grafik dargestellt werden 
+# TODO Berechnung hinzufügen von Anzahl der Tage, Wochen und Monate
+# TODO Berechnung hinzufügen von Anzahl der Projekte pro Tag, Woche und Monat
+
 def calculate_average_hours(data, period='D'):
     """Calculate the average hours per user for a given period (day, week, month).
     Ensure that each day has the same number of start and stop events.
@@ -129,14 +130,25 @@ def plot_average_hours(data):
         avg_hours = calculate_average_hours(data, period)
         avg_hours['period'] = period
         average_hours.append(avg_hours)
+
+    # Get the start and end date of the data.
+    start_date = data['timestamp'].min().strftime("%d-%m-%Y %H:%M:%S")
+    end_date = data['timestamp'].max().strftime("%d-%m-%Y %H:%M:%S")
+    date_range = f"{start_date} - {end_date}" 
     
     average_hours_df = pd.concat(average_hours)
-    fig = px.bar(average_hours_df, x='period', y='total_hours', title='Average Hours per Period', 
-                 labels={'period': 'Period', 'total_hours': 'Average Hours'}, 
+    fig = px.bar(average_hours_df, x='user', y='total_hours', color='period', barmode='group',
+                 title=f'Average Hours from {date_range}', labels={'user': 'User', 'total_hours': 'Average Hours', 'period': 'Period'},
                  color_discrete_sequence=[SYNTHWAVE_COLORS['blue'], SYNTHWAVE_COLORS['pink'], SYNTHWAVE_COLORS['yellow']])
+    
     fig.update_layout(
-        title_font=dict(size=18, color=SYNTHWAVE_COLORS['text'], family='Arial, sans-serif')
+        title_font=dict(size=18, color=SYNTHWAVE_COLORS['text'], family='Arial, sans-serif'),
+        margin=dict(t=30, b=30)  # Add top and bottom margin of 20px
     )
+    
+    # Add text labels on the bars
+    fig.update_traces(texttemplate='%{y}', textposition='outside')
+    
     return fig
 
 # Dash App
