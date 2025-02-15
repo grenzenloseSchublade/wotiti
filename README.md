@@ -63,13 +63,21 @@ This will launch the GUI application. Use the buttons to start/stop sessions, up
 8. develop logic + create fancy gui (database table, etc. ) CHECK
 9. create multiple users CHECK 
 10. Debug and test CHECK 
-11. Stastiken -> plotly dash 
+11. **Datenaufbereitung**: Pandas + NumPy.  
+    1.  Daten einlesen und bereinigen CHECK
+    2.  Daten transformieren und aggregieren CHECK
+12. **Statistische Analyse**: SciPy/StatsModels für Hypothesentests, Scikit-learn für ML-Modelle.  
+    1.  Hypothesentests (z.B. t-Tests, ANOVA) CHECK
+    2.  Regressionsanalysen (z.B. lineare Regression) CHECK
+    3.  Klass
+13. Stastiken -> plotly dash 
     1.  create dummy data in database CHECK 
     2.  create gui plots -> plotly dash CHECK
     3.  use pandas scipy to make fancy statistics 
         1.  Triviale Berechnungen (Summen, Durchschnitte etc.)
         2.  Triviale Zusammenhänge (Korrelationen etc.)
         3.  Komplexe Berechnungen und Zusammenhänge (Regressionen, ML  etc.)
+
 
 ### Improvements and Features
 15. GUI so einfach wie möglich halten -> Was wenn vergessen wurde Zeit zu stoppen???

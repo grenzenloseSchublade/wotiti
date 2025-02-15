@@ -158,8 +158,6 @@ def generate_sample_data(num_users, storage_type, timeblock_min, start_date, end
     except sqlite3.Error as e:
         print(f"Error generating sample data: {e}")
 
-
-# TODO Teste Werte für die Parameter um ideale Daten zu generieren
 def generate_random_sample_data():
     """Generate sample data with random values for start_date, end_date, and fixed_interval."""
     num_users = random.randint(4, 9)
@@ -219,7 +217,11 @@ def generate_random_sample_data():
 # Example usage
 if __name__ == "__main__":
 
+    # TODO Teste Werte für die Parameter um ideale Daten zu generieren
     generate_random_sample_data()
+    
+    # TODO 1. **Datenaufbereitung**: Pandas + NumPy.  
+    
 
     # db_path = PATH_TO_DATA + "/generate_database.db"
     # data = read_database(db_path)
