@@ -2,7 +2,7 @@ import sqlite3
 import pandas as pd
 import plotly.express as px
 from dash import Dash, dcc, html
-from dash.dependencies import Input, Output
+from dash.dependencies import Input, Output, State
 from config import PATH_TO_DATA
 import json
 
@@ -83,135 +83,41 @@ def plot_hours_per_project(hours, user):
 
 def calculate_total_hours_per_user(data):
     """Calculate the total hours per user."""
-    data['timestamp'] = pd.to_datetime(data['timestamp'], format="%d-%m-%Y %H:%M:%S")
+    data['timestamp'] = pd.to_datetime(
+        data['timestamp'], format="%d-%m-%Y %H:%M:%S")
     data = data.sort_values(by=['user', 'timestamp'])
 
     # Get the start and end date of the data.
     start_date = data['timestamp'].min().strftime("%d-%m-%Y %H:%M:%S")
     end_date = data['timestamp'].max().strftime("%d-%m-%Y %H:%M:%S")
     date_range = f"{start_date} - {end_date}"
-    
+
     total_hours = []
     for user, group in data.groupby('user'):
         if user == 'users':
             continue
         start_times = group[group['event_type'] == 'start']['timestamp']
         stop_times = group[group['event_type'] == 'stop']['timestamp']
-        total_hours_user = (stop_times.values - start_times.values).sum().astype('timedelta64[h]').astype(int)
+        time_difference = (stop_times.values - start_times.values)
+        total_hours_user = time_difference.sum().astype('timedelta64[h]').astype(int)
         total_hours.append({'user': user, 'total_hours': total_hours_user})
-    
+
     return pd.DataFrame(total_hours), date_range
+
 
 def plot_total_hours_per_user(total_hours, date_range):
     """Plot a bar chart of total hours per user."""
-    
-    fig = px.bar(total_hours, x='user', y='total_hours', title=f'Total Hours per User ({date_range})', 
-                 labels={'user': 'User', 'total_hours': 'Total Hours'}, 
+
+    fig = px.bar(total_hours, x='user', y='total_hours',
+                 title=f'Total Hours per User ({date_range})',
+                 labels={'user': 'User', 'total_hours': 'Total Hours'},
                  color_discrete_sequence=[SYNTHWAVE_COLORS['blue']])
     fig.update_layout(
-        title_font=dict(size=18, color=SYNTHWAVE_COLORS['text'], family='Arial, sans-serif')
+        title_font={"size": 18, "color": SYNTHWAVE_COLORS['text'],
+                    "family": 'Arial, sans-serif'}
     )
     return fig
 
-# TODO Berechnung hinzufügen von minimum und maximum Stunden pro Tag, Woche und Monat
-# -> so darstellen, dass min, max und average auf einer Grafik dargestellt werden 
-# TODO Berechnung hinzufügen von Anzahl der Tage, Wochen und Monate
-# TODO Berechnung hinzufügen von Anzahl der Projekte pro Tag, Woche und Monat
-
-# TODO das hier ist irgendwie alles falsch...
-def calculate_average_hours(data, period='D'):
-    """Calculate the average hours per user for a given period (day, week, month).
-    Ensure that each day has the same number of start and stop events.
-    If a start event begins on one day and the stop event goes into the next day,
-    count it towards the initial day and do not integrate it into the following day.
-    """
-    data['timestamp'] = pd.to_datetime(data['timestamp'], format="%d-%m-%Y %H:%M:%S")
-    data = data.sort_values(by=['user', 'timestamp'])
-
-    # Berechnung der Perioden basierend auf dem ersten Datum
-    start_date = data['timestamp'].min()
-
-    #period = 'M'
-
-    if period == 'D':
-        full_period_length = 1
-        data['period'] = (data['timestamp'] - start_date).dt.days
-    elif period == 'W':
-        full_period_length = 7
-        data['period'] = (data['timestamp'] - start_date).dt.days // 7
-    elif period == 'M':
-        full_period_length = 30
-        data['period'] = (data['timestamp'] - start_date).dt.days // 30
-    else:
-        raise ValueError("Ungültiger Periodenwert. Bitte 'D', 'W' oder 'M' verwenden.")
-    
-    hours = []
-    for (user, user_period), group in data.groupby(['user', 'period']):
-        # Berechne die Länge der aktuellen Periode in Tagen pro User
-        period_length = (group['timestamp'].max() - group['timestamp'].min()).days + 1
-        
-        # Wenn die Periode nicht vollständig ist, überspringe sie
-        if period_length < full_period_length:
-            continue
-        
-        start_times = group[group['event_type'] == 'start']['timestamp'].reset_index(drop=True)
-        stop_times = group[group['event_type'] == 'stop']['timestamp'].reset_index(drop=True)
-
-        # Ensure the same number of start and stop events per period
-        min_length = min(len(start_times), len(stop_times))
-        start_times = start_times[:min_length]
-        stop_times = stop_times[:min_length]
-        
-        if user == "user_4":
-            print("#####")
-            print(start_times)
-            print(stop_times)
-
-        # Calculate total hours
-        total_hours = (
-            (stop_times.values - start_times.values)
-            .sum()
-            .astype('timedelta64[h]')
-            .astype(int)
-        )
-        hours.append({'user': user, 'period': user_period, 'total_hours': total_hours})
-    
-    df = pd.DataFrame(hours)
-    average_hours = df.groupby('user')['total_hours'].mean().reset_index()
-    return average_hours
-
-def plot_average_hours(data):
-    """Plot a bar chart of average hours per day, week, and month for a user."""
-    periods = ['D', 'W', 'M']
-    average_hours = []
-    
-    for period in periods:
-        avg_hours = calculate_average_hours(data, period)
-        avg_hours['period'] = period
-        average_hours.append(avg_hours)
-
-    # Get the start and end date of the data.
-    start_date = data['timestamp'].min().strftime("%d-%m-%Y %H:%M:%S")
-    end_date = data['timestamp'].max().strftime("%d-%m-%Y %H:%M:%S")
-    date_range = f"{start_date} - {end_date}" 
-    
-    average_hours_df = pd.concat(average_hours)
-    fig = px.bar(average_hours_df, x='user', y='total_hours', color='period', barmode='group',
-                 title=f'Average Hours from {date_range}', labels={'user': 'User', 'total_hours': 'Average Hours', 'period': 'Period'},
-                 color_discrete_sequence=[SYNTHWAVE_COLORS['blue'], SYNTHWAVE_COLORS['pink'], SYNTHWAVE_COLORS['yellow']])
-    
-    fig.update_layout(
-        title_font=dict(size=18, color=SYNTHWAVE_COLORS['text'], family='Arial, sans-serif'),
-        margin=dict(t=30, b=30)  # Add top and bottom margin of 20px
-    )
-    
-    # Add text labels on the bars
-    fig.update_traces(texttemplate='%{y}', textposition='outside')
-    
-    return fig
-
-# TODO hier ist das riesen problem, dass irgendwie die averaging funktion komplett verkackt wird...
-# 
 def calculate_average_hours_per_user(data):
     """Calculate the average hours per user."""
     data['timestamp'] = pd.to_datetime(data['timestamp'], format="%d-%m-%Y %H:%M:%S")
@@ -222,7 +128,6 @@ def calculate_average_hours_per_user(data):
         if user == 'users':
             continue
 
-        print(len(group['date'].unique()))
         start_times = group[group['event_type'] == 'start']['timestamp']
         stop_times = group[group['event_type'] == 'stop']['timestamp']
         total_hours_user = (stop_times.values - start_times.values).sum().astype('timedelta64[h]').astype(int)
@@ -236,6 +141,59 @@ def plot_average_hours_per_user(average_hours):
     fig = px.bar(average_hours, x='user', y='average_hours', title='Average Hours per User', 
                  labels={'user': 'User', 'average_hours': 'Average Hours'}, 
                  color_discrete_sequence=[SYNTHWAVE_COLORS['pink']])
+    fig.update_layout(
+        title_font=dict(size=18, color=SYNTHWAVE_COLORS['text'], family='Arial, sans-serif')
+    )
+    return fig
+
+# TODO Hier nochmal prüfen, was genau berechnet werden soll
+def calculate_average_hours_per_period(data, period_days):
+    """Calculate the average hours per user for a given period in days.
+    
+    This function calculates the average working hours for each user over a specified period.
+    """
+    data['timestamp'] = pd.to_datetime(data['timestamp'], format="%d-%m-%Y %H:%M:%S")
+    data = data.sort_values(by=['user', 'timestamp'])
+    
+    average_hours = []
+    
+    # Calculate the number of periods based on the entire dataset
+    total_days = (data['timestamp'].max() - data['timestamp'].min()).days
+    num_periods = max(1, total_days // period_days)  # Ensure at least one period
+
+    for user, group in data.groupby('user'):
+        if user == 'users':
+            continue
+        
+        # Get start and stop times
+        start_times = group[group['event_type'] == 'start']['timestamp'].reset_index(drop=True)
+        stop_times = group[group['event_type'] == 'stop']['timestamp'].reset_index(drop=True)
+        
+        # Calculate total hours
+        total_hours = 0
+        for start_time, stop_time in zip(start_times, stop_times):
+            total_hours += (stop_time - start_time).total_seconds() / 3600
+        
+        # Calculate average hours per period
+        average_hours_user = total_hours / num_periods
+        average_hours.append({
+            'user': user,
+            'average_hours': average_hours_user,
+            'period_days': period_days
+        })
+    
+    return pd.DataFrame(average_hours)
+
+def plot_average_hours_per_period(average_hours, period_days):
+    """Plot a bar chart of average hours per user for a given period in days.
+    
+    This function generates a bar chart that visualizes the average working hours for each user
+    over a specified period.
+    """
+    fig = px.bar(average_hours, x='user', y='average_hours', 
+                 title=f'Average Hours per User (Calculated over {period_days} day periods)', 
+                 labels={'user': 'User', 'average_hours': 'Average Hours'},
+                 color_discrete_sequence=[SYNTHWAVE_COLORS['blue'], SYNTHWAVE_COLORS['pink'], SYNTHWAVE_COLORS['yellow']])
     fig.update_layout(
         title_font=dict(size=18, color=SYNTHWAVE_COLORS['text'], family='Arial, sans-serif')
     )
@@ -262,85 +220,137 @@ app.layout = html.Div([
     dcc.Graph(id='total-hours-chart'),
     html.H2("Average Hours per User pre Day", style={'color': SYNTHWAVE_COLORS['text'], 'text-align': 'pretty'}),
     dcc.Graph(id='average-hours-per-user-chart'),
-    html.H2("Average Hours per Period", style={'color': SYNTHWAVE_COLORS['text'], 'text-align': 'pretty'}),
-    dcc.Graph(id='average-hours-chart')
+    html.H2("Average Hours per Custom Period", style={'color': SYNTHWAVE_COLORS['text'], 'text-align': 'pretty'}),
+    html.Div(
+        children=[
+            html.Label("Enter period in days:", style={'color': SYNTHWAVE_COLORS['text']}),
+            dcc.Input(id='period-days-input', type='number', placeholder='Enter period in days', value=7, style={'margin-right': '10px'}),
+            html.Button('Update Chart', id='update-period-button', n_clicks=0)
+        ],
+        style={'display': 'flex', 'alignItems': 'left', 'justifyContent': 'pretty'}
+    ),
+    dcc.Graph(id='average-hours-per-period-chart')
 ], style={'background-color': SYNTHWAVE_COLORS['background'], 'font-family': 'Arial, sans-serif'})
 
-@app.callback(
-    Output('parameters-table', 'children'),
-    [Input('parameters-table', 'id')]
-)
-def update_parameters_table(_):
-    parameters = read_parameters()
-    if parameters:
-        table_header = [html.Tr([html.Th(key, style={'border': '1px solid black', 'padding': '4px', 'background-color': '#f2f2f2'}) for key in parameters.keys()])]
-        table_body = [html.Tr([html.Td(value, style={'border': '1px solid black', 'padding': '4px'}) for value in parameters.values()])]
-        table = html.Table(table_header + table_body, style={'width': '100%', 'border': '1px solid black', 'border-collapse': 'collapse', 'margin-bottom': '10px'})
-        return table
-    return "No parameters found."
+# @app.callback(
+#     Output('parameters-table', 'children'),
+#     [Input('parameters-table', 'id')]
+# )
+# def update_parameters_table(_):
+#     """Update the parameters table."""
+#     parameters = read_parameters()
+#     if parameters:
+#         table_header = [html.Tr([
+#             html.Th(
+#                 key,
+#                 style={
+#                     'border': '1px solid black',
+#                     'padding': '4px',
+#                     'background-color': '#f2f2f2'
+#                 }
+#             ) for key in parameters.keys()
+#         ])]
+#         table_body = [html.Tr([
+#             html.Td(
+#                 value,
+#                 style={'border': '1px solid black', 'padding': '4px'}
+#             ) for value in parameters.values()
+#         ])]
+#         table = html.Table(
+#             table_header + table_body,
+#             style={
+#                 'width': '100%',
+#                 'border': '1px solid black',
+#                 'border-collapse': 'collapse',
+#                 'margin-bottom': '10px'
+#             }
+#         )
+#         return table
+#     return "No parameters found."
+
 
 @app.callback(
-    [Output('left-user-dropdown', 'options'),
-     Output('left-user-dropdown', 'value'),
-     Output('right-user-dropdown', 'options'),
-     Output('right-user-dropdown', 'value')],
+    [
+        Output('left-user-dropdown', 'options'),
+        Output('left-user-dropdown', 'value'),
+        Output('right-user-dropdown', 'options'),
+        Output('right-user-dropdown', 'value')
+    ],
     [Input('left-user-dropdown', 'id')]
 )
 def update_dropdowns(_):
+    """Update the dropdown options with user data."""
     data = read_database()
     users = data['user'].unique()
     options = [{'label': user, 'value': user} for user in users]
     default_value = users[0] if len(users) > 0 else None
     return options, default_value, options, default_value
 
+
 @app.callback(
     Output('left-pie-chart', 'figure'),
     [Input('left-user-dropdown', 'value')]
 )
 def update_left_pie_chart(selected_user):
+    """Update the left pie chart based on the selected user."""
     data = read_database()
     hours = calculate_hours_per_project(data)
     left_pie_chart = plot_hours_per_project(hours, selected_user)
     return left_pie_chart
+
 
 @app.callback(
     Output('right-pie-chart', 'figure'),
     [Input('right-user-dropdown', 'value')]
 )
 def update_right_pie_chart(selected_user):
+    """Update the right pie chart based on the selected user."""
     data = read_database()
     hours = calculate_hours_per_project(data)
     right_pie_chart = plot_hours_per_project(hours, selected_user)
     return right_pie_chart
 
-@app.callback(
-    Output('average-hours-chart', 'figure'),
-    [Input('average-hours-chart', 'id')]
-)
-def update_average_hours_chart(_):
-    data = read_database()
-    average_hours_chart = plot_average_hours(data)
-    return average_hours_chart
 
 @app.callback(
     Output('total-hours-chart', 'figure'),
     [Input('total-hours-chart', 'id')]
 )
 def update_total_hours_chart(_):
+    """Update the total hours chart."""
     data = read_database()
     total_hours, date_range = calculate_total_hours_per_user(data)
     total_hours_chart = plot_total_hours_per_user(total_hours, date_range)
     return total_hours_chart
+
 
 @app.callback(
     Output('average-hours-per-user-chart', 'figure'),
     [Input('average-hours-per-user-chart', 'id')]
 )
 def update_average_hours_per_user_chart(_):
+    """Update the average hours per user chart."""
     data = read_database()
     average_hours = calculate_average_hours_per_user(data)
     average_hours_per_user_chart = plot_average_hours_per_user(average_hours)
     return average_hours_per_user_chart
+
+@app.callback(
+    Output('average-hours-per-period-chart', 'figure'),
+    [Input('update-period-button', 'n_clicks')],
+    [State('period-days-input', 'value')]
+)
+def update_average_hours_per_period_chart(n_clicks, period_days):
+    """
+    Callback to update the average hours per period chart based on the input period in days.
+    
+    This callback is triggered when the update button is clicked.
+    It calculates the average hours per user for the specified period and updates the
+    'average-hours-per-period-chart' component with the new chart.
+    """
+    data = read_database()
+    average_hours = calculate_average_hours_per_period(data, int(period_days))
+    average_hours_per_period_chart = plot_average_hours_per_period(average_hours, int(period_days))
+    return average_hours_per_period_chart
 
 if __name__ == '__main__':
     app.run_server(debug=True)
