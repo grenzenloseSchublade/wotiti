@@ -1,0 +1,14 @@
+/* assets/style.css */
+.Select-menu-outer {
+    background-color: #44475a !important;
+    color: #f8f8f2 !important;
+}
+
+.Select-option {
+    background-color: #44475a !important;
+    color: #f8f8f2 !important;
+}
+
+.Select-option:hover {
+    background-color: #6272a4 !important;
+}
