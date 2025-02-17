@@ -7,5 +7,6 @@ scikit-learn
 statsmodels
 # Visualisation
 plotly
-#chart_studio
+chart_studio
 dash
+dash-bootstrap-components
