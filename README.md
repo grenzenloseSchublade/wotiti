@@ -1,6 +1,6 @@
 # WOTITI - Work Time Timer
 
-WOTITI is a simple Python application that features a graphical user interface (GUI) to track work time. It integrates an SQLite database to store and manage user sessions.
+WOTITI is a simple Python application that features a graphical user interface (GUI) to track work time. It integrates an SQLite database to store and manage user sessions, and provides statistical analysis and visualization capabilities using Plotly Dash.
 
 ## Features
 
@@ -10,6 +10,8 @@ WOTITI is a simple Python application that features a graphical user interface (
 - **Database Integration**: Store session data in an SQLite database.
 - **Console Output**: Display messages and errors in a console within the GUI.
 - **Set Today's Date**: Quickly set the date entry to today's date with a button click.
+- **Statistical Analysis**: Provides insights into user work patterns.
+- **Interactive Visualizations**: Uses Plotly Dash to create interactive plots and charts.
 
 ## Project Structure
 
@@ -64,8 +66,8 @@ This will launch the GUI application. Use the buttons to start/stop sessions, up
 9. create multiple users CHECK 
 10. Debug and test CHECK 
 11. **Datenaufbereitung**: Pandas + NumPy.  
-    1.  Daten einlesen und bereinigen CHECK
-    2.  Daten transformieren und aggregieren CHECK
+    1.  Daten einlesen und bereinigen 
+    2.  Daten transformieren und aggregieren 
 12. **Statistische Analyse**: SciPy/StatsModels für Hypothesentests, Scikit-learn für ML-Modelle.  
     1.  Hypothesentests (z.B. t-Tests, ANOVA) CHECK
     2.  Regressionsanalysen (z.B. lineare Regression) CHECK
@@ -74,9 +76,10 @@ This will launch the GUI application. Use the buttons to start/stop sessions, up
     1.  create dummy data in database CHECK 
     2.  create gui plots -> plotly dash CHECK
     3.  use pandas scipy to make fancy statistics 
-        1.  Triviale Berechnungen (Summen, Durchschnitte etc.)
+        1.  Triviale Berechnungen (Summen, Durchschnitte etc.) CHECK
         2.  Triviale Zusammenhänge (Korrelationen etc.)
         3.  Komplexe Berechnungen und Zusammenhänge (Regressionen, ML  etc.)
+    4.  Eiene Datei / eigenes Dashboard: Mache ein krassen Plot für einen user (beispiele aus dem internet anschauen)
 
 
 ### Improvements and Features
