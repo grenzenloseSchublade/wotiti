@@ -1,5 +1,5 @@
 from datetime import datetime
-import os 
+import os
 import sqlite3
 from sqlite3 import Error
 from config import DATABASE_PATH
@@ -21,7 +21,7 @@ def create_connection(db_file=DATABASE_PATH):
         return conn
     except Error as e:
         print(f"Error creating database connection: {e}")
-
+        return None  # Ensure None is returned in case of an error
     return conn
 
 def create_main_table(conn):
@@ -82,26 +82,18 @@ def check_user(conn, name):
 
 def log_start(project="1", name="Hans", timestamp=None, date=None, conn=None):
     """Log the start time of a session."""
-    if name is None or date is None:
+    if not (name and date):
         print("Name and date are required to log a session.")
         return
 
     # Ensure the user table exists
     cursor = conn.cursor()
-    cursor.execute(f'''
-        SELECT name FROM sqlite_master WHERE type='table' AND name='{name}_events';
-    ''')
-    table_exists = cursor.fetchone()
-
-    if table_exists is None:
+    cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{name}_events';")
+    if not cursor.fetchone():
         create_user_table(conn, name)
 
-    if timestamp is None:
-        timestamp = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
-    else:
-        timestamp = timestamp.strftime("%d-%m-%Y %H:%M:%S")
+    timestamp = timestamp.strftime("%d-%m-%Y %H:%M:%S") if timestamp else datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
-    cursor = conn.cursor()
     cursor.execute(f'''
         INSERT INTO {name}_events (project, event_type, timestamp, date)
         VALUES (?, ?, ?, ?)
@@ -111,27 +103,21 @@ def log_start(project="1", name="Hans", timestamp=None, date=None, conn=None):
 
 def log_stop(project="1", name="Hans", timestamp=None, date=None, conn=None):
     """Log the stop time of a session."""
-    if name is None or date is None:
+    if not (name and date):
         print("Name and date are required to log a session.")
         return
 
-    if timestamp is None:
-        timestamp = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
-    else:
-        timestamp = timestamp.strftime("%d-%m-%Y %H:%M:%S")
+    timestamp = timestamp.strftime("%d-%m-%Y %H:%M:%S") if timestamp else datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
-    # Ensure the user table name exists
     cursor = conn.cursor()
     cursor.execute(f'''
         SELECT id FROM {name}_events
         WHERE project = ? AND event_type = 'start' AND date = ?
         ORDER BY timestamp DESC LIMIT 1
     ''', (project, date))
-    start_entry = cursor.fetchone()
-
-    if start_entry is None:
+    if not cursor.fetchone():
         print(f"No start entry found for project {project} on {date} for user '{name}'.")
-        return 
+        return
 
     cursor.execute(f'''
         INSERT INTO {name}_events (project, event_type, timestamp, date)
@@ -142,24 +128,16 @@ def log_stop(project="1", name="Hans", timestamp=None, date=None, conn=None):
 
 def calculate_duration(project="1", name="Hans", conn=None):
     """Calculate the total duration of a session."""
-    if name is None:
+    if not name:
         print("Name is required to calculate session duration.")
         return
 
     cursor = conn.cursor()
- 
-    # Ensure the user table name exists
-    cursor.execute(f'''
-        SELECT name FROM sqlite_master WHERE type='table' AND name='{name}_events';
-    ''')
-    table_exists = cursor.fetchone()
-    if table_exists is None:
+    cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{name}_events';")
+    if not cursor.fetchone():
         print(f"No table found for user '{name}'.")
         create_user_table(conn, name)
-    else:
-        pass 
-        #print(f"Table found for user '{name}'.")
-        
+
     cursor.execute(f'''
         SELECT event_type, timestamp
         FROM {name}_events

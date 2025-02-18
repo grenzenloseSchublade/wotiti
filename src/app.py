@@ -1,24 +1,24 @@
-from tkinter import Button, Text, Scrollbar, VERTICAL, END, Frame, Entry, Label, Listbox
+from tkinter import Button, Text, Scrollbar, VERTICAL, END, Frame, Entry, Label, Listbox, W, E, N, S
 import sys
+import os
 import time
 from datetime import datetime
 from db_helper import create_connection, create_main_table, create_user_table, check_user, log_start, log_stop, calculate_duration
 from config import DATABASE_PATH
 import subprocess  # Import the subprocess module
-import os
 
 class App:
     def __init__(self, master):
         print("Initializing the application GUI...")
         self.master = master
-        master.title("WOTITI - WOrkTImeTImer")
+        master.title("WoTITI - Work Time Timer")
         master.configure(bg='#C0C0C0')  # Windows 98 background color
 
         # Set window size based on screen resolution
         screen_width = master.winfo_screenwidth()
         screen_height = master.winfo_screenheight()
-        window_width = int(screen_width * 0.5)
-        window_height = int(screen_height * 0.5)
+        window_width = int(screen_width * 0.5)  # Adjusted width
+        window_height = int(screen_height * 0.5) # Adjusted height
         master.geometry(f"{window_width}x{window_height}")
 
         # Make the window resizable
@@ -33,57 +33,71 @@ class App:
         self.button_frame = Frame(self.frame, bg='#C0C0C0')
         self.button_frame.grid(row=0, column=0, columnspan=6, pady=5, padx=5, sticky="ew")
 
+        # Button configuration
+        button_config = {
+            'bg': '#D4D0C8', 'fg': 'black', 'font': ('MS Sans Serif', 10)
+        }
+        button_sticky = {'sticky': W + E}
+
         # Click Me button
-        self.button = Button(self.button_frame, text="Click Me", command=self.on_button_click, bg='#D4D0C8', fg='black', font=('MS Sans Serif', 10))
-        self.button.grid(row=0, column=0, pady=5, padx=5, sticky="ew")
+        self.button = Button(self.button_frame, text="Click Me", command=self.on_button_click, **button_config)
+        self.button.grid(row=0, column=0, pady=5, padx=5, **button_sticky)
 
         # Clear Console button
-        self.clear_button = Button(self.button_frame, text="Clear Console", command=self.clear_console, bg='#D4D0C8', fg='black', font=('MS Sans Serif', 10))
-        self.clear_button.grid(row=0, column=1, pady=5, padx=5, sticky="ew")
+        self.clear_button = Button(self.button_frame, text="Clear Console", command=self.clear_console, **button_config)
+        self.clear_button.grid(row=0, column=1, pady=5, padx=5, **button_sticky)
 
         # Start button
-        self.start_button = Button(self.button_frame, text="Start", height = 2, width = 8, command=self.start_session, bg='#D4D0C8', fg='black', font=('MS Sans Serif', 10))
-        self.start_button.grid(row=0, column=2, pady=5, padx=5, sticky="ew")
+        self.start_button = Button(self.button_frame, text="Start", height=2, width=8, command=self.start_session, **button_config)
+        self.start_button.grid(row=0, column=2, pady=5, padx=5, **button_sticky)
 
         # Stop button
-        self.stop_button = Button(self.button_frame, text="Stop", height = 2, width = 8, command=self.stop_session, bg='#D4D0C8', fg='black', font=('MS Sans Serif', 10))
-        self.stop_button.grid(row=0, column=3, pady=5, padx=5, sticky="ew")
+        self.stop_button = Button(self.button_frame, text="Stop", height=2, width=8, command=self.stop_session, **button_config)
+        self.stop_button.grid(row=0, column=3, pady=5, padx=5, **button_sticky)
         self.stop_button.config(state="disabled", bg='#A9A9A9')
 
         # Update Duration button
-        self.calculate_button = Button(self.button_frame, text="Update TimyTimer", command=self.update_duration, bg='#D4D0C8', fg='black', font=('MS Sans Serif', 10))
-        self.calculate_button.grid(row=0, column=4, pady=5, padx=5, sticky="ew")
+        self.calculate_button = Button(self.button_frame, text="Update TimyTimer", command=self.update_duration, **button_config)
+        self.calculate_button.grid(row=0, column=4, pady=5, padx=5, **button_sticky)
 
         # Statistics Dashboard button
-        self.stats_button = Button(self.button_frame, text="Open Stats Dashboard", command=self.open_stats_dashboard, bg='#D4D0C8', fg='black', font=('MS Sans Serif', 10))
-        self.stats_button.grid(row=0, column=5, pady=5, padx=5, sticky="ew")
+        self.stats_button = Button(self.button_frame, text="Open Stats Dashboard", command=self.open_stats_dashboard, **button_config)
+        self.stats_button.grid(row=0, column=5, pady=5, padx=5, **button_sticky)
 
         # Entry frame
         self.entry_frame = Frame(self.frame, bg='#C0C0C0', border=2, relief="sunken", padx=2, pady=2)
         self.entry_frame.grid(row=1, column=0, columnspan=6, pady=5, padx=5, sticky="ew")
 
+        # Entry configuration
+        entry_config = {
+            'bg': '#FFFFFF', 'fg': 'black', 'font': ('MS Sans Serif', 10)
+        }
+        label_config = {
+            'bg': '#C0C0C0', 'fg': 'black', 'font': ('MS Sans Serif', 10)
+        }
+
         # Name label and entry
-        self.name_label = Label(self.entry_frame, text="Name:", bg='#C0C0C0', fg='black', font=('MS Sans Serif', 10))
+        self.name_label = Label(self.entry_frame, text="Name:", **label_config)
         self.name_label.grid(row=0, column=0, pady=5, padx=5, sticky="w")
-        self.name_entry = Entry(self.entry_frame, bg='#FFFFFF', fg='black', font=('MS Sans Serif', 10))
+        self.name_entry = Entry(self.entry_frame, **entry_config)
         self.name_entry.grid(row=0, column=1, pady=5, padx=5, sticky="ew")
         self.name_entry.insert(0, "Hans")  # Default value
 
         # Datum label and entry
-        self.date_label = Label(self.entry_frame, text="Datum:", bg='#C0C0C0', fg='black', font=('MS Sans Serif', 10))
+        self.date_label = Label(self.entry_frame, text="Datum:", **label_config)
         self.date_label.grid(row=0, column=2, pady=5, padx=5, sticky="w")
-        self.date_entry = Entry(self.entry_frame, bg='#FFFFFF', fg='black', font=('MS Sans Serif', 10))
+        self.date_entry = Entry(self.entry_frame, **entry_config)
         self.date_entry.grid(row=0, column=3, pady=5, padx=5, sticky="ew")
         self.date_entry.insert(0, str(datetime.today().strftime('%d-%m-%Y')))  # Default value
 
         # Heute button
-        self.heute_button = Button(self.entry_frame, text="Heute", command=self.set_today_date, bg='#D4D0C8', fg='black', font=('MS Sans Serif', 10))
+        self.heute_button = Button(self.entry_frame, text="Heute", command=self.set_today_date, **button_config)
         self.heute_button.grid(row=0, column=4, pady=5, padx=5, sticky="ew")
 
         # project label and entry
-        self.project_label = Label(self.entry_frame, text="Projekt:", bg='#C0C0C0', fg='black', font=('MS Sans Serif', 10))
+        self.project_label = Label(self.entry_frame, text="Projekt:", **label_config)
         self.project_label.grid(row=0, column=5, pady=5, padx=5, sticky="w")
-        self.project_entry = Entry(self.entry_frame, bg='#FFFFFF', fg='black', font=('MS Sans Serif', 10))
+        self.project_entry = Entry(self.entry_frame, **entry_config)
         self.project_entry.grid(row=0, column=6, pady=5, padx=5, sticky="ew")
         self.project_entry.insert(0, "1")  # Default value
 
