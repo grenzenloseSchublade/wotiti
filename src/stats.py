@@ -126,7 +126,7 @@ def plot_average_hours_per_user(average_hours):
         return fig
     average_hours.loc[:, 'average_hours'] = pd.to_numeric(average_hours['average_hours'], errors='coerce').dropna()
     fig =  go.Figure(data=[go.Bar(x=average_hours['user'], y=average_hours['average_hours'], marker_color=SYNTHWAVE_COLORS['pink'])],
-                layout=go.Layout(title=f'Average Hours per User',
+                layout=go.Layout(title=f'Average Hours per User per Day',
                                  xaxis_title='User', yaxis_title='Average Hours',
                                  title_font=dict(size=18, color=MODERN_COLORS['text'], family='Arial, sans-serif'),
                                  plot_bgcolor=MODERN_COLORS['background'], paper_bgcolor=MODERN_COLORS['background'], font_color=MODERN_COLORS['text']))
@@ -137,8 +137,6 @@ def calculate_average_hours_per_period(data, period_days):
     data['timestamp'] = pd.to_datetime(data['timestamp'], format="%d-%m-%Y %H:%M:%S")
     data = data.sort_values(by=['user', 'timestamp'])
     average_hours = []
-    total_days = (data['timestamp'].max() - data['timestamp'].min()).days
-    num_periods = max(1, total_days // period_days)
     for user, group in data.groupby('user'):
         if user == 'users':
             continue
@@ -146,6 +144,13 @@ def calculate_average_hours_per_period(data, period_days):
         stop_times = group[group['event_type'] == 'stop']['timestamp'].reset_index(drop=True)
         min_length = min(len(start_times), len(stop_times))
         total_hours = sum((stop_times.iloc[i] - start_times.iloc[i]).total_seconds() / 3600 for i in range(min_length))
+        
+        # Calculate the number of days the user has data for
+        num_days = len(group['date'].unique())
+        
+        # Ensure that the number of periods is at least 1
+        num_periods = max(1, num_days / period_days)
+        
         average_hours_user = total_hours / num_periods
         average_hours.append({'user': user, 'average_hours': average_hours_user, 'period_days': period_days})
     return pd.DataFrame(average_hours)
@@ -167,8 +172,10 @@ def browse_directory():
     root.destroy()
     return directory
 
-def find_database_and_parameters(directory=PATH_TO_DATA):
+def find_database_and_parameters(directory=PATH_TO_DATA, update_progress=None):
     """Finds the database and parameters files in the given directory."""
+    if update_progress:
+        update_progress(20, "Searching for database and parameter files...")
     db_path = glob.glob(os.path.join(directory, "generate_database.db"))
     param_path = glob.glob(os.path.join(directory, "parameter_run_*.json"))
     db_path = db_path[0] if db_path else None
@@ -234,11 +241,12 @@ app.layout = dbc.Container([
             dbc.Card([
                 dbc.CardHeader("Average Hours per Custom Period", style={'color': MODERN_COLORS['text']}),
                 dbc.CardBody([
-                    dbc.Label("Enter period in days:", html_for="period-days-input",  style={'color': MODERN_COLORS['text']}),
                     dbc.InputGroup([
-                        dbc.Input(id='period-days-input', type='number', placeholder='Enter period in days', value=7, style={'width': 'auto', 'maxWidth': '80px'}),
+                        dbc.Label("Period", html_for="period-days-input",  style={'color': MODERN_COLORS['text'], 'margin-right': '10px'}),
+                        dbc.Input(id='period-days-input', type='number', placeholder='Enter period in days', value=7, style={'width': 'auto', 'maxWidth': '60px'}),
+                        dbc.Label("[days]", html_for="period-days-input",  style={'color': MODERN_COLORS['text'], 'margin-left': '5px'}),
                         dbc.Button('Update Chart', id='update-period-button', n_clicks=0, color="secondary", style={'margin-left': '5px'}),
-                    ], style={'margin': '15px'}, className='input-group-custom'),
+                    ], style={'margin': '15px'}, className='input-group-custom d-flex align-items-center'),
                     dcc.Graph(id='average-hours-per-period-chart',  style={'backgroundColor': MODERN_COLORS['background']}, figure=go.Figure(layout=go.Layout(plot_bgcolor=MODERN_COLORS['background'], paper_bgcolor=MODERN_COLORS['background'])))
                 ])
             ], className="mb-3", style={'backgroundColor': MODERN_COLORS['secondary'], 'color': MODERN_COLORS['text']})
@@ -251,23 +259,35 @@ app.layout = dbc.Container([
      Output('progress', 'animated'), Output('progress', 'striped'), Output('progress', 'label'),
      Output('left-user-dropdown', 'options'), Output('left-user-dropdown', 'value'),
      Output('right-user-dropdown', 'options'), Output('right-user-dropdown', 'value')],
-    [Input('browse-button', 'n_clicks')]
+    [Input('browse-button', 'n_clicks')],
+    [State('period-days-input', 'value')]
 )
-def update_paths(n_clicks):
+def update_paths(n_clicks, period_days):
     """Updates database and parameter paths based on selected directory."""
     if n_clicks > 0:
         directory = browse_directory()
         if directory:
-            db_path, param_path = find_database_and_parameters(directory)
+            def update_progress(value, label, animated=True):
+                """Helper function to update progress bar."""
+                return [value, animated, False, label]  # Return values for the progress bar outputs
+
+            # Initial progress update
+            progress_values = update_progress(10, "Starting data loading...")
+            
+            db_path, param_path = find_database_and_parameters(directory, update_progress=update_progress)
             if db_path and param_path:
+                progress_values = update_progress(40, "Database and parameter files found. Reading database...")
                 data = read_database(db_path)
-                users = data['user'].unique()
+                progress_values = update_progress(70, "Database read successfully. Processing data...")
+                users = [user for user in data['user'].unique() if user != 'users']
                 left_user = 'user_1' if 'user_1' in users else users[0] if len(users) > 0 else None
                 right_user = 'user_2' if 'user_2' in users else users[1] if len(users) > 1 else None
                 options = [{'label': user, 'value': user} for user in users]
-                return db_path, param_path, 100, False, False, "100% - Data Loaded", options, left_user, options, right_user
+                progress_values = update_progress(100, "Data loaded and processed.", animated=False)
+                return db_path, param_path, progress_values[0], progress_values[1], progress_values[2], progress_values[3], options, left_user, options, right_user
             else:
-                return None, None, 100, False, False, "Error: Database or Parameter file not found", [], None, [], None
+                progress_values = update_progress(100, "Error: Database or Parameter file not found", animated=False)
+                return None, None, progress_values[0], progress_values[1], progress_values[2], progress_values[3], [], None, [], None
         else:
             return None, None, 0, False, False, "", [], None, [], None
     return None, None, 0, True, False, "", [], None, [], None
@@ -290,44 +310,101 @@ def update_parameters_table(param_path):
 
 @app.callback(
     Output('left-pie-chart', 'figure'),
-    [Input('left-user-dropdown', 'value'), Input('db-path', 'data')]
+    [Input('left-user-dropdown', 'value'),
+     Input('db-path', 'data')]
 )
 def update_left_pie_chart(selected_user, db_path):
     """Updates the left pie chart based on the selected user."""
-    return plot_hours_per_project(calculate_hours_per_project(read_database(db_path)), selected_user) if (db_path and selected_user) else go.Figure(layout=go.Layout(plot_bgcolor=MODERN_COLORS['background'], paper_bgcolor=MODERN_COLORS['background']))
+    if db_path and selected_user:
+        data = read_database(db_path)
+        hours = calculate_hours_per_project(data)
+        left_pie_chart = plot_hours_per_project(hours, selected_user)
+        return left_pie_chart
+    else:
+        return go.Figure(layout=go.Layout(plot_bgcolor=MODERN_COLORS['background'], paper_bgcolor=MODERN_COLORS['background']))
 
 @app.callback(
     Output('right-pie-chart', 'figure'),
-    [Input('right-user-dropdown', 'value'), Input('db-path', 'data')]
+    [Input('right-user-dropdown', 'value'),
+     Input('db-path', 'data')]
 )
 def update_right_pie_chart(selected_user, db_path):
     """Updates the right pie chart based on the selected user."""
-    return plot_hours_per_project(calculate_hours_per_project(read_database(db_path)), selected_user) if (db_path and selected_user) else go.Figure(layout=go.Layout(plot_bgcolor=MODERN_COLORS['background'], paper_bgcolor=MODERN_COLORS['background']))
+    if db_path and selected_user:
+        data = read_database(db_path)
+        hours = calculate_hours_per_project(data)
+        right_pie_chart = plot_hours_per_project(hours, selected_user)
+        return right_pie_chart
+    else:
+        return go.Figure(layout=go.Layout(plot_bgcolor=MODERN_COLORS['background'], paper_bgcolor=MODERN_COLORS['background']))
 
 @app.callback(
     Output('total-hours-chart', 'figure'),
-    [Input('total-hours-chart', 'id'), Input('db-path', 'data')]
+    [Input('total-hours-chart', 'id'),
+     Input('db-path', 'data')]
 )
 def update_total_hours_chart(_, db_path):
     """Updates the total hours chart."""
-    return plot_total_hours_per_user(*calculate_total_hours_per_user(read_database(db_path))) if db_path else go.Figure(layout=go.Layout(plot_bgcolor=MODERN_COLORS['background'], paper_bgcolor=MODERN_COLORS['background']))
+    if db_path:
+        data = read_database(db_path)
+        total_hours, date_range = calculate_total_hours_per_user(data)
+        total_hours_chart = plot_total_hours_per_user(total_hours, date_range)
+        return total_hours_chart
+    else:
+        return go.Figure(layout=go.Layout(plot_bgcolor=MODERN_COLORS['background'], paper_bgcolor=MODERN_COLORS['background']))
 
 @app.callback(
     Output('average-hours-per-user-chart', 'figure'),
-    [Input('average-hours-per-user-chart', 'id'), Input('db-path', 'data')]
+    [Input('average-hours-per-user-chart', 'id'),
+     Input('db-path', 'data')]
 )
 def update_average_hours_per_user_chart(_, db_path):
     """Updates the average hours per user chart."""
-    return plot_average_hours_per_user(calculate_average_hours_per_user(read_database(db_path))) if db_path else go.Figure(layout=go.Layout(plot_bgcolor=MODERN_COLORS['background'], paper_bgcolor=MODERN_COLORS['background']))
+    if db_path:
+        data = read_database(db_path)
+        average_hours = calculate_average_hours_per_user(data)
+        if average_hours is None or average_hours.empty:
+            return go.Figure(layout=go.Layout(title=f'No data available for Average Hours per User',
+                          xaxis_title='User',
+                          yaxis_title='Average Hours',
+                          plot_bgcolor=MODERN_COLORS['background'], paper_bgcolor=MODERN_COLORS['background'], font_color=MODERN_COLORS['text']))
+        
+        # Convert 'average_hours' column to numeric, handling potential errors
+        average_hours.loc[:, 'average_hours'] = pd.to_numeric(average_hours['average_hours'], errors='coerce').dropna()
+
+        fig =  go.Figure(data=[go.Bar(x=average_hours['user'], y=average_hours['average_hours'], marker_color=SYNTHWAVE_COLORS['pink'])],
+                    layout=go.Layout(title=f'Average Hours per User per Day',
+                                     xaxis_title='User', yaxis_title='Average Hours',
+                                     title_font=dict(size=18, color=MODERN_COLORS['text'], family='Arial, sans-serif'),
+                                     plot_bgcolor=MODERN_COLORS['background'], paper_bgcolor=MODERN_COLORS['background'], font_color=MODERN_COLORS['text']))
+        return fig
+    else:
+        return go.Figure(layout=go.Layout(plot_bgcolor=MODERN_COLORS['background'], paper_bgcolor=MODERN_COLORS['background']))
 
 @app.callback(
     Output('average-hours-per-period-chart', 'figure'),
-    [Input('db-path', 'data')],
+    [Input('db-path', 'data'),
+     Input('update-period-button', 'n_clicks')],
     [State('period-days-input', 'value')]
 )
-def update_average_hours_per_period_chart(db_path, period_days):
+def update_average_hours_per_period_chart(db_path, n_clicks, period_days):
     """Updates the average hours per period chart."""
-    return plot_average_hours_per_period(calculate_average_hours_per_period(read_database(db_path), int(period_days)), int(period_days)) if db_path else go.Figure(layout=go.Layout(plot_bgcolor=MODERN_COLORS['background'], paper_bgcolor=MODERN_COLORS['background']))
+    try:
+        period_days = int(period_days)
+        if period_days <= 0:
+            return go.Figure(layout=go.Layout(title=f'Invalid period: Please enter a value greater than 0',
+                                  xaxis_title='User', yaxis_title='Average Hours',
+                                  plot_bgcolor=MODERN_COLORS['background'], paper_bgcolor=MODERN_COLORS['background'], font_color=MODERN_COLORS['text']))
+        if db_path:
+            data = read_database(db_path)
+            fig = plot_average_hours_per_period(calculate_average_hours_per_period(data, period_days), period_days)
+            return fig
+        else:
+            return go.Figure(layout=go.Layout(plot_bgcolor=MODERN_COLORS['background'], paper_bgcolor=MODERN_COLORS['background']))
+    except ValueError:
+        return go.Figure(layout=go.Layout(title=f'Invalid period: Please enter a valid number',
+                              xaxis_title='User', yaxis_title='Average Hours',
+                              plot_bgcolor=MODERN_COLORS['background'], paper_bgcolor=MODERN_COLORS['background'], font_color=MODERN_COLORS['text']))
 
 if __name__ == '__main__':
     app.run_server(debug=True)
