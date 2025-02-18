@@ -6,7 +6,7 @@ from config import PATH_TO_DATA
 from calculations import calculate_hours_per_project, calculate_total_hours_per_user, calculate_average_hours_per_user, calculate_average_hours_per_period
 from plotting import plot_hours_per_project, plot_total_hours_per_user, plot_average_hours_per_user, plot_average_hours_per_period
 from utils import read_database, browse_directory, find_database_and_parameters, read_parameters
-from utils import MODERN_COLORS
+from utils import MODERN_COLORS, SYNTHWAVE_COLORS
 
 # Dash App
 app = Dash(__name__, external_stylesheets=[dbc.themes.DARKLY])
@@ -82,7 +82,7 @@ app.layout = dbc.Container([
 
 @app.callback(
     [Output('db-path', 'data'), Output('param-path', 'data'), Output('progress', 'value'),
-     Output('progress', 'animated'), Output('progress', 'striped'), Output('progress', 'label'),
+     Output('progress', 'animated'), Output('progress', 'striped'), Output('progress', 'children'),
      Output('left-user-dropdown', 'options'), Output('left-user-dropdown', 'value'),
      Output('right-user-dropdown', 'options'), Output('right-user-dropdown', 'value')],
     [Input('browse-button', 'n_clicks')],
@@ -233,4 +233,4 @@ def update_average_hours_per_period_chart(db_path, n_clicks, period_days):
                               plot_bgcolor=MODERN_COLORS['background'], paper_bgcolor=MODERN_COLORS['background'], font_color=MODERN_COLORS['text']))
 
 if __name__ == '__main__':
-    app.run_server(debug=True)
+    app.run_server(debug=True, port=8058)
