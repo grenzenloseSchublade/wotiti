@@ -34,8 +34,8 @@ statsmodels = "^0.13.5"
 # Visualisation
 plotly = "^5.0.0"
 #chart_studio
-dash = "^2.0.0"
-dash_bootstrap_components = "^0.13.0"
+dash = "^2.18.2"
+dash_bootstrap_components = "^1.7.1"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

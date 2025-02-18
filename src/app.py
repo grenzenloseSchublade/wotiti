@@ -321,11 +321,15 @@ class App:
         else:
             self.write("Invalid project or name. Please try again.", error=True)
 
+    # TODO in der standalone executable ist python nicht bekannt.
     def open_stats_dashboard(self):
         """Opens the statistics dashboard."""
         try:
             print("Opening statistics dashboard...")
             project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            subprocess.Popen(["poetry", "run", "python", "src/stats.py"], cwd=project_root)  # Use subprocess.Popen
+            # Build the path to the stats.py script
+            stats_script_path = os.path.join(project_root, "src", "stats.py")
+            # Use subprocess.Popen to run the script in a new process
+            subprocess.Popen(["python", stats_script_path], cwd=project_root)
         except Exception as e:
             self.write(f"Failed to open statistics dashboard: {e}", error=True)

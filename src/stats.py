@@ -20,8 +20,8 @@ app.layout = dbc.Container([
                     dbc.Button('Select Directory', id='browse-button', n_clicks=0, color="primary", className="mb-3"),
                 ], width="auto"),
                 dbc.Col([
-                    dbc.Progress(id="progress", value=0, animated=True, striped=False, color="success", className="mb-3", style={'height': '30px'}, children=""),
-                ], md=8),
+                    dbc.Progress(id="progress", value=0, animated=True, striped=True, color="success", className="mb-3", style={'height': '30px', 'display': 'flex', 'alignItems': 'center', 'justifyContent': 'center'}, children=""),
+                ], md=8), 
             ], align="center"),
             dcc.Store(id='db-path', data=None),
             dcc.Store(id='param-path', data=None),
@@ -109,7 +109,7 @@ def update_paths(n_clicks, period_days):
                 left_user = 'user_1' if 'user_1' in users else users[0] if len(users) > 0 else None
                 right_user = 'user_2' if 'user_2' in users else users[1] if len(users) > 1 else None
                 options = [{'label': user, 'value': user} for user in users]
-                progress_values = update_progress(100, "Data loaded and processed.", animated=False)
+                progress_values = update_progress(100, "Data loaded and processed.", animated=True)
                 return db_path, param_path, progress_values[0], progress_values[1], progress_values[2], progress_values[3], options, left_user, options, right_user
             else:
                 progress_values = update_progress(100, "Error: Database or Parameter file not found", animated=False)
@@ -233,4 +233,4 @@ def update_average_hours_per_period_chart(db_path, n_clicks, period_days):
                               plot_bgcolor=MODERN_COLORS['background'], paper_bgcolor=MODERN_COLORS['background'], font_color=MODERN_COLORS['text']))
 
 if __name__ == '__main__':
-    app.run_server(debug=True, port=8058)
+    app.run_server(debug=True, port=8050)
