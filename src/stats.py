@@ -6,7 +6,7 @@ from config import PATH_TO_DATA
 from calculations import calculate_hours_per_project, calculate_total_hours_per_user, calculate_average_hours_per_user, calculate_average_hours_per_period
 from plotting import plot_hours_per_project, plot_total_hours_per_user, plot_average_hours_per_user, plot_average_hours_per_period
 from utils import read_database, browse_directory, find_database_and_parameters, read_parameters
-from utils import MODERN_COLORS, SYNTHWAVE_COLORS
+from utils import MODERN_COLORS
 
 # Dash App
 app = Dash(__name__, external_stylesheets=[dbc.themes.DARKLY])
@@ -20,7 +20,7 @@ app.layout = dbc.Container([
                     dbc.Button('Select Directory', id='browse-button', n_clicks=0, color="primary", className="mb-3"),
                 ], width="auto"),
                 dbc.Col([
-                    dbc.Progress(id="progress", value=0, animated=True, striped=False, color="success", className="mb-3", label="", style={'height': '30px'}),
+                    dbc.Progress(id="progress", value=0, animated=True, striped=False, color="success", className="mb-3", style={'height': '30px'}, children=""),
                 ], md=8),
             ], align="center"),
             dcc.Store(id='db-path', data=None),

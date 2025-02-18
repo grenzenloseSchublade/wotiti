@@ -4,6 +4,8 @@ import time
 from datetime import datetime
 from db_helper import create_connection, create_main_table, create_user_table, check_user, log_start, log_stop, calculate_duration
 from config import DATABASE_PATH
+import subprocess  # Import the subprocess module
+import os
 
 class App:
     def __init__(self, master):
@@ -51,6 +53,10 @@ class App:
         # Update Duration button
         self.calculate_button = Button(self.button_frame, text="Update TimyTimer", command=self.update_duration, bg='#D4D0C8', fg='black', font=('MS Sans Serif', 10))
         self.calculate_button.grid(row=0, column=4, pady=5, padx=5, sticky="ew")
+
+        # Statistics Dashboard button
+        self.stats_button = Button(self.button_frame, text="Open Stats Dashboard", command=self.open_stats_dashboard, bg='#D4D0C8', fg='black', font=('MS Sans Serif', 10))
+        self.stats_button.grid(row=0, column=5, pady=5, padx=5, sticky="ew")
 
         # Entry frame
         self.entry_frame = Frame(self.frame, bg='#C0C0C0', border=2, relief="sunken", padx=2, pady=2)
@@ -300,3 +306,12 @@ class App:
             self.timer_label.config(text=f"[Zeit] {int(hours):02}:{int(minutes):02}:{int(seconds):02} \t [Name] {name} \t [Projekt] {project}")
         else:
             self.write("Invalid project or name. Please try again.", error=True)
+
+    def open_stats_dashboard(self):
+        """Opens the statistics dashboard."""
+        try:
+            print("Opening statistics dashboard...")
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            subprocess.Popen(["poetry", "run", "python", "src/stats.py"], cwd=project_root)  # Use subprocess.Popen
+        except Exception as e:
+            self.write(f"Failed to open statistics dashboard: {e}", error=True)

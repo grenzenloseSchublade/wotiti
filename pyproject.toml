@@ -25,16 +25,17 @@ pyinstaller = "^6.12.0"
 
 [tool.poetry.group.stats.dependencies]
 # Data handling
-numpy
-pandas
+numpy = "^2.2.3"
+pandas = "^2.2.3"
 # Calculations
-scipy
-scikit-learn
-statsmodels
+scipy = "^1.10.0"
+scikit-learn = "^1.2.0"
+statsmodels = "^0.13.5"
 # Visualisation
-plotly
+plotly = "^5.0.0"
 #chart_studio
-dash
+dash = "^2.0.0"
+dash_bootstrap_components = "^0.13.0"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
