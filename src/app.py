@@ -4,8 +4,8 @@ import os
 import time
 from datetime import datetime
 from db_helper import create_connection, create_main_table, create_user_table, check_user, log_start, log_stop, calculate_duration
-from config import DATABASE_PATH
-import subprocess  # Import the subprocess module
+from utils import DATABASE_PATH
+import subprocess
 
 class App:
     def __init__(self, master):

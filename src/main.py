@@ -4,8 +4,7 @@ from app import App
 import subprocess
 import os
 import threading
-import signal
-import time
+
 
 def run_tkinter_app():
     """Runs the Tkinter GUI application."""

@@ -3,7 +3,6 @@ import json
 import os
 import glob
 from tkinter import Tk, filedialog
-from config import PATH_TO_DATA
 import pandas as pd
 
 # Color schemes
@@ -15,6 +14,23 @@ SYNTHWAVE_COLORS = {
     'background': '#1f1f1f', 'text': '#e0e0e0', 'blue': '#00d4ff',
     'pink': '#ff00ff', 'yellow': '#ffff00'
 }
+
+# Pfade
+PATH_TO_DATA = "data" 
+PATH_TO_DASHBOARD_DATA = "wotiti/data"
+DATABASE_PATH = "data/app_database.db" 
+GENERATE_DATABASE_PATH = "data/generate_database.db"
+
+
+
+def save_to_csv(data, csv_path):
+    """Save the DataFrame to a CSV file."""
+    try:
+        data.to_csv(csv_path, index=False)
+        print(f"Data saved to {csv_path} successfully.")
+    except Exception as e:
+        print(f"Error saving data to CSV: {e}")
+
 
 def read_database(db_path):
     """Reads SQLite database, returns data as pandas DataFrame."""
@@ -45,7 +61,7 @@ def browse_directory():
     """Browses for a directory using a Tkinter dialog."""
     root = Tk()
     root.withdraw()
-    directory = filedialog.askdirectory(initialdir=PATH_TO_DATA)
+    directory = filedialog.askdirectory(initialdir=PATH_TO_DASHBOARD_DATA)
     root.destroy()
     return directory
 

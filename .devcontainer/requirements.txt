@@ -10,3 +10,4 @@ plotly
 chart_studio
 dash
 dash-bootstrap-components
+dash-extensions-1.0.20

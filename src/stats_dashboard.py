@@ -1,10 +1,10 @@
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
-from dash import Dash, dcc, html, Input, Output, State
+from dash import dcc, html, State, Input, Output, Dash
+#from dash_extensions.enrich import Dash, Output, Input
 import pandas as pd
-from config import PATH_TO_DATA
-from calculations import calculate_hours_per_project, calculate_total_hours_per_user, calculate_average_hours_per_user, calculate_average_hours_per_period
-from plotting import plot_hours_per_project, plot_total_hours_per_user, plot_average_hours_per_user, plot_average_hours_per_period
+from stats_calculations import calculate_hours_per_project, calculate_total_hours_per_user, calculate_average_hours_per_user, calculate_average_hours_per_period
+from stats_plotting import plot_hours_per_project, plot_total_hours_per_user, plot_average_hours_per_period
 from utils import read_database, browse_directory, find_database_and_parameters, read_parameters
 from utils import MODERN_COLORS, SYNTHWAVE_COLORS
 
@@ -20,7 +20,7 @@ app.layout = dbc.Container([
                     dbc.Button('Select Directory', id='browse-button', n_clicks=0, color="primary", className="mb-3"),
                 ], width="auto"),
                 dbc.Col([
-                    dbc.Progress(id="progress", value=0, animated=True, striped=True, color="success", className="mb-3", style={'height': '30px', 'display': 'flex', 'alignItems': 'center', 'justifyContent': 'center'}, children=""),
+                    dbc.Progress(id="progress", value=50, animated=False, striped=False, color="info", className="mb-3", style={'height': '30px', 'display': 'flex', 'alignItems': 'center', 'justifyContent': 'center'}, children=""),
                 ], md=8), 
             ], align="center"),
             dcc.Store(id='db-path', data=None),

@@ -6,48 +6,12 @@ import random
 
 from db_helper import create_connection, create_main_table, create_user_table, check_user, log_start, log_stop
 import json
-from config import GENERATE_DATABASE_PATH, PATH_TO_DATA
-
-
-def read_database(db_path=PATH_TO_DATA):
-    """Read the SQLite database and return the data as a pandas DataFrame."""
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        
-        # Get all user tables
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
-        tables = cursor.fetchall()
-        
-        data = []
-        for table in tables:
-            table_name = table[0]
-            cursor.execute(f"SELECT * FROM {table_name};")
-            rows = cursor.fetchall()
-            columns = [description[0] for description in cursor.description]
-            table_data = pd.DataFrame(rows, columns=columns)
-            table_data['user'] = table_name.replace('_events', '')
-            data.append(table_data)
-        
-        conn.close()
-        return pd.concat(data, ignore_index=True)
-    except sqlite3.Error as e:
-        print(f"Error reading database: {e}")
-        return pd.DataFrame()
-
-
-def save_to_csv(data, csv_path):
-    """Save the DataFrame to a CSV file."""
-    try:
-        data.to_csv(csv_path, index=False)
-        print(f"Data saved to {csv_path} successfully.")
-    except Exception as e:
-        print(f"Error saving data to CSV: {e}")
+from utils import save_to_csv, PATH_TO_DATA
 
 
 def generate_sample_data(num_users, storage_type, timeblock_min, start_date, end_date, 
                          project_max=10, fixed_interval=None, 
-                         path_to_save=GENERATE_DATABASE_PATH, add_to_existing=False):
+                         path_to_save=PATH_TO_DATA, add_to_existing=False):
     """
     Generate sample data and store it in the specified format.
     
@@ -217,13 +181,18 @@ def generate_random_sample_data():
 # Example usage
 if __name__ == "__main__":
 
-    # TODO Teste Werte für die Parameter um ideale Daten zu generieren
+
+
+
+# Daten erstellen:
+# 1. user fest, dann monat für monat
+# 2. projekte uterschiedlich?
+# 3. wird die zeitrange eingehalten?
+# 4. 
+
+    # TODO Erstelle für mehrere Monate Daten - Teste Werte für die Parameter um ideale Daten zu generieren
+    # TODO Abspeicherung relativ in Pfad wotiti/data machen?
     generate_random_sample_data()
     
     # TODO 1. **Datenaufbereitung**: Pandas + NumPy.  
     
-
-    # db_path = PATH_TO_DATA + "/generate_database.db"
-    # data = read_database(db_path)
-    # if not data.empty:
-    #     save_to_csv(data, "database/generate_database.csv")

@@ -2,7 +2,8 @@ from datetime import datetime
 import os
 import sqlite3
 from sqlite3 import Error
-from config import DATABASE_PATH
+from utils import DATABASE_PATH, PATH_TO_DATA
+import pandas as pd
 
 def create_connection(db_file=DATABASE_PATH):
     """Create a database connection to the SQLite database specified by db_file."""
@@ -58,6 +59,32 @@ def create_user_table(conn, name):
         print(f"Table for user '{name}' created successfully.")
     except Error as e:
         print(f"Error creating table for user '{name}': {e}")
+
+def read_database(db_path=PATH_TO_DATA):
+    """Read the SQLite database and return the data as a pandas DataFrame."""
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Get all user tables
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
+        tables = cursor.fetchall()
+        
+        data = []
+        for table in tables:
+            table_name = table[0]
+            cursor.execute(f"SELECT * FROM {table_name};")
+            rows = cursor.fetchall()
+            columns = [description[0] for description in cursor.description]
+            table_data = pd.DataFrame(rows, columns=columns)
+            table_data['user'] = table_name.replace('_events', '')
+            data.append(table_data)
+        
+        conn.close()
+        return pd.concat(data, ignore_index=True)
+    except sqlite3.Error as e:
+        print(f"Error reading database: {e}")
+        return pd.DataFrame()
 
 def check_user(conn, name):
     """Insert a new user into the main table if not already exists."""
