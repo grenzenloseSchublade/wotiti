@@ -28,8 +28,8 @@ def generate_random_sample_data():
     # Datum und Zeitraum
     start_date = datetime(2025, 1, 1)
     end_date = start_date + timedelta(days=30)
-    start_date_str = start_date.strftime("%d-%m-%Y")
-    end_date_str = end_date.strftime("%d-%m-%Y")
+    start_date_str = start_date.strftime("%Y-%m-%d")
+    end_date_str = end_date.strftime("%Y-%m-%d")
     
     # Benutzerspezifische Parameter
     user_params = {}
@@ -107,8 +107,8 @@ def generate_sample_data(storage_type, start_date, end_date, path_to_save=PATH_T
         print(f"Speichertyp: {storage_type}")
         
         # Datum einmal konvertieren
-        start_date_obj = datetime.strptime(start_date, "%d-%m-%Y")
-        end_date_obj = datetime.strptime(end_date, "%d-%m-%Y")
+        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
+        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
         date_range = (end_date_obj - start_date_obj).days + 1
 
         # Für jeden User in user_params
@@ -122,7 +122,7 @@ def generate_sample_data(storage_type, start_date, end_date, path_to_save=PATH_T
 
             for day_offset in range(date_range):
                 date = start_date_obj + timedelta(days=day_offset)
-                date_str = date.strftime("%d-%m-%Y")
+                date_str = date.strftime("%Y-%m-%d")
                 
                 # Ziel-Arbeitszeit für diesen Tag (in Minuten)
                 target_minutes = random.randint(
@@ -149,10 +149,10 @@ def generate_sample_data(storage_type, start_date, end_date, path_to_save=PATH_T
                     if user_config['fixed_interval']:
                         start_time_str, stop_time_str = user_config['fixed_interval'].split('-')
                         base_start_time = datetime.strptime(
-                            f"{date_str} {start_time_str}", "%d-%m-%Y %H:%M"
+                            f"{date_str} {start_time_str}", "%Y-%m-%d %H:%M"
                         )
                         base_stop_time = datetime.strptime(
-                            f"{date_str} {stop_time_str}", "%d-%m-%Y %H:%M"
+                            f"{date_str} {stop_time_str}", "%Y-%m-%d %H:%M"
                         )
                         
                         # Zeitfenster definieren
@@ -213,14 +213,14 @@ def generate_sample_data(storage_type, start_date, end_date, path_to_save=PATH_T
                                 "user": user_name,
                                 "project": project,
                                 "event_type": "start",
-                                "timestamp": start_time.strftime("%d-%m-%Y %H:%M:%S"),
+                                "timestamp": start_time.strftime("%Y-%m-%d %H:%M:%S"),
                                 "date": date_str
                             },
                             {
                                 "user": user_name,
                                 "project": project,
                                 "event_type": "stop",
-                                "timestamp": stop_time.strftime("%d-%m-%Y %H:%M:%S"),
+                                "timestamp": stop_time.strftime("%Y-%m-%d %H:%M:%S"),
                                 "date": date_str
                             }
                         ])

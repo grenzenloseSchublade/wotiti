@@ -32,20 +32,69 @@ def save_to_csv(data, csv_path):
         print(f"Error saving data to CSV: {e}")
 
 
+def convert_timestamp_format(timestamp_str):
+    """
+    Konvertiert verschiedene Timestamp-Formate in datetime-Objekte.
+    """
+    try:
+        # Versuche verschiedene Formate
+        for date_format in [
+            '%Y-%m-%d %H:%M:%S',  # Standardformat
+            '%d-%m-%Y %H:%M:%S',  # Altes Format
+            '%Y/%m/%d %H:%M:%S',  # Alternative Schreibweise
+            '%d/%m/%Y %H:%M:%S'   # Alternative Schreibweise
+        ]:
+            try:
+                return pd.to_datetime(timestamp_str, format=date_format)
+            except ValueError:
+                continue
+        
+        # Wenn kein Format passt, versuche es mit automatischer Erkennung
+        return pd.to_datetime(timestamp_str, dayfirst=True)
+    except Exception as e:
+        print(f"Fehler bei der Konvertierung von {timestamp_str}: {e}")
+        return pd.NaT
+
 def read_database(db_path):
-    """Reads SQLite database, returns data as pandas DataFrame."""
+    """Liest die Datenbank und konvertiert Timestamps in datetime-Objekte."""
     try:
         with sqlite3.connect(db_path) as conn:
+            # Finde alle Tabellen
             query = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"
             tables = [table[0] for table in conn.execute(query).fetchall()]
+            
             data = []
             for table_name in tables:
                 df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
-                df['user'] = table_name.replace('_events', '')
-                data.append(df)
-            return pd.concat(data, ignore_index=True)
+                if table_name != 'users':  # Ignoriere die users-Tabelle
+                    df['user'] = table_name.replace('_events', '')
+                    data.append(df)
+            
+            if not data:
+                return pd.DataFrame()
+                
+            # Kombiniere alle Daten
+            combined_data = pd.concat(data, ignore_index=True)
+            
+            # Einmalige Konvertierung der Timestamps in datetime-Objekte
+            # Versuche zuerst das alte Format
+            try:
+                combined_data['timestamp'] = pd.to_datetime(
+                    combined_data['timestamp'], 
+                    format='%d-%m-%Y %H:%M:%S',
+                    dayfirst=True
+                )
+            except ValueError:
+                # Wenn das fehlschlägt, versuche das neue Format
+                combined_data['timestamp'] = pd.to_datetime(
+                    combined_data['timestamp'], 
+                    format='%Y-%m-%d %H:%M:%S'
+                )
+            
+            return combined_data
+            
     except sqlite3.Error as e:
-        print(f"Error reading database: {e}")
+        print(f"Fehler beim Lesen der Datenbank: {e}")
         return pd.DataFrame()
 
 def read_parameters(file_path):
