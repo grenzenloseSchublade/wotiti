@@ -33,7 +33,10 @@ def main():
             try:
                 print("Starting the statistics dashboard...")
                 project_root = os.path.dirname(os.path.abspath(__file__))
-                stats_process = subprocess.Popen(["poetry", "run", "python", "stats.py"], cwd=project_root)
+                stats_process = subprocess.Popen(
+                    ["python", os.path.join(project_root, "stats_dashboard.py")], 
+                    cwd=project_root
+                )
                 print("Statistics dashboard started successfully.")
                 stats_process.wait()  # Wait for the dashboard to complete
             except Exception as e:
