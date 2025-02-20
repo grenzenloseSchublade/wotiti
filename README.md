@@ -1,115 +1,167 @@
-# My Python GUI App
+# WoTiTi - Work Time Tracker & Insights 🕒
 
-This project is a simple Python application that features a graphical user interface (GUI) with a single button. It integrates an SQLite database to demonstrate basic database operations.
+WoTiTi ist ein umfassendes Zeiterfassungssystem, bestehend aus zwei Hauptkomponenten:
+1. **Work Time Timer**: Eine benutzerfreundliche GUI-Anwendung zur Zeiterfassung
+2. **Work Time Insights**: Ein fortgeschrittenes Analyse-Dashboard für Zeitdaten
 
-## TODO 
+## 🎯 Systemübersicht
 
-1. create devcontainer CHECK 
-2. test app CHECK 
-3. create Repo CHECK 
-4. git login credentials setzen CHECK 
-5. use poetry CHECK 
-6. make standalone app (linux, später: windows) -> ubuntu: CHECK
-7. make standalone app with database 
-8. develop logic + create fancy gui 
-9. create dummy data in database 
-10. use plotly to make fancy statistics 
-11. create gui plots -> plotly ? 
-12. create multiple users 
-13. make fancy data analysis and further plots 
+### Work Time Timer (GUI)
+- Start/Stop-Funktionalität für Arbeitssitzungen
+- Mehrbenutzer-Unterstützung
+- Projektbasierte Zeiterfassung
+- SQLite-Datenbankintegration
+- Echtzeit-Timer-Anzeige
+- Nachträgliche Zeitkorrekturen
 
-## Project Structure
+### Work Time Insights (Dashboard)
+- Interaktive Datenvisualisierung
+- Fortgeschrittene statistische Analysen
+- Arbeitsmuster-Erkennung
+- Vorhersagemodelle
+- Vergleichsanalysen
+
+## 📁 Projektstruktur
 
 ```
-my-python-gui-app
-├── src
-│   ├── main.py          # Entry point of the application
-│   ├── gui
-│   │   └── app.py       # Contains the GUI implementation
-│   ├── database
-│   │   └── db_helper.py # Database helper functions
-├── requirements.txt     # Project dependencies
-└── README.md            # Project documentation
+wotiti/
+├── src/
+│   ├── main.py              # GUI-Hauptanwendung
+│   ├── app.py               # GUI-Implementation
+│   ├── db_helper.py         # Datenbankoperationen
+│   ├── stats_dashboard.py   # Analyse-Dashboard
+│   ├── stats_calculations.py # Statistische Berechnungen
+│   ├── stats_plotting.py    # Visualisierungsfunktionen
+│   ├── stats_generator.py   # Testdatengenerierung
+│   └── utils.py             # Hilfsfunktionen
+├── data/                    # Datenspeicherung
+├── tests/                   # Testdateien
+│   ├── test_app.py         # GUI-Tests
+│   └── test_db_helper.py   # Datenbank-Tests
+├── pyproject.toml          # Poetry-Konfiguration
+└── README.md              # Dokumentation
 ```
 
-## Setup Instructions
+## 🚀 Installation & Setup
 
-1. Clone the repository or download the project files.
-2. Navigate to the project directory.
-3. Install the required dependencies by running:
-   ```
-   pip install -r requirements.txt
-   ```
+```bash
+# Repository klonen
+git clone https://github.com/yourusername/wotiti.git
 
-## Usage
+# Poetry installieren
+pip install poetry
 
-To run the application, execute the following command in your terminal:
-```
-python src/main.py
+# Abhängigkeiten installieren
+poetry install
 ```
 
-This will launch the GUI application. Click the button to trigger the associated action, which interacts with the SQLite database.
+## 📊 Verwendung
 
-## Dependencies
+### Timer-Anwendung
+```bash
+# GUI starten
+poetry run python src/main.py
+```
 
-- `tkinter`: For creating the GUI.
-- `sqlite3`: For database operations.
+### Analyse-Dashboard
+```bash
+# Dashboard öffnen
+poetry run python src/stats_dashboard.py
 
-## Build / Executable 
+# Testdaten generieren (optional)
+poetry run python src/stats_generator.py
+```
 
+## 🔧 Funktionen im Detail
 
-### Using Poetry - Easy 
+### Timer-GUI Komponenten
+- **Start/Stop-Buttons**: Sitzungssteuerung
+- **Projekt-Auswahl**: Zuordnung von Zeiten
+- **Benutzer-Management**: Mehrbenutzer-Unterstützung
+- **Datum-Setter**: Schnelle Datumseinstellung
+- **Konsole**: Statusmeldungen und Fehler
 
-1. poetry run pyinstaller --onefile --windowed src/main.py
-2. 
+### Analytics-Dashboard Features
+- **Echtzeit-Visualisierungen** der Arbeitszeiten
+- **Interaktive Grafiken** mit Drill-Down
+- **Arbeitsmuster-Erkennung**
+  - Frühe Starter (vor 8 Uhr)
+  - Kernzeitarbeiter (9-17 Uhr)
+  - Spätarbeiter (nach 17 Uhr)
+- **Statistische Analysen**
+  - Cluster-Analyse
+  - ANOVA-Tests
+  - Regressionsmodelle
 
-### Using pip
+## 📈 Datenanalyse
 
-1. Use `"image": "mcr.microsoft.com/devcontainers/python:3.10-bullseye"` - Debian 11 (GLIBC 2.31). Any newer GLIBC versions will cause troubles on OS.
-2. Install pyinstaller:
-   ```
-   pip install pyinstaller==6.12
-   ```
-3. Run:
-   ```
-   pyinstaller --windowed --onefile src/main.py
-   ```
+### Timestamp-Verarbeitung
+- **Unterstützte Formate**:
+  - YYYY-MM-DD HH:MM:SS (Standard)
+  - DD-MM-YYYY HH:MM:SS
+- **Automatische Konvertierung**
+- **Einheitliche Speicherung**
 
-### Alternative using Poetry
+### Analysemodelle
+- **Clustering**: K-Means für Arbeitsmuster
+- **Regression**: Vorhersagemodelle
+- **ANOVA**: Gruppenvergleiche
+- **Zeitreihen**: Trendanalysen
 
-1. Add the Poetry shell plugin:
-   ```
-   poetry self add poetry-plugin-shell
-   ```
-2. Enter the Poetry shell:
-   ```
-   poetry shell
-   ```
-3. Run the PyInstaller command in the Poetry shell:
-   ```
-   pyinstaller --windowed --onefile src/main.py
-   ```
+## 🛠️ Build-Optionen
 
+### Poetry Build (empfohlen)
+```bash
+poetry run pyinstaller --onefile --windowed src/main.py
+```
 
+### Debian 11 Build (GLIBC 2.31)
+```bash
+pip install pyinstaller==6.12
+pyinstaller --windowed --onefile src/main.py
+```
 
-## Using Poetry
+## 📚 Dependencies
+- **GUI**: tkinter
+- **Dashboard**: dash, plotly
+- **Datenverarbeitung**: pandas, numpy
+- **Analysen**: scikit-learn, scipy
+- **Datenbank**: sqlite3
 
-To manage dependencies and virtual environments, this project uses Poetry. Here are some essential commands:
+## 🔍 Testdatengenerierung
 
-1. **Install dependencies**:
-   ```
-   poetry install
-   ```
+### Features
+- Flexible Benutzer- und Projektzahlen
+- Realistische Arbeitszeitverteilung
+- Verschiedene Speicheroptionen (CSV/DB)
+- Parameter-Logging für Reproduzierbarkeit
 
-2. **Show detailed information about installed packages**:
-   ```
-   poetry show -v
-   ```
+### Beispieldaten
+```
+user    project     event_type  timestamp           date
+user_1  projekt_3   start      01-01-2023 09:00:00 01-01-2023
+user_1  projekt_3   stop       01-01-2023 10:30:00 01-01-2023
+```
 
-3. **Set the Python interpreter in VSCode to the created virtual environment**:
-   - Open the command palette (Ctrl+Shift+P).
-   - Select `Python: Select Interpreter`.
-   - Choose the interpreter from the `.venv` directory created by Poetry.
+## 🐛 Bekannte Probleme
+- Timestamp-Konvertierung bei ungewöhnlichen Formaten
+- CPU-Last bei komplexen Analysen
+- Async-Timer-Implementierung ausstehend
 
-For more information, refer to the [Poetry documentation](https://python-poetry.org/docs/) and [Poetry Usage](https://python-poetry.org/docs/basic-usage).
+## 🔜 Geplante Features
+- [ ] Export-Funktionen für Analysen
+- [ ] Erweiterte Benutzerrollen
+- [ ] API-Schnittstelle
+- [ ] Docker-Container
+- [ ] Automatische Backups
+- [ ] Nachträgliche Zeitkorrekturen
+- [ ] Performance-Optimierungen
 
+## 🤝 Beitragen
+1. Fork des Repositories
+2. Feature-Branch erstellen
+3. Änderungen committen
+4. Pull Request erstellen
+
+## 📝 Lizenz
+Dieses Projekt ist unter der MIT-Lizenz lizenziert.

@@ -371,18 +371,36 @@ def update_paths(n_clicks):
                 """Helper function to update progress bar."""
                 return [value, animated, striped, f"{label} ({value}%)"]
 
-            # Verbesserte Progress-Updates mit detaillierteren Schritten
-            progress_values = update_progress(10, "Initialisiere...")
+            progress_values = update_progress(5, "Initialisiere...")
             
-            db_path, param_path = find_database_and_parameters(directory, update_progress=update_progress)
+            db_path, param_path = find_database_and_parameters(directory)
             if db_path and param_path:
-                progress_values = update_progress(40, "Dateien gefunden")
+                progress_values = update_progress(15, "Dateien gefunden")
                 data = read_database(db_path)
-                progress_values = update_progress(70, "Daten werden verarbeitet")
+                progress_values = update_progress(30, "Datenbank geladen")
+                
+                # Zeitintensive Berechnungen mit Progress-Updates
+                progress_values = update_progress(40, "Berechne Projektstatistiken...")
+                calculate_project_time_stats(data)
+                
+                progress_values = update_progress(50, "Analysiere Zeitmuster...")
+                analyze_daily_patterns(data)
+                
+                progress_values = update_progress(60, "Führe Clusteranalyse durch...")
+                perform_cluster_analysis(data)
+                
+                progress_values = update_progress(70, "Führe Regressionsanalyse durch...")
+                perform_regression_analysis(data)
+                
+                progress_values = update_progress(80, "Führe ANOVA-Analyse durch...")
+                perform_anova_analysis(data)
+                
+                progress_values = update_progress(90, "Bereite Benutzeroptionen vor...")
                 users = [user for user in data['user'].unique() if user != 'users']
                 left_user = 'user_1' if 'user_1' in users else users[0] if len(users) > 0 else None
                 right_user = 'user_2' if 'user_2' in users else users[1] if len(users) > 1 else None
                 options = [{'label': user, 'value': user} for user in users]
+                
                 progress_values = update_progress(100, "Fertig", animated=False, striped=True)
                 return db_path, param_path, *progress_values, options, left_user, options, right_user
             else:

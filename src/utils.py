@@ -76,20 +76,11 @@ def read_database(db_path):
             # Kombiniere alle Daten
             combined_data = pd.concat(data, ignore_index=True)
             
-            # Einmalige Konvertierung der Timestamps in datetime-Objekte
-            # Versuche zuerst das alte Format
-            try:
-                combined_data['timestamp'] = pd.to_datetime(
-                    combined_data['timestamp'], 
-                    format='%d-%m-%Y %H:%M:%S',
-                    dayfirst=True
-                )
-            except ValueError:
-                # Wenn das fehlschlägt, versuche das neue Format
-                combined_data['timestamp'] = pd.to_datetime(
-                    combined_data['timestamp'], 
-                    format='%Y-%m-%d %H:%M:%S'
-                )
+            # Konvertiere Timestamps einheitlich mit der convert_timestamp_format Funktion
+            combined_data['timestamp'] = combined_data['timestamp'].apply(convert_timestamp_format)
+            
+            # Füge das Datum als separate Spalte hinzu (YYYY-MM-DD Format)
+            combined_data['date'] = combined_data['timestamp'].dt.strftime('%Y-%m-%d')
             
             return combined_data
             
