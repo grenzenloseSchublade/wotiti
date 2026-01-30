@@ -3,7 +3,7 @@ import sys
 import os
 import time
 from datetime import datetime
-from db_helper import create_connection, create_main_table, create_user_table, check_user, log_start, log_stop, calculate_duration
+from db_helper import create_connection, create_main_table, check_user, log_start, log_stop, calculate_duration, migrate_legacy_user_tables
 from utils import DATABASE_PATH
 import subprocess
 
@@ -158,7 +158,7 @@ class App:
             if self.db_conn:
                 create_main_table(self.db_conn)
                 check_user(self.db_conn, "Hans")
-                create_user_table(self.db_conn, "Hans")
+                migrate_legacy_user_tables(self.db_conn)
                 self.update_db_content()
         except Exception as e:
             self.write(f"Failed to connect to the database: {e}", error=True)
@@ -182,19 +182,13 @@ class App:
                     self.write("Session already started. Please stop the session before starting again.", error=True)
                 else:
                     print("Starting session...")
-                    user_id = check_user(self.db_conn, name)
-                    if user_id is not None:
-                        cursor = self.db_conn.cursor()
-                        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (f"{name}_events",))
-                        if cursor.fetchone() is None:
-                            create_user_table(self.db_conn, name)
-                        log_start(project=project, name=name, date=date, conn=self.db_conn)
-                        self.session_active[(name, project)] = True
-                        self.timer_running = True
-                        self.timer_start_time = time.time()
-                        self.update_db_content()
-                        self.start_button.config(state="disabled", bg='#A9A9A9')
-                        self.stop_button.config(state="normal", bg='#D4D0C8')
+                    log_start(project=project, name=name, date=date, conn=self.db_conn)
+                    self.session_active[(name, project)] = True
+                    self.timer_running = True
+                    self.timer_start_time = time.time()
+                    self.update_db_content()
+                    self.start_button.config(state="disabled", bg='#A9A9A9')
+                    self.stop_button.config(state="normal", bg='#D4D0C8')
 
     def stop_session(self):
         if self.db_conn:
@@ -202,7 +196,7 @@ class App:
             name = self.get_name()
             date = self.get_date()
             if project is not None and name:
-                if not self.session_active.get((name, project), True):
+                if not self.session_active.get((name, project), False):
                     self.write("Session not started. Please start the session before stopping.", error=True)
                 else:
                     print("Stopping session...")
@@ -277,16 +271,23 @@ class App:
         self.db_content_listbox.delete(0, END)
         if self.db_conn:
             cursor = self.db_conn.cursor()
-            cursor.execute("SELECT name FROM users")
-            users = cursor.fetchall()
-            for user in users:
-                user_name = user[0]
-                self.db_content_listbox.insert(END, f"User: {user_name}")
-                cursor.execute(f"SELECT project, event_type, timestamp FROM {user_name}_events ORDER BY timestamp")
-                events = cursor.fetchall()
-                for event in events:
-                    project, event_type, timestamp = event
-                    self.db_content_listbox.insert(END, f"  Projekt {project}: {event_type} at {timestamp}")
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='events';")
+            if cursor.fetchone() is None:
+                return
+
+            cursor.execute("""
+                SELECT u.name, e.project, e.event_type, e.timestamp
+                FROM events e
+                JOIN users u ON u.id = e.user_id
+                ORDER BY u.name, e.timestamp
+            """)
+            events = cursor.fetchall()
+            current_user = None
+            for user_name, project, event_type, timestamp in events:
+                if user_name != current_user:
+                    current_user = user_name
+                    self.db_content_listbox.insert(END, f"User: {user_name}")
+                self.db_content_listbox.insert(END, f"  Projekt {project}: {event_type} at {timestamp}")
 
     def update_timer_realtime(self):
         """Update the timer label with the elapsed time."""
@@ -327,8 +328,8 @@ class App:
         try:
             print("Opening statistics dashboard...")
             project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            # Build the path to the stats.py script
-            stats_script_path = os.path.join(project_root, "src", "stats.py")
+            # Build the path to the stats_dashboard.py script
+            stats_script_path = os.path.join(project_root, "src", "stats_dashboard.py")
             # Use subprocess.Popen to run the script in a new process
             subprocess.Popen(["python", stats_script_path], cwd=project_root)
         except Exception as e:

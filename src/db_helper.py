@@ -1,5 +1,6 @@
 from datetime import datetime
 import os
+import re
 import sqlite3
 from sqlite3 import Error
 from utils import DATABASE_PATH, PATH_TO_DATA
@@ -55,6 +56,26 @@ def create_main_table(conn):
     success = execute_sql(conn, sql_create_main_table)
     if success:
         print("Main table created successfully.")
+        create_events_table(conn)
+    return success
+
+def create_events_table(conn):
+    """Create the centralized events table in the SQLite database."""
+    sql_create_events_table = '''
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            project TEXT NOT NULL,
+            event_type TEXT CHECK(event_type IN ('start', 'stop')),
+            timestamp DATETIME NOT NULL,
+            date TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+    '''
+    success = execute_sql(conn, sql_create_events_table)
+    if success:
+        execute_sql(conn, "CREATE INDEX IF NOT EXISTS idx_events_user_id ON events(user_id);")
+        execute_sql(conn, "CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);")
     return success
 
 def create_user_table(conn, name):
@@ -72,6 +93,60 @@ def create_user_table(conn, name):
     if success:
         print(f"Table for user '{name}' created successfully.")
     return success
+
+def migrate_legacy_user_tables(conn):
+    """Migrate legacy {name}_events tables into the centralized events table."""
+    if conn is None:
+        return False
+
+    if not create_events_table(conn):
+        return False
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS migration_log (
+                table_name TEXT PRIMARY KEY,
+                migrated_at DATETIME NOT NULL
+            );
+        """)
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%_events';")
+        tables = [row[0] for row in cursor.fetchall()]
+        pattern = re.compile(r"^[A-Za-z0-9_]+_events$")
+
+        for table_name in tables:
+            if table_name in ("events", "sqlite_sequence"):
+                continue
+            if not pattern.match(table_name):
+                continue
+
+            cursor.execute("SELECT 1 FROM migration_log WHERE table_name = ?;", (table_name,))
+            if cursor.fetchone() is not None:
+                continue
+
+            user_name = table_name[:-7]
+            user_id = check_user(conn, user_name)
+            if user_id is None:
+                continue
+
+            cursor.execute("""
+                INSERT INTO events (user_id, project, event_type, timestamp, date)
+                SELECT ?, project, event_type, timestamp, date
+                FROM "{}"
+            """.format(table_name), (user_id,))
+
+            cursor.execute(
+                "INSERT INTO migration_log (table_name, migrated_at) VALUES (?, ?);",
+                (table_name, datetime.now().strftime(TIMESTAMP_FORMAT))
+            )
+
+        conn.commit()
+        return True
+    except Error as e:
+        print(f"Error migrating legacy tables: {e}")
+        return False
+    finally:
+        cursor.close()
 
 def check_user(conn, name):
     """Insert a new user into the main table if not already exists."""
@@ -91,9 +166,11 @@ def check_user(conn, name):
             conn.commit()
             user_id = cur.lastrowid
             print(f"User '{name}' inserted successfully.")
+            create_events_table(conn)
             return user_id
         
         print(f"User '{name}' already exists.")
+        create_events_table(conn)
         return user[0]
     except Error as e:
         print(f"Error checking user: {e}")
@@ -109,21 +186,20 @@ def log_event(conn, project, name, event_type, timestamp=None, date=None):
 
     try:
         cursor = conn.cursor()
-        
-        # Ensure user table exists
-        cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{name}_events';")
-        if not cursor.fetchone():
-            if not create_user_table(conn, name):
-                return False
+        user_id = check_user(conn, name)
+        if user_id is None:
+            return False
+        if not create_events_table(conn):
+            return False
 
         # Format timestamp
         timestamp_str = timestamp.strftime(TIMESTAMP_FORMAT) if timestamp else datetime.now().strftime(TIMESTAMP_FORMAT)
 
         # Insert event
-        cursor.execute(f'''
-            INSERT INTO {name}_events (project, event_type, timestamp, date)
-            VALUES (?, ?, ?, ?)
-        ''', (project, event_type, timestamp_str, date))
+        cursor.execute('''
+            INSERT INTO events (user_id, project, event_type, timestamp, date)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (user_id, project, event_type, timestamp_str, date))
         conn.commit()
         
         print(f"{event_type.capitalize()} time for project {project} logged for user '{name}' on {date}: {timestamp_str}")
@@ -153,12 +229,15 @@ def calculate_duration(project="1", name="Hans", conn=None):
 
     try:
         cursor = conn.cursor()
-        cursor.execute(f'''
+        user_id = check_user(conn, name)
+        if user_id is None:
+            return 0
+        cursor.execute('''
             SELECT event_type, timestamp
-            FROM {name}_events
-            WHERE project = ?
+            FROM events
+            WHERE project = ? AND user_id = ?
             ORDER BY timestamp
-        ''', (project,))
+        ''', (project, user_id))
         
         events = cursor.fetchall()
         total_duration = 0
@@ -185,25 +264,19 @@ def calculate_duration(project="1", name="Hans", conn=None):
 def read_database(db_path=PATH_TO_DATA):
     """Read the SQLite database and return the data as a pandas DataFrame."""
     try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        
-        # Get all user tables
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
-        tables = cursor.fetchall()
-        
-        data = []
-        for table in tables:
-            table_name = table[0]
-            cursor.execute(f"SELECT * FROM {table_name};")
-            rows = cursor.fetchall()
-            columns = [description[0] for description in cursor.description]
-            table_data = pd.DataFrame(rows, columns=columns)
-            table_data['user'] = table_name.replace('_events', '')
-            data.append(table_data)
-        
-        conn.close()
-        return pd.concat(data, ignore_index=True)
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='events';")
+            if cursor.fetchone() is None:
+                return pd.DataFrame()
+
+            query = """
+                SELECT u.name AS user, e.project, e.event_type, e.timestamp, e.date
+                FROM events e
+                JOIN users u ON u.id = e.user_id
+            """
+            df = pd.read_sql_query(query, conn)
+            return df
     except sqlite3.Error as e:
         print(f"Error reading database: {e}")
         return pd.DataFrame()

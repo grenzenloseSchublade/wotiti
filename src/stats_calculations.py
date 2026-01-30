@@ -73,12 +73,17 @@ def calculate_average_hours_per_user(data):
             continue
         
         # Extrahiere Start- und Endzeiten
-        start_times = pd.to_datetime(group[group['event_type'] == 'start']['timestamp'])
-        stop_times = pd.to_datetime(group[group['event_type'] == 'stop']['timestamp'])
-        
-        # Berechne die Gesamtstunden
-        total_hours_user = (stop_times.values - start_times.values).sum().astype('timedelta64[h]').astype(int)
-        average_hours_user = total_hours_user / len(group['date'].unique())
+        start_times = pd.to_datetime(group[group['event_type'] == 'start']['timestamp']).reset_index(drop=True)
+        stop_times = pd.to_datetime(group[group['event_type'] == 'stop']['timestamp']).reset_index(drop=True)
+        min_length = min(len(start_times), len(stop_times))
+        if min_length == 0:
+            average_hours.append({'user': user, 'average_hours': 0})
+            continue
+
+        total_hours_user = sum((stop_times.iloc[i] - start_times.iloc[i]).total_seconds() / 3600
+                              for i in range(min_length))
+        num_days = max(1, len(group['date'].unique()))
+        average_hours_user = total_hours_user / num_days
         average_hours.append({'user': user, 'average_hours': average_hours_user})
     
     return pd.DataFrame(average_hours)
@@ -133,9 +138,10 @@ def calculate_project_time_stats(data):
         start_times = group[group['event_type'] == 'start']['timestamp']
         stop_times = group[group['event_type'] == 'stop']['timestamp']
         
-        if len(start_times) == len(stop_times):
+        min_length = min(len(start_times), len(stop_times))
+        if min_length > 0:
             durations = [(stop - start).total_seconds() / 3600 
-                        for start, stop in zip(start_times, stop_times)]
+                        for start, stop in zip(start_times.iloc[:min_length], stop_times.iloc[:min_length])]
             
             stats.append({
                 'user': user,
@@ -171,9 +177,10 @@ def calculate_daily_project_hours(data):
         start_times = group[group['event_type'] == 'start']['timestamp']
         stop_times = group[group['event_type'] == 'stop']['timestamp']
         
-        if len(start_times) == len(stop_times):
+        min_length = min(len(start_times), len(stop_times))
+        if min_length > 0:
             total_hours = sum((stop - start).total_seconds() / 3600 
-                            for start, stop in zip(start_times, stop_times))
+                            for start, stop in zip(start_times.iloc[:min_length], stop_times.iloc[:min_length]))
             
             daily_hours.append({
                 'user': user,
@@ -214,7 +221,7 @@ def calculate_project_switches(data):
         
         for _, row in events.iterrows():
             if row['event_type'] == 'start':
-                if current_project and current_project != row['project']:
+                if current_project and current_project != row['project'] and last_stop is not None:
                     pause_minutes = (row['timestamp'] - last_stop).total_seconds() / 60
                     switches.append({
                         'user': user,
@@ -257,12 +264,23 @@ def analyze_daily_patterns(data):
     
     for (user, project), group in data.groupby(['user', 'project']):
         starts = group[group['event_type'] == 'start']
+        if starts.empty:
+            patterns.append({
+                'user': user,
+                'project': project,
+                'avg_start_hour': None,
+                'most_common_start_hour': None,
+                'earliest_start': None,
+                'latest_start': None
+            })
+            continue
         
+        most_common = starts['hour'].mode()
         patterns.append({
             'user': user,
             'project': project,
             'avg_start_hour': starts['hour'].mean(),
-            'most_common_start_hour': starts['hour'].mode().iloc[0],
+            'most_common_start_hour': most_common.iloc[0] if not most_common.empty else None,
             'earliest_start': starts['hour'].min(),
             'latest_start': starts['hour'].max()
         })
@@ -361,10 +379,12 @@ def perform_cluster_analysis(data):
         avg_start_hour = start_times.dt.hour.mean()
         
         # Projektwechsel pro Tag
-        switches_per_day = len(calculate_project_switches(user_data)) / len(user_data['date'].unique())
+        num_days = max(1, len(user_data['date'].unique()))
+        switches_per_day = len(calculate_project_switches(user_data)) / num_days
         
         # Durchschnittliche Arbeitsdauer
-        avg_duration = calculate_average_hours_per_user(user_data)['average_hours'].iloc[0]
+        avg_hours_df = calculate_average_hours_per_user(user_data)
+        avg_duration = avg_hours_df['average_hours'].iloc[0] if not avg_hours_df.empty else 0
         
         user_features.append({
             'user': user,
@@ -375,6 +395,9 @@ def perform_cluster_analysis(data):
     
     features_df = pd.DataFrame(user_features)
     
+    if features_df.empty or len(features_df) < 2:
+        return features_df, []
+
     # Standardisierung der Features
     scaler = StandardScaler()
     X = scaler.fit_transform(features_df.drop('user', axis=1))
@@ -438,7 +461,12 @@ def perform_regression_analysis(data):
         dict: Regressionsergebnisse mit Model, Importance, R², Predictions
     """
     data = data.copy()
-    data['timestamp'] = pd.to_datetime(data['timestamp'])
+    if data.empty:
+        return {}
+    data['timestamp'] = pd.to_datetime(data['timestamp'], errors='coerce')
+    data = data.dropna(subset=['timestamp'])
+    if data.empty:
+        return {}
     data['timestamp'] = data['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
     
     # Feature-Vorbereitung
@@ -451,7 +479,11 @@ def perform_regression_analysis(data):
         starts = group[group['event_type'] == 'start']
         stops = group[group['event_type'] == 'stop']
         
-        for start, stop in zip(starts['timestamp'], stops['timestamp']):
+        min_length = min(len(starts), len(stops))
+        if min_length == 0:
+            continue
+
+        for start, stop in zip(starts['timestamp'].iloc[:min_length], stops['timestamp'].iloc[:min_length]):
             start_dt = pd.to_datetime(start)
             duration = (pd.to_datetime(stop) - start_dt).total_seconds() / 3600
             
@@ -464,6 +496,8 @@ def perform_regression_analysis(data):
             })
     
     sessions_df = pd.DataFrame(work_sessions)
+    if sessions_df.empty:
+        return {}
     
     # Dummy-Variablen für kategorische Features
     X = pd.get_dummies(sessions_df[['user', 'project', 'start_hour', 'weekday']])
@@ -526,9 +560,12 @@ def perform_anova_analysis(data):
         starts = group[group['event_type'] == 'start']['timestamp']
         stops = group[group['event_type'] == 'stop']['timestamp']
         
-        # Berechne Dauern direkt mit datetime-Objekten
+        min_length = min(len(starts), len(stops))
+        if min_length == 0:
+            continue
+
         durations = [(stop - start).total_seconds() / 3600
-                    for start, stop in zip(starts, stops)]
+                    for start, stop in zip(starts.iloc[:min_length], stops.iloc[:min_length])]
         
         work_durations.extend([{
             'user': user,
@@ -539,6 +576,9 @@ def perform_anova_analysis(data):
     durations_df = pd.DataFrame(work_durations)
     
     try:
+        if durations_df.empty or durations_df['user'].nunique() < 2 or durations_df['project'].nunique() < 2:
+            return {}
+
         # ANOVA zwischen Usern
         user_groups = [group['duration'].values 
                       for _, group in durations_df.groupby('user')]

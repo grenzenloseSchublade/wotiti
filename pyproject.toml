@@ -1,45 +1,37 @@
-[tool.poetry]
+[project]
 name = "wotiti"
 version = "0.1.0"
 description = "Small UI to track worktime"
-authors = ["grenzenloseSchublade <hans.mueller@rub.de>"]
-license = "MIT"
-repository = "https://github.com/grenzenloseSchublade/wotiti"
-
-package-mode = false
-
-# README file(s) are used as the package description
 readme = "README.md"
+requires-python = ">=3.10,<3.14"
+license = { text = "MIT" }
+authors = [{ name = "grenzenloseSchublade", email = "hans.mueller@rub.de" }]
+dependencies = [
+    "numpy>=2.2.0",
+]
 
-[tool.poetry.dependencies]
-python = ">=3.10,<3.14"
-numpy = "^2.2.0"
-
-[tool.poetry.group.dev.dependencies]
-pytest = "*"
-pytest-cov = "*"
-flake8 = "*"
-black = "*"
-pre-commit = "*"
-pyinstaller = "^6.12.0"
-
-[tool.poetry.group.stats.dependencies]
-# Data handling
-numpy = "^2.2.3"
-pandas = "^2.2.3"
-# Calculations
-scipy = "^1.10.0"
-scikit-learn = "^1.2.0"
-statsmodels = "^0.13.5"
-# Visualisation
-plotly = "^5.0.0"
-#chart_studio
-dash = "^2.18.2"
-dash_bootstrap_components = "^1.7.1"
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "flake8",
+    "black",
+    "pre-commit",
+    "pyinstaller>=6.12.0",
+]
+stats = [
+    "pandas>=2.2.3",
+    "scipy>=1.10.0",
+    "scikit-learn>=1.2.0",
+    "statsmodels>=0.13.5",
+    "plotly>=5.0.0",
+    "dash>=2.18.2",
+    "dash_bootstrap_components>=1.7.1",
+]
 
 [build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling>=1.24.0"]
+build-backend = "hatchling.build"
 
-[scripts]
-wotiti = "wotiti.__main__:main"
+[tool.hatch.build.targets.wheel]
+packages = ["src/wotiti"]

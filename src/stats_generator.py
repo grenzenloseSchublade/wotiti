@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import random
 
-from db_helper import create_connection, create_main_table, create_user_table, check_user, log_start, log_stop
+from db_helper import create_connection, create_main_table, check_user, log_start, log_stop
 import json
 from utils import save_to_csv, PATH_TO_DATA
 
@@ -118,7 +118,7 @@ def generate_sample_data(storage_type, start_date, end_date, path_to_save=PATH_T
             
             # Erstelle User in der Datenbank
             check_user(conn, user_name)
-            create_user_table(conn, user_name)
+            # Events-Tabelle wird in log_start/log_stop sichergestellt
 
             for day_offset in range(date_range):
                 date = start_date_obj + timedelta(days=day_offset)
@@ -157,8 +157,6 @@ def generate_sample_data(storage_type, start_date, end_date, path_to_save=PATH_T
                         
                         # Zeitfenster definieren
                         min_start_time = base_start_time - timedelta(minutes=30)
-                        max_start_time = base_start_time + timedelta(minutes=30)
-                        min_stop_time = base_stop_time - timedelta(minutes=30)
                         max_stop_time = base_stop_time + timedelta(minutes=30)
                         
                         # Start-Zeit bestimmen
@@ -245,7 +243,7 @@ def generate_sample_data(storage_type, start_date, end_date, path_to_save=PATH_T
         
     except sqlite3.Error as e:
         print(f"Datenbankfehler: {e}")
-    except Exception as e:
+    except (OSError, ValueError, TypeError) as e:
         print(f"Fehler bei der Datengenerierung: {e}")
 
 if __name__ == "__main__":

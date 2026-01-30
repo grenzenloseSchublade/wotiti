@@ -38,7 +38,7 @@ wotiti/
 ├── tests/                   # Testdateien
 │   ├── test_app.py         # GUI-Tests
 │   └── test_db_helper.py   # Datenbank-Tests
-├── pyproject.toml          # Poetry-Konfiguration
+├── pyproject.toml          # uv/pyproject-Konfiguration
 └── README.md              # Dokumentation
 ```
 
@@ -48,11 +48,14 @@ wotiti/
 # Repository klonen
 git clone https://github.com/yourusername/wotiti.git
 
-# Poetry installieren
-pip install poetry
+# uv installieren
+pip install uv
 
-# Abhängigkeiten installieren
-poetry install
+# Abhängigkeiten installieren (Basis)
+uv sync
+
+# Optional: Stats/Dev-Abhängigkeiten
+uv sync --extra stats --extra dev
 ```
 
 ## 📊 Verwendung
@@ -60,16 +63,16 @@ poetry install
 ### Timer-Anwendung
 ```bash
 # GUI starten
-poetry run python src/main.py
+uv run python src/main.py
 ```
 
 ### Analyse-Dashboard
 ```bash
 # Dashboard öffnen
-poetry run python src/stats_dashboard.py
+uv run python src/stats_dashboard.py
 
 # Testdaten generieren (optional)
-poetry run python src/stats_generator.py
+uv run python src/stats_generator.py
 ```
 
 ## 🔧 Funktionen im Detail
@@ -110,9 +113,9 @@ poetry run python src/stats_generator.py
 
 ## 🛠️ Build-Optionen
 
-### Poetry Build (empfohlen)
+### uv Build (empfohlen)
 ```bash
-poetry run pyinstaller --onefile --windowed src/main.py
+uv run pyinstaller --onefile --windowed src/main.py
 ```
 
 ### Debian 11 Build (GLIBC 2.31)

@@ -1,6 +1,8 @@
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 from dash import dcc, html, State, Input, Output, Dash, MATCH
+import os
+import sqlite3
 #from dash_extensions.enrich import Dash, Output, Input
 import pandas as pd
 from stats_calculations import (
@@ -31,6 +33,7 @@ from stats_plotting import (
     plot_anova_results
 )
 from utils import read_database, browse_directory, find_database_and_parameters, read_parameters
+from db_helper import migrate_legacy_user_tables
 from utils import MODERN_COLORS, SYNTHWAVE_COLORS
 
 # Gemeinsame Stil-Definitionen
@@ -57,6 +60,51 @@ DROPDOWN_STYLE = {
 app = Dash(__name__, 
            external_stylesheets=[dbc.themes.DARKLY],
            suppress_callback_exceptions=True)
+
+_DATA_CACHE = {
+    "db_path": None,
+    "db_mtime": None,
+    "data": None,
+    "stats": {}
+}
+
+def get_cached_data(db_path, force=False):
+    """Loads and caches DB data for reuse across callbacks."""
+    if not db_path:
+        return pd.DataFrame()
+
+    try:
+        db_mtime = os.path.getmtime(db_path)
+    except OSError:
+        return pd.DataFrame()
+
+    if force or _DATA_CACHE["db_path"] != db_path or _DATA_CACHE["db_mtime"] != db_mtime:
+        _DATA_CACHE["db_path"] = db_path
+        _DATA_CACHE["db_mtime"] = db_mtime
+        data = read_database(db_path)
+        if data.empty:
+            try:
+                with sqlite3.connect(db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='events';")
+                    has_events = cursor.fetchone() is not None
+                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%_events';")
+                    has_legacy = cursor.fetchone() is not None
+                    if not has_events and has_legacy:
+                        migrate_legacy_user_tables(conn)
+                        data = read_database(db_path)
+            except sqlite3.Error:
+                pass
+        _DATA_CACHE["data"] = data
+        _DATA_CACHE["stats"] = {}
+
+    return _DATA_CACHE["data"] if _DATA_CACHE["data"] is not None else pd.DataFrame()
+
+def get_cached_stat(key, compute_fn):
+    """Caches expensive computations derived from DB data."""
+    if key not in _DATA_CACHE["stats"]:
+        _DATA_CACHE["stats"][key] = compute_fn()
+    return _DATA_CACHE["stats"][key]
 
 def create_card(header_text, content, md_value=6):
     """Hilfsfunktion zum Erstellen einer einheitlichen Card mit Toggle-Funktion."""
@@ -376,24 +424,24 @@ def update_paths(n_clicks):
             db_path, param_path = find_database_and_parameters(directory)
             if db_path and param_path:
                 progress_values = update_progress(15, "Dateien gefunden")
-                data = read_database(db_path)
+                data = get_cached_data(db_path, force=True)
                 progress_values = update_progress(30, "Datenbank geladen")
                 
                 # Zeitintensive Berechnungen mit Progress-Updates
                 progress_values = update_progress(40, "Berechne Projektstatistiken...")
-                calculate_project_time_stats(data)
+                get_cached_stat("project_time_stats", lambda: calculate_project_time_stats(data))
                 
                 progress_values = update_progress(50, "Analysiere Zeitmuster...")
-                analyze_daily_patterns(data)
+                get_cached_stat("daily_patterns", lambda: analyze_daily_patterns(data))
                 
                 progress_values = update_progress(60, "Führe Clusteranalyse durch...")
-                perform_cluster_analysis(data)
+                get_cached_stat("cluster_analysis", lambda: perform_cluster_analysis(data))
                 
                 progress_values = update_progress(70, "Führe Regressionsanalyse durch...")
-                perform_regression_analysis(data)
+                get_cached_stat("regression_analysis", lambda: perform_regression_analysis(data))
                 
                 progress_values = update_progress(80, "Führe ANOVA-Analyse durch...")
-                perform_anova_analysis(data)
+                get_cached_stat("anova_analysis", lambda: perform_anova_analysis(data))
                 
                 progress_values = update_progress(90, "Bereite Benutzeroptionen vor...")
                 users = [user for user in data['user'].unique() if user != 'users']
@@ -544,8 +592,8 @@ def toggle_collapse(n, is_open):
 def update_left_pie_chart(selected_user, db_path):
     """Updates the left pie chart based on the selected user."""
     if db_path and selected_user:
-        data = read_database(db_path)
-        hours = calculate_hours_per_project(data)
+        data = get_cached_data(db_path)
+        hours = get_cached_stat("hours_per_project", lambda: calculate_hours_per_project(data))
         left_pie_chart = plot_hours_per_project(hours, selected_user)
         return left_pie_chart
     else:
@@ -559,8 +607,8 @@ def update_left_pie_chart(selected_user, db_path):
 def update_right_pie_chart(selected_user, db_path):
     """Updates the right pie chart based on the selected user."""
     if db_path and selected_user:
-        data = read_database(db_path)
-        hours = calculate_hours_per_project(data)
+        data = get_cached_data(db_path)
+        hours = get_cached_stat("hours_per_project", lambda: calculate_hours_per_project(data))
         right_pie_chart = plot_hours_per_project(hours, selected_user)
         return right_pie_chart
     else:
@@ -574,8 +622,8 @@ def update_right_pie_chart(selected_user, db_path):
 def update_total_hours_chart(_, db_path):
     """Updates the total hours chart."""
     if db_path:
-        data = read_database(db_path)
-        total_hours, date_range = calculate_total_hours_per_user(data)
+        data = get_cached_data(db_path)
+        total_hours, date_range = get_cached_stat("total_hours_per_user", lambda: calculate_total_hours_per_user(data))
         total_hours_chart = plot_total_hours_per_user(total_hours, date_range)
         return total_hours_chart
     else:
@@ -589,8 +637,8 @@ def update_total_hours_chart(_, db_path):
 def update_average_hours_per_user_chart(_, db_path):
     """Updates the average hours per user chart."""
     if db_path:
-        data = read_database(db_path)
-        average_hours = calculate_average_hours_per_user(data)
+        data = get_cached_data(db_path)
+        average_hours = get_cached_stat("average_hours_per_user", lambda: calculate_average_hours_per_user(data))
         if average_hours is None or average_hours.empty:
             return go.Figure(layout=go.Layout(title=f'No data available for Average Hours per User',
                           xaxis_title='User',
@@ -624,8 +672,10 @@ def update_average_hours_per_period_chart(db_path, n_clicks, period_days):
                                   xaxis_title='User', yaxis_title='Average Hours',
                                   plot_bgcolor=MODERN_COLORS['background'], paper_bgcolor=MODERN_COLORS['background'], font_color=MODERN_COLORS['text']))
         if db_path:
-            data = read_database(db_path)
-            fig = plot_average_hours_per_period(calculate_average_hours_per_period(data, period_days), period_days)
+            data = get_cached_data(db_path)
+            key = f"average_hours_per_period_{period_days}"
+            avg_period = get_cached_stat(key, lambda: calculate_average_hours_per_period(data, period_days))
+            fig = plot_average_hours_per_period(avg_period, period_days)
             return fig
         else:
             return go.Figure(layout=go.Layout(plot_bgcolor=MODERN_COLORS['background'], paper_bgcolor=MODERN_COLORS['background']))
@@ -662,18 +712,18 @@ def update_advanced_stats(db_path):
         return empty_fig, empty_fig, empty_fig, empty_options
     
     try:
-        data = read_database(db_path)
+        data = get_cached_data(db_path)
         
         # Projekt-Zeitstatistiken
-        stats = calculate_project_time_stats(data)
+        stats = get_cached_stat("project_time_stats", lambda: calculate_project_time_stats(data))
         stats_fig = plot_project_time_stats(stats)
         
         # Tägliche Projektstunden
-        daily_hours = calculate_daily_project_hours(data)
+        daily_hours = get_cached_stat("daily_project_hours", lambda: calculate_daily_project_hours(data))
         daily_fig = plot_daily_project_hours(daily_hours)
         
         # Projektwechsel
-        switches = calculate_project_switches(data)
+        switches = get_cached_stat("project_switches", lambda: calculate_project_switches(data))
         switches_fig = plot_project_switches(switches)
         
         # User-Optionen für Dropdown
@@ -696,7 +746,7 @@ def update_daily_patterns(db_path, selected_users):
     """Aktualisiert die Visualisierung der tageszeitlichen Muster."""
     if db_path and selected_users:
         try:
-            data = read_database(db_path)
+            data = get_cached_data(db_path)
             if selected_users:
                 data = data[data['user'].isin(selected_users)]
             
@@ -723,8 +773,8 @@ def update_time_series_analysis(db_path):
         return empty_fig, empty_fig, empty_fig
     
     try:
-        data = read_database(db_path)
-        daily_df, weekly_avg, weekday_avg = analyze_time_series(data)
+        data = get_cached_data(db_path)
+        daily_df, weekly_avg, weekday_avg = get_cached_stat("time_series", lambda: analyze_time_series(data))
         daily_fig, weekly_fig, weekday_fig = plot_time_series_analysis(
             daily_df, weekly_avg, weekday_avg
         )
@@ -747,8 +797,10 @@ def update_cluster_analysis(db_path):
         return empty_fig, empty_fig
     
     try:
-        data = read_database(db_path)
-        features_df, cluster_profiles = perform_cluster_analysis(data)
+        data = get_cached_data(db_path)
+        features_df, cluster_profiles = get_cached_stat("cluster_analysis", lambda: perform_cluster_analysis(data))
+        if features_df is None or features_df.empty:
+            return empty_fig, empty_fig
         overview_fig, profile_fig = plot_cluster_analysis(features_df, cluster_profiles)
         return overview_fig, profile_fig
         
@@ -769,8 +821,10 @@ def update_regression_analysis(db_path):
         return empty_fig, empty_fig
     
     try:
-        data = read_database(db_path)
-        regression_results = perform_regression_analysis(data)
+        data = get_cached_data(db_path)
+        regression_results = get_cached_stat("regression_analysis", lambda: perform_regression_analysis(data))
+        if not regression_results:
+            return empty_fig, empty_fig
         importance_fig, accuracy_fig = plot_regression_analysis(regression_results)
         return importance_fig, accuracy_fig
         
@@ -791,8 +845,10 @@ def update_anova_analysis(db_path):
         return empty_fig, empty_fig
     
     try:
-        data = read_database(db_path)
-        anova_results = perform_anova_analysis(data)
+        data = get_cached_data(db_path)
+        anova_results = get_cached_stat("anova_analysis", lambda: perform_anova_analysis(data))
+        if not anova_results:
+            return empty_fig, empty_fig
         user_fig, project_fig = plot_anova_results(anova_results)
         return user_fig, project_fig
         
@@ -801,4 +857,5 @@ def update_anova_analysis(db_path):
         return empty_fig, empty_fig
 
 if __name__ == '__main__':
-    app.run_server(debug=True, port=8051)
+    debug_mode = os.getenv("DASH_DEBUG", "1") == "1"
+    app.run_server(debug=debug_mode, use_reloader=False, port=8052)

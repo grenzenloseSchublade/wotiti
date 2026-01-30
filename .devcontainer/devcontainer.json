@@ -1,11 +1,10 @@
 {
   "name": "WorkTimeTimer",
-  "image": "mcr.microsoft.com/devcontainers/python:3.10-bullseye", // Debian 11 (GLIBC 2.31)
+  "image": "mcr.microsoft.com/devcontainers/python:3.12-bookworm", // Debian 11 (GLIBC 2.31)
   "features": {
     "ghcr.io/devcontainers/features/common-utils:2": {
       "username": "vscode"
     },
-    "ghcr.io/devcontainers-extra/features/poetry:2": {},
     "ghcr.io/devcontainers/features/github-cli:1": {},
     "./local-features/devtools": {}
   },
@@ -32,6 +31,5 @@
       ]
     }
   },
-  "updateContentCommand": "pip install --no-cache-dir -r .devcontainer/requirements.txt"
+  "updateContentCommand": "python -m uv sync --extra stats --extra dev"
 }
-

@@ -1,45 +1,48 @@
+#!/bin/bash
 set -e
+
 if [ "$(id -u)" -ne 0 ]; then
     echo -e 'Script must be run as root. Use sudo, su, or add "USER root" to your Dockerfile before running this script.'
     exit 1
 fi
 
-# Eine Liste von Paketen, die nachfolgend installiert werden
-# !!! HIER ERWEITERN !!! ... vim nano curl wget
+echo "========================================="
+echo "Installing devtools..."
+echo "========================================="
+
+# WICHTIG: Yarn-Repo entfernen BEVOR apt-get update
+echo "Removing broken Yarn repository..."
+rm -f /etc/apt/sources.list.d/yarn.list
+
+# Jetzt apt-get update
+echo "Updating package lists..."
+apt-get update
+
 packages="portaudio19-dev
           libsndfile1
-		      tk
+          tk
           liblapack-dev
           libblas-dev
           libatlas-base-dev 
-          gfortran
-          "
+          gfortran"
 
-# Install and update packages
-pip install --upgrade pip 
-apt-get update
+echo "Installing packages..."
 for package in $packages; do
-  apt-get install -y $package
+    echo "Installing $package..."
+    apt-get install -y $package
 done
 
-apt-get update
+echo "Upgrading packages..."
 apt-get upgrade -y
 
-### Set Settings
-#mkdir /workspaces
-#chmod -R 777 /workspaces # - vergibt Berechtigung
-#chown -R vscode:vscode /workspaces # USER:GRUPPE - definiert Besitzer  
+echo "Upgrading pip and installing uv..."
+python -m pip install --upgrade pip
+python -m pip install --no-cache-dir uv
 
-# Authenticate to X-Server - show GUI from container on $DISPLAY
-# Uncomment to authenticate explicit user vscode
-echo "Start X-Server auhtorization..."
-echo -n "xauth add `xauth list :${DISPLAY#*:}`" #| sudo su - vscode
-echo "Successful auhtorization."
-#sudo su - vscode
-#echo -n "xauth remove :${DISPLAY#*:}" #| sudo su - vscode
+echo "Setting up vscode user password..."
+passwd -d vscode 2>/dev/null || true
+echo "vscode:qwertz." | chpasswd
 
-
-# Lösche und setze Passwort für die SSH Verbidnung
-passwd -d vscode
-echo "vscode:qwertz." | sudo chpasswd
-
+echo "========================================="
+echo "devtools installation completed!"
+echo "========================================="
