@@ -1,16 +1,19 @@
 from tkinter import Button, Text, Scrollbar, VERTICAL, END, Frame, Entry, Label, Listbox, W, E, N, S
 import sys
-import os
+import threading
+import webbrowser
 import time
+import socket
 from datetime import datetime
 from db_helper import create_connection, create_main_table, check_user, log_start, log_stop, calculate_duration, migrate_legacy_user_tables
 from utils import DATABASE_PATH
-import subprocess
 
 class App:
-    def __init__(self, master):
+    def __init__(self, master, stats_port=None):
         print("Initializing the application GUI...")
         self.master = master
+        self._ui_thread = threading.current_thread()
+        self._stats_port = stats_port
         master.title("WoTITI - Work Time Timer")
         master.configure(bg='#C0C0C0')  # Windows 98 background color
 
@@ -152,6 +155,9 @@ class App:
         sys.stdout = self
         sys.stderr = self
 
+        # Reflect dashboard status on the button
+        self.update_stats_button_state()
+
         # Database connection
         try:
             self.db_conn = create_connection(DATABASE_PATH)
@@ -252,19 +258,46 @@ class App:
         self.console.delete(1.0, END)
         self.console.configure(state='disabled')
 
+    def _fallback_write(self, message, error=False):
+        """Writes to real stdout/stderr when GUI is unavailable."""
+        stream = sys.__stderr__ if error else sys.__stdout__
+        stream.write(message + "\n")
+        stream.flush()
+
     def write(self, message, error=False):
         """Writes a message to the console with a timestamp."""
+        if threading.current_thread() is not self._ui_thread:
+            try:
+                if self.master.winfo_exists():
+                    self.master.after(0, lambda: self.write(message, error))
+                else:
+                    self._fallback_write(message, error=error)
+            except Exception:
+                self._fallback_write(message, error=error)
+            return
+
+        try:
+            if not self.console.winfo_exists():
+                self._fallback_write(message, error=error)
+                return
+        except Exception:
+            self._fallback_write(message, error=error)
+            return
+
         timestamp = time.strftime("%d-%m-%Y %H:%M:%S")
         if message.strip():
             message = f"[{timestamp}] {message}"
-        self.console.configure(state='normal')
-        if error:
-            self.console.insert(END, message, 'error')
-            self.console.tag_config('error', font='red')
-        else:
-            self.console.insert(END, message)
-        self.console.configure(state='disabled')
-        self.console.see(END)
+        try:
+            self.console.configure(state='normal')
+            if error:
+                self.console.insert(END, message, 'error')
+                self.console.tag_config('error', foreground='red')
+            else:
+                self.console.insert(END, message)
+            self.console.configure(state='disabled')
+            self.console.see(END)
+        except Exception:
+            self._fallback_write(message, error=error)
 
     def update_db_content(self):
         """Update the database content listbox with the latest data."""
@@ -322,15 +355,34 @@ class App:
         else:
             self.write("Invalid project or name. Please try again.", error=True)
 
-    # TODO in der standalone executable ist python nicht bekannt.
     def open_stats_dashboard(self):
         """Opens the statistics dashboard."""
+        if not self._stats_port or not self._is_dashboard_running():
+            self.write("Stats dashboard is not running yet.", error=True)
+            return
+
         try:
-            print("Opening statistics dashboard...")
-            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            # Build the path to the stats_dashboard.py script
-            stats_script_path = os.path.join(project_root, "src", "stats_dashboard.py")
-            # Use subprocess.Popen to run the script in a new process
-            subprocess.Popen(["python", stats_script_path], cwd=project_root)
+            url = f"http://127.0.0.1:{self._stats_port}/"
+            print(f"Opening statistics dashboard at {url}")
+            webbrowser.open(url)
         except Exception as e:
             self.write(f"Failed to open statistics dashboard: {e}", error=True)
+
+    def _is_dashboard_running(self):
+        if not self._stats_port:
+            return False
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(0.2)
+                return sock.connect_ex(("127.0.0.1", self._stats_port)) == 0
+        except Exception:
+            return False
+
+    def update_stats_button_state(self):
+        """Update stats button color based on dashboard status."""
+        is_running = self._is_dashboard_running()
+        if is_running:
+            self.stats_button.config(bg="#D4D0C8", fg="black")
+        else:
+            self.stats_button.config(bg="#B00020", fg="white")
+        self.master.after(2000, self.update_stats_button_state)

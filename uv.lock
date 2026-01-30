@@ -422,7 +422,7 @@ name = "macholib"
 version = "1.16.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "altgraph" },
+    { name = "altgraph", marker = "(python_full_version < '3.11' and sys_platform == 'emscripten') or (python_full_version < '3.11' and sys_platform == 'win32') or (sys_platform != 'emscripten' and sys_platform != 'win32')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/10/2f/97589876ea967487978071c9042518d28b958d87b17dceb7cdc1d881f963/macholib-1.16.4.tar.gz", hash = "sha256:f408c93ab2e995cd2c46e34fe328b130404be143469e41bc366c807448979362", size = 59427, upload-time = "2025-11-22T08:28:38.373Z" }
 wheels = [
@@ -1445,8 +1445,8 @@ name = "wotiti"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "numpy", version = "2.4.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "pandas", version = "3.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
 
 [package.optional-dependencies]
@@ -1461,8 +1461,6 @@ dev = [
 stats = [
     { name = "dash" },
     { name = "dash-bootstrap-components" },
-    { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "pandas", version = "3.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "plotly" },
     { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scikit-learn", version = "1.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -1477,8 +1475,7 @@ requires-dist = [
     { name = "dash", marker = "extra == 'stats'", specifier = ">=2.18.2" },
     { name = "dash-bootstrap-components", marker = "extra == 'stats'", specifier = ">=1.7.1" },
     { name = "flake8", marker = "extra == 'dev'" },
-    { name = "numpy", specifier = ">=2.2.0" },
-    { name = "pandas", marker = "extra == 'stats'", specifier = ">=2.2.3" },
+    { name = "pandas", specifier = ">=2.2.3" },
     { name = "plotly", marker = "extra == 'stats'", specifier = ">=5.0.0" },
     { name = "pre-commit", marker = "extra == 'dev'" },
     { name = "pyinstaller", marker = "extra == 'dev'", specifier = ">=6.12.0" },

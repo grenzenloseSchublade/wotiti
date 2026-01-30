@@ -4,14 +4,24 @@ from app import App
 import subprocess
 import os
 import threading
+import sys
+import socket
 
 
-def run_tkinter_app():
+def _find_available_port(start_port):
+    for port in range(start_port, start_port + 20):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.2)
+            if sock.connect_ex(("127.0.0.1", port)) != 0:
+                return port
+    return start_port
+
+def run_tkinter_app(stats_port=None):
     """Runs the Tkinter GUI application."""
     try:
         print("Starting the Tkinter application...")
         root = tk.Tk()
-        app = App(root)
+        app = App(root, stats_port=stats_port)
         print("Tkinter application started successfully.")
         root.mainloop()
     except Exception as e:
@@ -21,11 +31,13 @@ def run_tkinter_app():
 def main():
     """Main function to start both the Tkinter app and the statistics dashboard."""
     stats_process = None  # To store the statistics dashboard process
+    root = None
+    stats_port = _find_available_port(8052)
 
     try:
         # Start the Tkinter app in the main thread
         root = tk.Tk()
-        app = App(root)
+        app = App(root, stats_port=stats_port)
 
         # Start the statistics dashboard in a separate process
         def run_stats():
@@ -33,9 +45,12 @@ def main():
             try:
                 print("Starting the statistics dashboard...")
                 project_root = os.path.dirname(os.path.abspath(__file__))
+                env = os.environ.copy()
+                env["DASH_PORT"] = str(stats_port)
                 stats_process = subprocess.Popen(
-                    ["python", os.path.join(project_root, "stats_dashboard.py")], 
-                    cwd=project_root
+                    [sys.executable, os.path.join(project_root, "stats_dashboard.py")],
+                    cwd=project_root,
+                    env=env
                 )
                 print("Statistics dashboard started successfully.")
                 stats_process.wait()  # Wait for the dashboard to complete

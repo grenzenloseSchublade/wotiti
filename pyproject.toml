@@ -7,7 +7,7 @@ requires-python = ">=3.10,<3.14"
 license = { text = "MIT" }
 authors = [{ name = "grenzenloseSchublade", email = "hans.mueller@rub.de" }]
 dependencies = [
-    "numpy>=2.2.0",
+    "pandas>=2.2.3",
 ]
 
 [project.optional-dependencies]
@@ -20,7 +20,6 @@ dev = [
     "pyinstaller>=6.12.0",
 ]
 stats = [
-    "pandas>=2.2.3",
     "scipy>=1.10.0",
     "scikit-learn>=1.2.0",
     "statsmodels>=0.13.5",

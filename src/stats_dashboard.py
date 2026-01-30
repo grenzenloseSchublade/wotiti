@@ -2,6 +2,7 @@ import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 from dash import dcc, html, State, Input, Output, Dash, MATCH
 import os
+import socket
 import sqlite3
 #from dash_extensions.enrich import Dash, Output, Input
 import pandas as pd
@@ -856,6 +857,18 @@ def update_anova_analysis(db_path):
         print(f"Fehler bei der ANOVA-Analyse: {e}")
         return empty_fig, empty_fig
 
+def _find_available_port(start_port):
+    for port in range(start_port, start_port + 20):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.2)
+            if sock.connect_ex(("127.0.0.1", port)) != 0:
+                return port
+    return start_port
+
 if __name__ == '__main__':
-    debug_mode = os.getenv("DASH_DEBUG", "1") == "1"
-    app.run_server(debug=debug_mode, use_reloader=False, port=8052)
+    debug_mode = os.getenv("DASH_DEBUG", "0") == "1"
+    base_port = int(os.getenv("DASH_PORT", "8052"))
+    port = _find_available_port(base_port)
+    if port != base_port:
+        print(f"Port {base_port} in use, starting on {port} instead.")
+    app.run(debug=debug_mode, use_reloader=False, port=port)
