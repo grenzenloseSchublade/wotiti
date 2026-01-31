@@ -164,6 +164,12 @@ app.layout = dbc.Container([
                         },
                         children="Verzeichnis auswählen"
                     ),
+                    dbc.Badge(
+                        "Datenquelle: -",
+                        id="data-source-badge",
+                        color="secondary",
+                        className="mt-2",
+                    ),
                 ], md=8), 
             ], align="center"),
             dcc.Store(id='db-path', data=None),
@@ -173,260 +179,235 @@ app.layout = dbc.Container([
         ], md=12),
     ]),
 
-    # Grundlegende Statistiken
-    html.H2("Grundlegende Statistiken", 
-            style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginTop': '30px'}),
-    html.P("Vergleich der Arbeitszeiten zwischen Benutzern und Projekten",
-           style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginBottom': '20px'}),
-    
-    dbc.Row([
-        create_card("Hours per Project (Left)", [
-            dcc.Dropdown(
-                id='left-user-dropdown',
-                placeholder="Select a user",
-                style=DROPDOWN_STYLE,
-                className='dropdown-custom'
-            ),
-            dcc.Graph(id='left-pie-chart', style=GRAPH_STYLE)
-        ]),
-        create_card("Hours per Project (Right)", [
-            dcc.Dropdown(
-                id='right-user-dropdown',
-                placeholder="Select a user",
-                style=DROPDOWN_STYLE,
-                className='dropdown-custom'
-            ),
-            dcc.Graph(
-                id='right-pie-chart',
-                style=GRAPH_STYLE,
-                figure=go.Figure(layout=GRAPH_LAYOUT)
-            )
-        ])
-    ]),
-    
-    # Zeitanalyse
-    html.H2("Zeitanalyse", 
-            style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginTop': '30px'}),
-    html.P("Analyse der Arbeitszeiten über verschiedene Zeiträume",
-           style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginBottom': '20px'}),
-    
-    dbc.Row([
-        create_card(
-            "Total Hours per User",
-            [
-                html.P("Gesamtarbeitszeit pro Benutzer über den gesamten Zeitraum",
-                       style={'color': MODERN_COLORS['text']}),
-                dcc.Graph(id='total-hours-chart', style=GRAPH_STYLE)
-            ]
-        ),
-        create_card(
-            "Average Hours per User",
-            [
-                html.P("Durchschnittliche tägliche Arbeitszeit pro Benutzer",
-                       style={'color': MODERN_COLORS['text']}),
-                dcc.Graph(id='average-hours-per-user-chart', style=GRAPH_STYLE)
-            ]
-        )
-    ]),
-
-    # Projektanalyse
-    html.H2("Projektanalyse", 
-            style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginTop': '30px'}),
-    html.P("Detaillierte Analyse der Projektzeiten und Wechsel",
-           style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginBottom': '20px'}),
-    
-    dbc.Row([
-        create_card(
-            "Project Time Statistics",
-            [
-                html.P("Durchschnittliche, minimale und maximale Arbeitsdauer pro Projekt",
-                       style={'color': MODERN_COLORS['text']}),
-                dcc.Graph(id='project-stats-chart', style=GRAPH_STYLE)
-            ],
-            md_value=12
-        )
-    ]),
-    
-    dbc.Row([
-        create_card(
-            "Daily Project Hours",
-            [
-                html.P("Tägliche Arbeitszeit aufgeschlüsselt nach Projekten",
-                       style={'color': MODERN_COLORS['text']}),
-                dcc.Graph(id='daily-hours-chart', style=GRAPH_STYLE)
-            ]
-        ),
-        create_card(
-            "Project Switches",
-            [
-                html.P("Analyse der Projektwechsel und Pausen zwischen Projekten",
-                       style={'color': MODERN_COLORS['text']}),
-                dcc.Graph(id='project-switches-chart', style=GRAPH_STYLE)
-            ]
-        )
-    ]),
-
-    # Arbeitsmuster
-    html.H2("Arbeitsmuster", 
-            style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginTop': '30px'}),
-    html.P("Analyse der individuellen Arbeitszeitmuster",
-           style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginBottom': '20px'}),
-    
-    dbc.Row([
-        create_card(
-            "Daily Work Patterns",
-            [
-                html.P("Tageszeitliche Arbeitsmuster: Frühe Starter (vor 8 Uhr), Kernzeitarbeiter (9-17 Uhr), Spätarbeiter (nach 17 Uhr)",
-                       style={'color': MODERN_COLORS['text']}),
-                dbc.Row([
-                    dbc.Col([
-                        dcc.Dropdown(
-                            id='pattern-user-dropdown',
-                            placeholder="Select users to compare",
-                            multi=True,
-                            style=DROPDOWN_STYLE,
-                            className='dropdown-custom'
-                        ),
-                    ], width=6),
-                ], className="mb-3"),
-                dcc.Graph(
-                    id='daily-patterns-chart',
-                    style=GRAPH_STYLE,
-                    figure=go.Figure(layout=GRAPH_LAYOUT)
+    dbc.Tabs([
+        dbc.Tab([
+            html.H2("Grundlegende Statistiken",
+                    style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginTop': '30px'}),
+            html.P("Vergleich der Arbeitszeiten zwischen Benutzern und Projekten",
+                   style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginBottom': '20px'}),
+            dbc.Row([
+                create_card("Hours per Project (Left)", [
+                    dcc.Dropdown(
+                        id='left-user-dropdown',
+                        placeholder="Select a user",
+                        style=DROPDOWN_STYLE,
+                        className='dropdown-custom'
+                    ),
+                    dbc.Spinner(dcc.Graph(id='left-pie-chart', style=GRAPH_STYLE), size="sm")
+                ]),
+                create_card("Hours per Project (Right)", [
+                    dcc.Dropdown(
+                        id='right-user-dropdown',
+                        placeholder="Select a user",
+                        style=DROPDOWN_STYLE,
+                        className='dropdown-custom'
+                    ),
+                    dbc.Spinner(dcc.Graph(
+                        id='right-pie-chart',
+                        style=GRAPH_STYLE,
+                        figure=go.Figure(layout=GRAPH_LAYOUT)
+                    ), size="sm")
+                ])
+            ]),
+            html.H2("Zeitanalyse",
+                    style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginTop': '30px'}),
+            html.P("Analyse der Arbeitszeiten über verschiedene Zeiträume",
+                   style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginBottom': '20px'}),
+            dbc.Row([
+                create_card(
+                    "Total Hours per User",
+                    [
+                        html.P("Gesamtarbeitszeit pro Benutzer über den gesamten Zeitraum",
+                               style={'color': MODERN_COLORS['text']}),
+                        dbc.Spinner(dcc.Graph(id='total-hours-chart', style=GRAPH_STYLE), size="sm")
+                    ]
+                ),
+                create_card(
+                    "Average Hours per User",
+                    [
+                        html.P("Durchschnittliche tägliche Arbeitszeit pro Benutzer",
+                               style={'color': MODERN_COLORS['text']}),
+                        dbc.Spinner(dcc.Graph(id='average-hours-per-user-chart', style=GRAPH_STYLE), size="sm")
+                    ]
                 )
-            ],
-            md_value=12
-        )
-    ]),
-
-    # Zeitanalyse
-    html.H2("Zeitanalyse", 
-            style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginTop': '30px'}),
-    html.P("Analyse der Arbeitszeiten über verschiedene Zeiträume",
-           style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginBottom': '20px'}),
-    
-    dbc.Row([
-        create_card(
-            "Daily Working Hours Trend",
-            dcc.Graph(
-                id='daily-trend-chart',
-                style=GRAPH_STYLE,
-                figure=go.Figure(layout=GRAPH_LAYOUT)
-            ),
-            md_value=12
-        )
-    ]),
-
-    dbc.Row([
-        create_card(
-            "Weekly Average Hours",
-            dcc.Graph(
-                id='weekly-trend-chart',
-                style=GRAPH_STYLE,
-                figure=go.Figure(layout=GRAPH_LAYOUT)
-            )
-        ),
-        create_card(
-            "Weekday Patterns",
-            dcc.Graph(
-                id='weekday-pattern-chart',
-                style=GRAPH_STYLE,
-                figure=go.Figure(layout=GRAPH_LAYOUT)
-            )
-        )
-    ]),
-
-    # Advanced Analytics Section
-    html.H2("Advanced Analytics", 
-            style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginTop': '30px'}),
-    
-    # Cluster Analysis
-    dbc.Row([
-        create_card(
-            "User Clusters Overview",
-            dcc.Graph(
-                id='cluster-overview-chart',
-                style=GRAPH_STYLE,
-                figure=go.Figure(layout=GRAPH_LAYOUT)
-            )
-        ),
-        create_card(
-            "Cluster Profiles",
-            dcc.Graph(
-                id='cluster-profile-chart',
-                style=GRAPH_STYLE,
-                figure=go.Figure(layout=GRAPH_LAYOUT)
-            )
-        )
-    ]),
-    
-    # Regression Analysis
-    dbc.Row([
-        create_card(
-            "Duration Predictors",
-            dcc.Graph(
-                id='regression-importance-chart',
-                style=GRAPH_STYLE,
-                figure=go.Figure(layout=GRAPH_LAYOUT)
-            )
-        ),
-        create_card(
-            "Prediction Accuracy",
-            dcc.Graph(
-                id='regression-accuracy-chart',
-                style=GRAPH_STYLE,
-                figure=go.Figure(layout=GRAPH_LAYOUT)
-            )
-        )
-    ]),
-    
-    # ANOVA Analysis
-    dbc.Row([
-        create_card(
-            "User Differences",
-            dcc.Graph(
-                id='anova-user-chart',
-                style=GRAPH_STYLE,
-                figure=go.Figure(layout=GRAPH_LAYOUT)
-            )
-        ),
-        create_card(
-            "Project Differences",
-            dcc.Graph(
-                id='anova-project-chart',
-                style=GRAPH_STYLE,
-                figure=go.Figure(layout=GRAPH_LAYOUT)
-            )
-        )
-    ])
+            ]),
+        ], label="Grundlagen"),
+        dbc.Tab([
+            html.H2("Projektanalyse",
+                    style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginTop': '30px'}),
+            html.P("Detaillierte Analyse der Projektzeiten und Wechsel",
+                   style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginBottom': '20px'}),
+            dbc.Row([
+                create_card(
+                    "Project Time Statistics",
+                    [
+                        html.P("Durchschnittliche, minimale und maximale Arbeitsdauer pro Projekt",
+                               style={'color': MODERN_COLORS['text']}),
+                        dbc.Spinner(dcc.Graph(id='project-stats-chart', style=GRAPH_STYLE), size="sm")
+                    ],
+                    md_value=12
+                )
+            ]),
+            dbc.Row([
+                create_card(
+                    "Daily Project Hours",
+                    [
+                        html.P("Tägliche Arbeitszeit aufgeschlüsselt nach Projekten",
+                               style={'color': MODERN_COLORS['text']}),
+                        dbc.Spinner(dcc.Graph(id='daily-hours-chart', style=GRAPH_STYLE), size="sm")
+                    ]
+                ),
+                create_card(
+                    "Project Switches",
+                    [
+                        html.P("Analyse der Projektwechsel und Pausen zwischen Projekten",
+                               style={'color': MODERN_COLORS['text']}),
+                        dbc.Spinner(dcc.Graph(id='project-switches-chart', style=GRAPH_STYLE), size="sm")
+                    ]
+                )
+            ]),
+            html.H2("Arbeitsmuster",
+                    style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginTop': '30px'}),
+            html.P("Analyse der individuellen Arbeitszeitmuster",
+                   style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginBottom': '20px'}),
+            dbc.Row([
+                create_card(
+                    "Daily Work Patterns",
+                    [
+                        html.P("Tageszeitliche Arbeitsmuster: Frühe Starter (vor 8 Uhr), Kernzeitarbeiter (9-17 Uhr), Spätarbeiter (nach 17 Uhr)",
+                               style={'color': MODERN_COLORS['text']}),
+                        dbc.Row([
+                            dbc.Col([
+                                dcc.Dropdown(
+                                    id='pattern-user-dropdown',
+                                    placeholder="Select users to compare",
+                                    multi=True,
+                                    style=DROPDOWN_STYLE,
+                                    className='dropdown-custom'
+                                ),
+                            ], width=6),
+                        ], className="mb-3"),
+                        dbc.Spinner(dcc.Graph(
+                            id='daily-patterns-chart',
+                            style=GRAPH_STYLE,
+                            figure=go.Figure(layout=GRAPH_LAYOUT)
+                        ), size="sm")
+                    ],
+                    md_value=12
+                )
+            ]),
+        ], label="Projekte & Muster"),
+        dbc.Tab([
+            html.H2("Zeitanalyse",
+                    style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginTop': '30px'}),
+            html.P("Analyse der Arbeitszeiten über verschiedene Zeiträume",
+                   style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginBottom': '20px'}),
+            dbc.Row([
+                create_card(
+                    "Daily Working Hours Trend",
+                    dbc.Spinner(dcc.Graph(
+                        id='daily-trend-chart',
+                        style=GRAPH_STYLE,
+                        figure=go.Figure(layout=GRAPH_LAYOUT)
+                    ), size="sm"),
+                    md_value=12
+                )
+            ]),
+            dbc.Row([
+                create_card(
+                    "Weekly Average Hours",
+                    dbc.Spinner(dcc.Graph(
+                        id='weekly-trend-chart',
+                        style=GRAPH_STYLE,
+                        figure=go.Figure(layout=GRAPH_LAYOUT)
+                    ), size="sm")
+                ),
+                create_card(
+                    "Weekday Patterns",
+                    dbc.Spinner(dcc.Graph(
+                        id='weekday-pattern-chart',
+                        style=GRAPH_STYLE,
+                        figure=go.Figure(layout=GRAPH_LAYOUT)
+                    ), size="sm")
+                )
+            ]),
+        ], label="Zeitreihen"),
+        dbc.Tab([
+            html.H2("Advanced Analytics",
+                    style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginTop': '30px'}),
+            dbc.Row([
+                create_card(
+                    "User Clusters Overview",
+                    dbc.Spinner(dcc.Graph(
+                        id='cluster-overview-chart',
+                        style=GRAPH_STYLE,
+                        figure=go.Figure(layout=GRAPH_LAYOUT)
+                    ), size="sm")
+                ),
+                create_card(
+                    "Cluster Profiles",
+                    dbc.Spinner(dcc.Graph(
+                        id='cluster-profile-chart',
+                        style=GRAPH_STYLE,
+                        figure=go.Figure(layout=GRAPH_LAYOUT)
+                    ), size="sm")
+                )
+            ]),
+            dbc.Row([
+                create_card(
+                    "Duration Predictors",
+                    dbc.Spinner(dcc.Graph(
+                        id='regression-importance-chart',
+                        style=GRAPH_STYLE,
+                        figure=go.Figure(layout=GRAPH_LAYOUT)
+                    ), size="sm")
+                ),
+                create_card(
+                    "Prediction Accuracy",
+                    dbc.Spinner(dcc.Graph(
+                        id='regression-accuracy-chart',
+                        style=GRAPH_STYLE,
+                        figure=go.Figure(layout=GRAPH_LAYOUT)
+                    ), size="sm")
+                )
+            ]),
+            dbc.Row([
+                create_card(
+                    "User Differences",
+                    dbc.Spinner(dcc.Graph(
+                        id='anova-user-chart',
+                        style=GRAPH_STYLE,
+                        figure=go.Figure(layout=GRAPH_LAYOUT)
+                    ), size="sm")
+                ),
+                create_card(
+                    "Project Differences",
+                    dbc.Spinner(dcc.Graph(
+                        id='anova-project-chart',
+                        style=GRAPH_STYLE,
+                        figure=go.Figure(layout=GRAPH_LAYOUT)
+                    ), size="sm")
+                )
+            ]),
+        ], label="Erweitert"),
+    ], className="mt-4")
 ], fluid=True, style={'backgroundColor': MODERN_COLORS['background'], 'color': MODERN_COLORS['text'], 'padding': '20px'})
 
 def _load_dashboard_data(db_path, param_path, label, params_required=True):
     def update_progress(value, text, animated=True, striped=True):
         return [value, animated, striped, f"{text} ({value}%)"]
 
+    data_source = f"Datenquelle: {label}"
     if not db_path or (params_required and not param_path):
         progress_values = update_progress(100, "Fehler: Dateien nicht gefunden", animated=False, striped=False)
-        return None, None, *progress_values, [], None, [], None
+        return None, None, data_source, *progress_values, [], None, [], None
 
     progress_values = update_progress(15, f"Dateien gefunden: {label}")
     data = get_cached_data(db_path, force=True)
+    if data.is_empty():
+        progress_values = update_progress(100, f"Keine Daten in {label}", animated=False, striped=False)
+        return db_path, param_path, data_source, *progress_values, [], None, [], None
     progress_values = update_progress(30, "Datenbank geladen")
-
-    progress_values = update_progress(40, "Berechne Projektstatistiken...")
-    get_cached_stat("project_time_stats", lambda: calculate_project_time_stats(data))
-
-    progress_values = update_progress(50, "Analysiere Zeitmuster...")
-    get_cached_stat("daily_patterns", lambda: analyze_daily_patterns(data))
-
-    progress_values = update_progress(60, "Führe Clusteranalyse durch...")
-    get_cached_stat("cluster_analysis", lambda: perform_cluster_analysis(data))
-
-    progress_values = update_progress(70, "Führe Regressionsanalyse durch...")
-    get_cached_stat("regression_analysis", lambda: perform_regression_analysis(data))
-
-    progress_values = update_progress(80, "Führe ANOVA-Analyse durch...")
-    get_cached_stat("anova_analysis", lambda: perform_anova_analysis(data))
 
     progress_values = update_progress(90, "Bereite Benutzeroptionen vor...")
     users = [user for user in data.select(pl.col("user").unique()).to_series().to_list() if user != "users"] if not data.is_empty() else []
@@ -435,11 +416,12 @@ def _load_dashboard_data(db_path, param_path, label, params_required=True):
     options = [{'label': user, 'value': user} for user in users]
 
     progress_values = update_progress(100, f"Fertig: {label}", animated=False, striped=True)
-    return db_path, param_path, *progress_values, options, left_user, options, right_user
+    return db_path, param_path, data_source, *progress_values, options, left_user, options, right_user
 
 @app.callback(
     [Output('db-path', 'data'), 
      Output('param-path', 'data'), 
+     Output('data-source-badge', 'children'),
      Output('progress', 'value'),
      Output('progress', 'animated'), 
      Output('progress', 'striped'), 
@@ -456,19 +438,26 @@ def update_paths(browse_clicks, example_clicks, autoload_intervals):
     """Updates database and parameter paths based on selected source."""
     ctx = dash.callback_context
     if not ctx.triggered:
-        return None, None, 0, False, False, "Verzeichnis auswählen", [], None, [], None
+        return None, None, "Datenquelle: -", 0, False, False, "Verzeichnis auswählen", [], None, [], None
 
     trigger_id = ctx.triggered[0]["prop_id"].split(".")[0]
 
     if trigger_id == "appdb-autoload":
         db_path = get_app_database_path(PATH_TO_DATA)
         label = "app_database.db"
+        if db_path:
+            preview = read_database(db_path)
+            if preview.is_empty():
+                example_db, example_param = find_latest_example_dataset(PATH_TO_DATA)
+                if example_db and example_param:
+                    label = f"Beispieldaten: {os.path.dirname(example_db)}"
+                    return _load_dashboard_data(example_db, example_param, label, params_required=True)
         return _load_dashboard_data(db_path, None, label, params_required=False)
 
     if trigger_id == "browse-button":
         directory = browse_directory()
         if not directory:
-            return None, None, 0, False, False, "Kein Verzeichnis ausgewählt", [], None, [], None
+            return None, None, "Datenquelle: -", 0, False, False, "Kein Verzeichnis ausgewählt", [], None, [], None
         db_path = get_app_database_path(directory)
         label = f"app_database.db ({directory})"
         return _load_dashboard_data(db_path, None, label, params_required=False)
@@ -476,12 +465,12 @@ def update_paths(browse_clicks, example_clicks, autoload_intervals):
     if trigger_id == "example-button":
         directory = browse_directory()
         if not directory:
-            return None, None, 0, False, False, "Kein Verzeichnis ausgewählt", [], None, [], None
+            return None, None, "Datenquelle: -", 0, False, False, "Kein Verzeichnis ausgewählt", [], None, [], None
         db_path, param_path = find_latest_example_dataset(directory)
         label = os.path.dirname(db_path) if db_path else "Beispieldaten"
         return _load_dashboard_data(db_path, param_path, label, params_required=True)
 
-    return None, None, 0, False, False, "Verzeichnis auswählen", [], None, [], None
+    return None, None, "Datenquelle: -", 0, False, False, "Verzeichnis auswählen", [], None, [], None
 
 @app.callback(
     Output('parameters-table', 'children'),
