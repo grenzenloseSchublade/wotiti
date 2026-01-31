@@ -264,6 +264,14 @@ class App:
         stream.write(message + "\n")
         stream.flush()
 
+    def flush(self):
+        """Support file-like API for redirected stdout/stderr."""
+        try:
+            sys.__stdout__.flush()
+            sys.__stderr__.flush()
+        except Exception:
+            pass
+
     def write(self, message, error=False):
         """Writes a message to the console with a timestamp."""
         if threading.current_thread() is not self._ui_thread:

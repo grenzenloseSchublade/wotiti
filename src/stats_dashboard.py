@@ -1,3 +1,4 @@
+import dash
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 from dash import dcc, html, State, Input, Output, Dash, MATCH
@@ -5,7 +6,7 @@ import os
 import socket
 import sqlite3
 #from dash_extensions.enrich import Dash, Output, Input
-import pandas as pd
+import polars as pl
 from stats_calculations import (
     calculate_hours_per_project, 
     calculate_total_hours_per_user, 
@@ -33,7 +34,7 @@ from stats_plotting import (
     plot_regression_analysis,
     plot_anova_results
 )
-from utils import read_database, browse_directory, find_database_and_parameters, read_parameters
+from utils import read_database, browse_directory, read_parameters, get_app_database_path, find_latest_example_dataset, PATH_TO_DATA
 from db_helper import migrate_legacy_user_tables
 from utils import MODERN_COLORS, SYNTHWAVE_COLORS
 
@@ -72,18 +73,18 @@ _DATA_CACHE = {
 def get_cached_data(db_path, force=False):
     """Loads and caches DB data for reuse across callbacks."""
     if not db_path:
-        return pd.DataFrame()
+        return pl.DataFrame()
 
     try:
         db_mtime = os.path.getmtime(db_path)
     except OSError:
-        return pd.DataFrame()
+        return pl.DataFrame()
 
     if force or _DATA_CACHE["db_path"] != db_path or _DATA_CACHE["db_mtime"] != db_mtime:
         _DATA_CACHE["db_path"] = db_path
         _DATA_CACHE["db_mtime"] = db_mtime
         data = read_database(db_path)
-        if data.empty:
+        if data.is_empty():
             try:
                 with sqlite3.connect(db_path) as conn:
                     cursor = conn.cursor()
@@ -99,7 +100,7 @@ def get_cached_data(db_path, force=False):
         _DATA_CACHE["data"] = data
         _DATA_CACHE["stats"] = {}
 
-    return _DATA_CACHE["data"] if _DATA_CACHE["data"] is not None else pd.DataFrame()
+    return _DATA_CACHE["data"] if _DATA_CACHE["data"] is not None else pl.DataFrame()
 
 def get_cached_stat(key, compute_fn):
     """Caches expensive computations derived from DB data."""
@@ -141,6 +142,7 @@ app.layout = dbc.Container([
             dbc.Row([
                 dbc.Col([
                     dbc.Button('Select Directory', id='browse-button', n_clicks=0, color="primary", className="mb-3"),
+                    dbc.Button('Load Example Data', id='example-button', n_clicks=0, color="secondary", className="mb-3", style={'marginLeft': '10px'}),
                 ], width="auto"),
                 dbc.Col([
                     dbc.Progress(
@@ -166,6 +168,7 @@ app.layout = dbc.Container([
             ], align="center"),
             dcc.Store(id='db-path', data=None),
             dcc.Store(id='param-path', data=None),
+            dcc.Interval(id='appdb-autoload', interval=1000, n_intervals=0, max_intervals=1),
             html.Div(id='parameters-table')
         ], md=12),
     ]),
@@ -398,6 +401,42 @@ app.layout = dbc.Container([
     ])
 ], fluid=True, style={'backgroundColor': MODERN_COLORS['background'], 'color': MODERN_COLORS['text'], 'padding': '20px'})
 
+def _load_dashboard_data(db_path, param_path, label, params_required=True):
+    def update_progress(value, text, animated=True, striped=True):
+        return [value, animated, striped, f"{text} ({value}%)"]
+
+    if not db_path or (params_required and not param_path):
+        progress_values = update_progress(100, "Fehler: Dateien nicht gefunden", animated=False, striped=False)
+        return None, None, *progress_values, [], None, [], None
+
+    progress_values = update_progress(15, f"Dateien gefunden: {label}")
+    data = get_cached_data(db_path, force=True)
+    progress_values = update_progress(30, "Datenbank geladen")
+
+    progress_values = update_progress(40, "Berechne Projektstatistiken...")
+    get_cached_stat("project_time_stats", lambda: calculate_project_time_stats(data))
+
+    progress_values = update_progress(50, "Analysiere Zeitmuster...")
+    get_cached_stat("daily_patterns", lambda: analyze_daily_patterns(data))
+
+    progress_values = update_progress(60, "Führe Clusteranalyse durch...")
+    get_cached_stat("cluster_analysis", lambda: perform_cluster_analysis(data))
+
+    progress_values = update_progress(70, "Führe Regressionsanalyse durch...")
+    get_cached_stat("regression_analysis", lambda: perform_regression_analysis(data))
+
+    progress_values = update_progress(80, "Führe ANOVA-Analyse durch...")
+    get_cached_stat("anova_analysis", lambda: perform_anova_analysis(data))
+
+    progress_values = update_progress(90, "Bereite Benutzeroptionen vor...")
+    users = [user for user in data.select(pl.col("user").unique()).to_series().to_list() if user != "users"] if not data.is_empty() else []
+    left_user = 'user_1' if 'user_1' in users else users[0] if len(users) > 0 else None
+    right_user = 'user_2' if 'user_2' in users else users[1] if len(users) > 1 else None
+    options = [{'label': user, 'value': user} for user in users]
+
+    progress_values = update_progress(100, f"Fertig: {label}", animated=False, striped=True)
+    return db_path, param_path, *progress_values, options, left_user, options, right_user
+
 @app.callback(
     [Output('db-path', 'data'), 
      Output('param-path', 'data'), 
@@ -409,54 +448,39 @@ app.layout = dbc.Container([
      Output('left-user-dropdown', 'value'),
      Output('right-user-dropdown', 'options'), 
      Output('right-user-dropdown', 'value')],
-    [Input('browse-button', 'n_clicks')]
+    [Input('browse-button', 'n_clicks'),
+     Input('example-button', 'n_clicks'),
+     Input('appdb-autoload', 'n_intervals')]
 )
-def update_paths(n_clicks):
-    """Updates database and parameter paths based on selected directory."""
-    if n_clicks > 0:
-        directory = browse_directory()
-        if directory:
-            def update_progress(value, label, animated=True, striped=True):
-                """Helper function to update progress bar."""
-                return [value, animated, striped, f"{label} ({value}%)"]
+def update_paths(browse_clicks, example_clicks, autoload_intervals):
+    """Updates database and parameter paths based on selected source."""
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return None, None, 0, False, False, "Verzeichnis auswählen", [], None, [], None
 
-            progress_values = update_progress(5, "Initialisiere...")
-            
-            db_path, param_path = find_database_and_parameters(directory)
-            if db_path and param_path:
-                progress_values = update_progress(15, "Dateien gefunden")
-                data = get_cached_data(db_path, force=True)
-                progress_values = update_progress(30, "Datenbank geladen")
-                
-                # Zeitintensive Berechnungen mit Progress-Updates
-                progress_values = update_progress(40, "Berechne Projektstatistiken...")
-                get_cached_stat("project_time_stats", lambda: calculate_project_time_stats(data))
-                
-                progress_values = update_progress(50, "Analysiere Zeitmuster...")
-                get_cached_stat("daily_patterns", lambda: analyze_daily_patterns(data))
-                
-                progress_values = update_progress(60, "Führe Clusteranalyse durch...")
-                get_cached_stat("cluster_analysis", lambda: perform_cluster_analysis(data))
-                
-                progress_values = update_progress(70, "Führe Regressionsanalyse durch...")
-                get_cached_stat("regression_analysis", lambda: perform_regression_analysis(data))
-                
-                progress_values = update_progress(80, "Führe ANOVA-Analyse durch...")
-                get_cached_stat("anova_analysis", lambda: perform_anova_analysis(data))
-                
-                progress_values = update_progress(90, "Bereite Benutzeroptionen vor...")
-                users = [user for user in data['user'].unique() if user != 'users']
-                left_user = 'user_1' if 'user_1' in users else users[0] if len(users) > 0 else None
-                right_user = 'user_2' if 'user_2' in users else users[1] if len(users) > 1 else None
-                options = [{'label': user, 'value': user} for user in users]
-                
-                progress_values = update_progress(100, "Fertig", animated=False, striped=True)
-                return db_path, param_path, *progress_values, options, left_user, options, right_user
-            else:
-                progress_values = update_progress(100, "Fehler: Dateien nicht gefunden", animated=False, striped=False)
-                return None, None, *progress_values, [], None, [], None
-        else:
+    trigger_id = ctx.triggered[0]["prop_id"].split(".")[0]
+
+    if trigger_id == "appdb-autoload":
+        db_path = get_app_database_path(PATH_TO_DATA)
+        label = "app_database.db"
+        return _load_dashboard_data(db_path, None, label, params_required=False)
+
+    if trigger_id == "browse-button":
+        directory = browse_directory()
+        if not directory:
             return None, None, 0, False, False, "Kein Verzeichnis ausgewählt", [], None, [], None
+        db_path = get_app_database_path(directory)
+        label = f"app_database.db ({directory})"
+        return _load_dashboard_data(db_path, None, label, params_required=False)
+
+    if trigger_id == "example-button":
+        directory = browse_directory()
+        if not directory:
+            return None, None, 0, False, False, "Kein Verzeichnis ausgewählt", [], None, [], None
+        db_path, param_path = find_latest_example_dataset(directory)
+        label = os.path.dirname(db_path) if db_path else "Beispieldaten"
+        return _load_dashboard_data(db_path, param_path, label, params_required=True)
+
     return None, None, 0, False, False, "Verzeichnis auswählen", [], None, [], None
 
 @app.callback(
@@ -640,21 +664,7 @@ def update_average_hours_per_user_chart(_, db_path):
     if db_path:
         data = get_cached_data(db_path)
         average_hours = get_cached_stat("average_hours_per_user", lambda: calculate_average_hours_per_user(data))
-        if average_hours is None or average_hours.empty:
-            return go.Figure(layout=go.Layout(title=f'No data available for Average Hours per User',
-                          xaxis_title='User',
-                          yaxis_title='Average Hours',
-                          plot_bgcolor=MODERN_COLORS['background'], paper_bgcolor=MODERN_COLORS['background'], font_color=MODERN_COLORS['text']))
-        
-        # Convert 'average_hours' column to numeric, handling potential errors
-        average_hours.loc[:, 'average_hours'] = pd.to_numeric(average_hours['average_hours'], errors='coerce').dropna()
-
-        fig =  go.Figure(data=[go.Bar(x=average_hours['user'], y=average_hours['average_hours'], marker_color=SYNTHWAVE_COLORS['pink'])],
-                    layout=go.Layout(title=f'Average Hours per User per Day',
-                                     xaxis_title='User', yaxis_title='Average Hours',
-                                     title_font=dict(size=18, color=MODERN_COLORS['text'], family='Arial, sans-serif'),
-                                     plot_bgcolor=MODERN_COLORS['background'], paper_bgcolor=MODERN_COLORS['background'], font_color=MODERN_COLORS['text']))
-        return fig
+        return plot_average_hours_per_user(average_hours)
     else:
         return go.Figure(layout=go.Layout(plot_bgcolor=MODERN_COLORS['background'], paper_bgcolor=MODERN_COLORS['background']))
 
@@ -728,9 +738,9 @@ def update_advanced_stats(db_path):
         switches_fig = plot_project_switches(switches)
         
         # User-Optionen für Dropdown
-        users = [{'label': user, 'value': user} 
-                for user in data['user'].unique() 
-                if user != 'users']
+        users = [{'label': user, 'value': user}
+                 for user in data.select(pl.col("user").unique()).to_series().to_list()
+                 if user != 'users']
         
         return stats_fig, daily_fig, switches_fig, users
         
@@ -749,7 +759,7 @@ def update_daily_patterns(db_path, selected_users):
         try:
             data = get_cached_data(db_path)
             if selected_users:
-                data = data[data['user'].isin(selected_users)]
+                data = data.filter(pl.col("user").is_in(selected_users))
             
             patterns = analyze_daily_patterns(data)
             return plot_daily_patterns(patterns)
@@ -800,7 +810,7 @@ def update_cluster_analysis(db_path):
     try:
         data = get_cached_data(db_path)
         features_df, cluster_profiles = get_cached_stat("cluster_analysis", lambda: perform_cluster_analysis(data))
-        if features_df is None or features_df.empty:
+        if features_df is None or features_df.is_empty():
             return empty_fig, empty_fig
         overview_fig, profile_fig = plot_cluster_analysis(features_df, cluster_profiles)
         return overview_fig, profile_fig

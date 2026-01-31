@@ -7,7 +7,7 @@ requires-python = ">=3.10,<3.14"
 license = { text = "MIT" }
 authors = [{ name = "grenzenloseSchublade", email = "hans.mueller@rub.de" }]
 dependencies = [
-    "pandas>=2.2.3",
+    "polars",
 ]
 
 [project.optional-dependencies]

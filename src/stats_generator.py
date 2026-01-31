@@ -1,6 +1,6 @@
 import sqlite3
 import os
-import pandas as pd
+import polars as pl
 from datetime import datetime, timedelta
 import random
 
@@ -230,7 +230,7 @@ def generate_sample_data(storage_type, start_date, end_date, path_to_save=PATH_T
 
         # Speichere alle Daten am Ende
         if storage_type in ["csv", "both"]:
-            df = pd.DataFrame(all_data)
+            df = pl.DataFrame(all_data)
             save_to_csv(df, csv_path)
             print(f"\nDaten in CSV gespeichert: {csv_path}")
         

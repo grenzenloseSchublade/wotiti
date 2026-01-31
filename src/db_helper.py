@@ -4,7 +4,7 @@ import re
 import sqlite3
 from sqlite3 import Error
 from utils import DATABASE_PATH, PATH_TO_DATA
-import pandas as pd
+import polars as pl
 
 # Konstanten für Datumsformate
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -268,15 +268,17 @@ def read_database(db_path=PATH_TO_DATA):
             cursor = conn.cursor()
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='events';")
             if cursor.fetchone() is None:
-                return pd.DataFrame()
+                return pl.DataFrame()
 
             query = """
                 SELECT u.name AS user, e.project, e.event_type, e.timestamp, e.date
                 FROM events e
                 JOIN users u ON u.id = e.user_id
             """
-            df = pd.read_sql_query(query, conn)
-            return df
+            cursor.execute(query)
+            rows = cursor.fetchall()
+            columns = [desc[0] for desc in cursor.description]
+            return pl.DataFrame(rows, schema=columns)
     except sqlite3.Error as e:
         print(f"Error reading database: {e}")
-        return pd.DataFrame()
+        return pl.DataFrame()

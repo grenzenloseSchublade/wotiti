@@ -2,8 +2,9 @@ import sqlite3
 import json
 import os
 import glob
+from datetime import datetime
 from tkinter import Tk, filedialog
-import pandas as pd
+import polars as pl
 
 # Color schemes
 MODERN_COLORS = {
@@ -16,17 +17,22 @@ SYNTHWAVE_COLORS = {
 }
 
 # Pfade
-PATH_TO_DATA = "data" 
-PATH_TO_DASHBOARD_DATA = "data"
-DATABASE_PATH = "data/app_database.db" 
-GENERATE_DATABASE_PATH = "data/generate_database.db"
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+PATH_TO_DATA = os.path.join(BASE_DIR, "data")
+PATH_TO_DASHBOARD_DATA = PATH_TO_DATA
+DATABASE_PATH = os.path.join(PATH_TO_DATA, "app_database.db")
+GENERATE_DATABASE_PATH = os.path.join(PATH_TO_DATA, "generate_database.db")
 
 
 
 def save_to_csv(data, csv_path):
     """Save the DataFrame to a CSV file."""
     try:
-        data.to_csv(csv_path, index=False)
+        if isinstance(data, pl.DataFrame):
+            data.write_csv(csv_path)
+        else:
+            print("Error saving data to CSV: data is not a Polars DataFrame.")
+            return
         print(f"Data saved to {csv_path} successfully.")
     except (OSError, ValueError, TypeError) as e:
         print(f"Error saving data to CSV: {e}")
@@ -36,7 +42,8 @@ def convert_timestamp_format(timestamp_str):
     """
     Konvertiert verschiedene Timestamp-Formate in datetime-Objekte.
     """
-    # Versuche verschiedene Formate
+    if timestamp_str is None:
+        return None
     for date_format in [
         '%Y-%m-%d %H:%M:%S',  # Standardformat
         '%d-%m-%Y %H:%M:%S',  # Altes Format
@@ -44,16 +51,14 @@ def convert_timestamp_format(timestamp_str):
         '%d/%m/%Y %H:%M:%S'   # Alternative Schreibweise
     ]:
         try:
-            return pd.to_datetime(timestamp_str, format=date_format)
+            return datetime.strptime(timestamp_str, date_format)
         except (ValueError, TypeError):
             continue
-
-    # Wenn kein Format passt, versuche es mit automatischer Erkennung
     try:
-        return pd.to_datetime(timestamp_str, dayfirst=True)
+        return datetime.fromisoformat(timestamp_str)
     except (ValueError, TypeError) as e:
         print(f"Fehler bei der Konvertierung von {timestamp_str}: {e}")
-        return pd.NaT
+        return None
 
 def read_database(db_path):
     """Liest die Datenbank (events-Schema) und konvertiert Timestamps in datetime-Objekte."""
@@ -62,33 +67,43 @@ def read_database(db_path):
             cursor = conn.cursor()
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='events';")
             if cursor.fetchone() is None:
-                return pd.DataFrame()
+                return pl.DataFrame()
 
             query = """
                 SELECT u.name AS user, e.project, e.event_type, e.timestamp, e.date
                 FROM events e
                 JOIN users u ON u.id = e.user_id
             """
-            combined_data = pd.read_sql_query(query, conn)
-            if combined_data.empty:
+            cursor.execute(query)
+            rows = cursor.fetchall()
+            columns = [desc[0] for desc in cursor.description]
+            combined_data = pl.DataFrame(rows, schema=columns, orient="row")
+            if combined_data.is_empty():
                 return combined_data
 
             # Vektorisierte Timestamp-Konvertierung
-            combined_data['timestamp'] = pd.to_datetime(
-                combined_data['timestamp'],
-                errors='coerce',
-                infer_datetime_format=True,
-                dayfirst=True
-            )
+            formats = [
+                '%Y-%m-%d %H:%M:%S',
+                '%d-%m-%Y %H:%M:%S',
+                '%Y/%m/%d %H:%M:%S',
+                '%d/%m/%Y %H:%M:%S',
+            ]
+            parsed_ts = pl.coalesce([
+                pl.col("timestamp").cast(pl.Utf8).str.strptime(pl.Datetime, fmt, strict=False)
+                for fmt in formats
+            ])
+            combined_data = combined_data.with_columns(parsed_ts.alias("timestamp"))
 
             # Füge das Datum als separate Spalte hinzu (YYYY-MM-DD Format)
-            combined_data['date'] = combined_data['timestamp'].dt.strftime('%Y-%m-%d')
+            combined_data = combined_data.with_columns(
+                pl.col("timestamp").dt.strftime('%Y-%m-%d').alias("date")
+            )
 
             return combined_data
 
     except sqlite3.Error as e:
         print(f"Fehler beim Lesen der Datenbank: {e}")
-        return pd.DataFrame()
+        return pl.DataFrame()
 
 def read_parameters(file_path):
     """Reads parameters from a JSON file."""
@@ -107,12 +122,33 @@ def browse_directory():
     root.destroy()
     return directory
 
-def find_database_and_parameters(directory=PATH_TO_DATA, update_progress=None):
-    """Finds the database and parameters files in the given directory."""
+def get_app_database_path(directory=PATH_TO_DATA):
+    """Returns the app_database.db path if it exists in the directory."""
+    db_path = os.path.join(directory, "app_database.db")
+    return db_path if os.path.isfile(db_path) else None
+
+def find_latest_example_dataset(directory=PATH_TO_DATA, update_progress=None):
+    """Finds the newest example dataset (generate_database.db + parameter_run_*.json) recursively."""
     if update_progress:
-        update_progress(20, "Searching for database and parameter files...")
-    db_path = glob.glob(os.path.join(directory, "generate_database.db"))
-    param_path = glob.glob(os.path.join(directory, "parameter_run_*.json"))
-    db_path = db_path[0] if db_path else None
-    param_path = param_path[0] if param_path else None
-    return db_path, param_path
+        update_progress(20, "Searching for example datasets...")
+
+    db_candidates = glob.glob(os.path.join(directory, "**", "generate_database.db"), recursive=True)
+    if not db_candidates:
+        return None, None
+
+    newest = None
+    newest_mtime = -1
+    newest_param = None
+
+    for db_path in db_candidates:
+        db_dir = os.path.dirname(db_path)
+        param_candidates = glob.glob(os.path.join(db_dir, "parameter_run_*.json"))
+        if not param_candidates:
+            continue
+        db_mtime = os.path.getmtime(db_path)
+        if db_mtime > newest_mtime:
+            newest = db_path
+            newest_mtime = db_mtime
+            newest_param = max(param_candidates, key=os.path.getmtime)
+
+    return newest, newest_param

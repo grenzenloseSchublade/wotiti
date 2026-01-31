@@ -10,7 +10,7 @@ Die Funktionen erwarten Zeitstempel im Format 'dd-mm-yyyy HH:MM:SS' und
 arbeiten mit pandas DataFrames für effiziente Datenverarbeitung.
 """
 
-import pandas as pd
+import polars as pl
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LinearRegression
@@ -22,94 +22,93 @@ from datetime import datetime, timedelta
 TIMESTAMP_FORMAT = "%d-%m-%Y %H:%M:%S"
 DATE_FORMAT = "%d-%m-%Y"
 
+def _unique_list(data, column):
+    return data.select(pl.col(column).unique()).to_series().to_list()
+
+def _paired_durations_hours(group):
+    starts = group.filter(pl.col("event_type") == "start").select("timestamp").to_series().to_list()
+    stops = group.filter(pl.col("event_type") == "stop").select("timestamp").to_series().to_list()
+    min_length = min(len(starts), len(stops))
+    if min_length == 0:
+        return []
+    return [
+        (stops[i] - starts[i]).total_seconds() / 3600
+        for i in range(min_length)
+    ]
+
 def calculate_hours_per_project(data):
     """Calculates total hours per project for each user."""
-    # Timestamps sind bereits datetime-Objekte
-    data = data.sort_values(by=['user', 'project', 'timestamp'])
+    if data.is_empty():
+        return pl.DataFrame()
+    data = data.sort(["user", "project", "timestamp"])
     hours = []
-    for (user, project), group in data.groupby(['user', 'project']):
-        start_times = group[group['event_type'] == 'start']['timestamp']
-        stop_times = group[group['event_type'] == 'stop']['timestamp']
-        min_length = min(len(start_times), len(stop_times))
-        total_hours = (stop_times.iloc[:min_length].values - start_times.iloc[:min_length].values).sum().astype('timedelta64[h]').astype(int)
-        hours.append({'user': user, 'project': project, 'total_hours': total_hours})
-    return pd.DataFrame(hours)
+    for (user, project), group in data.partition_by(["user", "project"], as_dict=True).items():
+        durations = _paired_durations_hours(group)
+        total_hours = sum(durations) if durations else 0
+        hours.append({"user": user, "project": project, "total_hours": total_hours})
+    return pl.DataFrame(hours)
 
 def calculate_total_hours_per_user(data):
     """Calculates total hours per user."""
-    # Keine Kopie mehr nötig, da wir die Daten nicht modifizieren
-    data = data.sort_values(by=['user', 'timestamp'])
-    
-    # Formatiere Datumsbereich nur für die Ausgabe
-    start_date = data['timestamp'].min().strftime("%Y-%m-%d %H:%M:%S")
-    end_date = data['timestamp'].max().strftime("%Y-%m-%d %H:%M:%S")
-    date_range = f"{start_date} - {end_date}"
-    
+    if data.is_empty():
+        return pl.DataFrame(), ""
+    data = data.sort(["user", "timestamp"])
+    min_ts = data.select(pl.col("timestamp").min()).to_series()[0]
+    max_ts = data.select(pl.col("timestamp").max()).to_series()[0]
+    date_range = ""
+    if min_ts and max_ts:
+        date_range = f"{min_ts.strftime('%Y-%m-%d %H:%M:%S')} - {max_ts.strftime('%Y-%m-%d %H:%M:%S')}"
+
     total_hours = []
-    for user, group in data.groupby('user'):
-        if user == 'users':
+    for user in _unique_list(data, "user"):
+        if user == "users":
             continue
-        
-        # Timestamps sind bereits datetime-Objekte
-        start_times = group[group['event_type'] == 'start']['timestamp'].reset_index(drop=True)
-        stop_times = group[group['event_type'] == 'stop']['timestamp'].reset_index(drop=True)
-        
-        min_length = min(len(start_times), len(stop_times))
-        total_hours_user = sum((stop_times.iloc[i] - start_times.iloc[i]).total_seconds() / 3600 
-                              for i in range(min_length))
-        total_hours.append({'user': user, 'total_hours': total_hours_user})
-    
-    return pd.DataFrame(total_hours), date_range
+        group = data.filter(pl.col("user") == user)
+        durations = _paired_durations_hours(group)
+        total_hours_user = sum(durations) if durations else 0
+        total_hours.append({"user": user, "total_hours": total_hours_user})
+
+    return pl.DataFrame(total_hours), date_range
 
 def calculate_average_hours_per_user(data):
     """Calculates average hours per user."""
-    data = data.copy()
-    # Timestamps sind bereits datetime-Objekte, müssen nicht konvertiert werden
-    data = data.sort_values(by=['user', 'timestamp'])
+    if data.is_empty():
+        return pl.DataFrame()
+    data = data.sort(["user", "timestamp"])
     average_hours = []
-    
-    for user, group in data.groupby('user'):
-        if user == 'users':
-            continue
-        
-        # Extrahiere Start- und Endzeiten
-        start_times = pd.to_datetime(group[group['event_type'] == 'start']['timestamp']).reset_index(drop=True)
-        stop_times = pd.to_datetime(group[group['event_type'] == 'stop']['timestamp']).reset_index(drop=True)
-        min_length = min(len(start_times), len(stop_times))
-        if min_length == 0:
-            average_hours.append({'user': user, 'average_hours': 0})
-            continue
 
-        total_hours_user = sum((stop_times.iloc[i] - start_times.iloc[i]).total_seconds() / 3600
-                              for i in range(min_length))
-        num_days = max(1, len(group['date'].unique()))
+    for user in _unique_list(data, "user"):
+        if user == "users":
+            continue
+        group = data.filter(pl.col("user") == user)
+        durations = _paired_durations_hours(group)
+        if not durations:
+            average_hours.append({"user": user, "average_hours": 0})
+            continue
+        total_hours_user = sum(durations)
+        num_days = max(1, group.select(pl.col("date").unique()).height)
         average_hours_user = total_hours_user / num_days
-        average_hours.append({'user': user, 'average_hours': average_hours_user})
-    
-    return pd.DataFrame(average_hours)
+        average_hours.append({"user": user, "average_hours": average_hours_user})
+
+    return pl.DataFrame(average_hours)
 
 def calculate_average_hours_per_period(data, period_days):
     """Calculates average hours per user for a given period in days."""
-    # Timestamps sind bereits datetime-Objekte
-    data = data.sort_values(by=['user', 'timestamp'])
+    if data.is_empty():
+        return pl.DataFrame()
+    data = data.sort(["user", "timestamp"])
     average_hours = []
-    for user, group in data.groupby('user'):
-        if user == 'users':
+    for user in _unique_list(data, "user"):
+        if user == "users":
             continue
-        start_times = group[group['event_type'] == 'start']['timestamp'].reset_index(drop=True)
-        stop_times = group[group['event_type'] == 'stop']['timestamp'].reset_index(drop=True)
-        min_length = min(len(start_times), len(stop_times))
-        total_hours = sum((stop_times.iloc[i] - start_times.iloc[i]).total_seconds() / 3600 for i in range(min_length))
-        
-        # Calculate the number of days the user has data for
-        num_days = len(group['date'].unique())
-        
-        # Ensure that the number of periods is at least 1
+        group = data.filter(pl.col("user") == user)
+        durations = _paired_durations_hours(group)
+        total_hours = sum(durations) if durations else 0
+        num_days = group.select(pl.col("date").unique()).height
         num_periods = max(1, num_days / period_days)
-        
         average_hours_user = total_hours / num_periods
-        average_hours.append({'user': user, 'average_hours': average_hours_user, 'period_days': period_days})
-    return pd.DataFrame(average_hours)
+        average_hours.append({"user": user, "average_hours": average_hours_user, "period_days": period_days})
+    return pl.DataFrame(average_hours)
 
 def calculate_project_time_stats(data):
     """
@@ -126,33 +125,26 @@ def calculate_project_time_stats(data):
     Returns:
         pd.DataFrame: Statistiken mit Spalten [user, project, avg_hours, min_hours, max_hours, std_hours]
     """
-    data = data.copy()
-    if not isinstance(data['timestamp'], pd.DatetimeIndex):
-        data['timestamp'] = pd.to_datetime(data['timestamp'], format=TIMESTAMP_FORMAT)
-    
-    # Timestamps sind bereits datetime-Objekte
-    data = data.sort_values(by=['user', 'project', 'timestamp'])
-    stats = []
-    
-    for (user, project), group in data.groupby(['user', 'project']):
-        start_times = group[group['event_type'] == 'start']['timestamp']
-        stop_times = group[group['event_type'] == 'stop']['timestamp']
-        
-        min_length = min(len(start_times), len(stop_times))
-        if min_length > 0:
-            durations = [(stop - start).total_seconds() / 3600 
-                        for start, stop in zip(start_times.iloc[:min_length], stop_times.iloc[:min_length])]
-            
-            stats.append({
-                'user': user,
-                'project': project,
-                'avg_hours': sum(durations) / len(durations),
-                'min_hours': min(durations),
-                'max_hours': max(durations),
-                'std_hours': pd.Series(durations).std()
+    if data.is_empty():
+        return pl.DataFrame()
+
+    data = data.sort(["user", "project", "timestamp"])
+    stats_rows = []
+
+    for (user, project), group in data.partition_by(["user", "project"], as_dict=True).items():
+        durations = _paired_durations_hours(group)
+        if durations:
+            std_hours = float(np.std(durations, ddof=1)) if len(durations) > 1 else 0.0
+            stats_rows.append({
+                "user": user,
+                "project": project,
+                "avg_hours": sum(durations) / len(durations),
+                "min_hours": min(durations),
+                "max_hours": max(durations),
+                "std_hours": std_hours,
             })
-    
-    return pd.DataFrame(stats)
+
+    return pl.DataFrame(stats_rows)
 
 def calculate_daily_project_hours(data):
     """
@@ -169,27 +161,22 @@ def calculate_daily_project_hours(data):
     Returns:
         pd.DataFrame: Tägliche Stunden mit Spalten [user, date, project, hours]
     """
-    # Timestamps sind bereits datetime-Objekte
-    data = data.sort_values(by=['user', 'date', 'project', 'timestamp'])
+    if data.is_empty():
+        return pl.DataFrame()
+    data = data.sort(["user", "date", "project", "timestamp"])
     daily_hours = []
-    
-    for (user, date, project), group in data.groupby(['user', 'date', 'project']):
-        start_times = group[group['event_type'] == 'start']['timestamp']
-        stop_times = group[group['event_type'] == 'stop']['timestamp']
-        
-        min_length = min(len(start_times), len(stop_times))
-        if min_length > 0:
-            total_hours = sum((stop - start).total_seconds() / 3600 
-                            for start, stop in zip(start_times.iloc[:min_length], stop_times.iloc[:min_length]))
-            
+
+    for (user, date, project), group in data.partition_by(["user", "date", "project"], as_dict=True).items():
+        durations = _paired_durations_hours(group)
+        if durations:
             daily_hours.append({
-                'user': user,
-                'date': date,
-                'project': project,
-                'hours': total_hours
+                "user": user,
+                "date": date,
+                "project": project,
+                "hours": sum(durations),
             })
-    
-    return pd.DataFrame(daily_hours)
+
+    return pl.DataFrame(daily_hours)
 
 def calculate_project_switches(data):
     """
@@ -210,32 +197,33 @@ def calculate_project_switches(data):
     Returns:
         pd.DataFrame: Wechselstatistiken mit [user, date, from_project, to_project, pause_minutes]
     """
-    # Timestamps sind bereits datetime-Objekte
-    data = data.sort_values(by=['user', 'date', 'timestamp'])
+    if data.is_empty():
+        return pl.DataFrame()
+    data = data.sort(["user", "date", "timestamp"])
     switches = []
-    
-    for (user, date), group in data.groupby(['user', 'date']):
-        events = group.sort_values('timestamp')
+
+    for (user, date), group in data.partition_by(["user", "date"], as_dict=True).items():
+        events = group.sort("timestamp")
         current_project = None
         last_stop = None
-        
-        for _, row in events.iterrows():
-            if row['event_type'] == 'start':
-                if current_project and current_project != row['project'] and last_stop is not None:
-                    pause_minutes = (row['timestamp'] - last_stop).total_seconds() / 60
+
+        for row in events.iter_rows(named=True):
+            if row["event_type"] == "start":
+                if current_project and current_project != row["project"] and last_stop is not None:
+                    pause_minutes = (row["timestamp"] - last_stop).total_seconds() / 60
                     switches.append({
-                        'user': user,
-                        'date': date,
-                        'from_project': current_project,
-                        'to_project': row['project'],
-                        'pause_minutes': pause_minutes,
-                        'switch_time': row['timestamp'].strftime('%H:%M')
+                        "user": user,
+                        "date": date,
+                        "from_project": current_project,
+                        "to_project": row["project"],
+                        "pause_minutes": pause_minutes,
+                        "switch_time": row["timestamp"].strftime("%H:%M"),
                     })
-                current_project = row['project']
-            else:  # stop event
-                last_stop = row['timestamp']
-    
-    return pd.DataFrame(switches)
+                current_project = row["project"]
+            else:
+                last_stop = row["timestamp"]
+
+    return pl.DataFrame(switches)
 
 def analyze_daily_patterns(data):
     """
@@ -257,85 +245,114 @@ def analyze_daily_patterns(data):
     Returns:
         pd.DataFrame: Tagesmuster mit [user, project, avg_start_hour, most_common_start_hour]
     """
-    # Timestamps sind bereits datetime-Objekte
-    data = data.copy()
-    data['hour'] = data['timestamp'].dt.hour
+    if data.is_empty():
+        return pl.DataFrame()
+    formats = [
+        '%Y-%m-%d %H:%M:%S',
+        '%d-%m-%Y %H:%M:%S',
+        '%Y/%m/%d %H:%M:%S',
+        '%d/%m/%Y %H:%M:%S',
+    ]
+    data = data.with_columns(
+        pl.coalesce([
+            pl.col("timestamp").cast(pl.Utf8).str.strptime(pl.Datetime, fmt, strict=False)
+            for fmt in formats
+        ]).alias("timestamp")
+    )
+    data = data.filter(pl.col("timestamp").is_not_null())
+    data = data.with_columns(pl.col("timestamp").dt.hour().alias("hour"))
     patterns = []
-    
-    for (user, project), group in data.groupby(['user', 'project']):
-        starts = group[group['event_type'] == 'start']
-        if starts.empty:
+
+    for (user, project), group in data.partition_by(["user", "project"], as_dict=True).items():
+        starts = group.filter(pl.col("event_type") == "start")
+        if starts.is_empty():
             patterns.append({
-                'user': user,
-                'project': project,
-                'avg_start_hour': None,
-                'most_common_start_hour': None,
-                'earliest_start': None,
-                'latest_start': None
+                "user": user,
+                "project": project,
+                "avg_start_hour": None,
+                "most_common_start_hour": None,
+                "earliest_start": None,
+                "latest_start": None,
             })
             continue
-        
-        most_common = starts['hour'].mode()
+
+        hours = [h for h in starts.select("hour").to_series().to_list() if h is not None]
+        most_common = max(set(hours), key=hours.count) if hours else None
         patterns.append({
-            'user': user,
-            'project': project,
-            'avg_start_hour': starts['hour'].mean(),
-            'most_common_start_hour': most_common.iloc[0] if not most_common.empty else None,
-            'earliest_start': starts['hour'].min(),
-            'latest_start': starts['hour'].max()
+            "user": user,
+            "project": project,
+            "avg_start_hour": float(np.mean(hours)) if hours else None,
+            "most_common_start_hour": most_common,
+            "earliest_start": min(hours) if hours else None,
+            "latest_start": max(hours) if hours else None,
         })
-    
-    return pd.DataFrame(patterns)
+
+    return pl.DataFrame(patterns)
 
 def analyze_time_series(data):
     """Analysiert Zeitreihen-Muster in den Arbeitsdaten."""
-    # Tägliche Gesamtstunden pro User
+    if data.is_empty():
+        return pl.DataFrame(), pl.DataFrame(), pl.DataFrame()
+
     daily_hours = []
-    
-    for (user, date), group in data.groupby(['user', 'date']):
-        if user == 'users':
+    for (user, date), group in data.partition_by(["user", "date"], as_dict=True).items():
+        if user == "users":
             continue
-            
-        start_times = group[group['event_type'] == 'start']['timestamp']
-        stop_times = group[group['event_type'] == 'stop']['timestamp']
-        
-        if len(start_times) == len(stop_times):
-            total_hours = sum((stop - start).total_seconds() / 3600 
-                            for start, stop in zip(start_times, stop_times))
-            
-            # Versuche zuerst das Standard-Format (YYYY-MM-DD)
+
+        durations = _paired_durations_hours(group)
+        if not durations:
+            continue
+        total_hours = sum(durations)
+
+        date_obj = None
+        for fmt in ("%Y-%m-%d", "%d-%m-%Y"):
             try:
-                date_obj = pd.to_datetime(date, format='%Y-%m-%d')
+                date_obj = datetime.strptime(date, fmt)
+                break
             except ValueError:
-                # Falls das fehlschlägt, versuche das alternative Format (DD-MM-YYYY)
-                try:
-                    date_obj = pd.to_datetime(date, format='%d-%m-%Y')
-                except ValueError:
-                    print(f"Warnung: Datum '{date}' konnte nicht geparst werden")
-                    continue
-            
-            daily_hours.append({
-                'user': user,
-                'date': date,
-                'weekday': date_obj.day_name(),
-                'week': date_obj.isocalendar().week,
-                'hours': total_hours
-            })
-    
-    daily_df = pd.DataFrame(daily_hours)
-    
-    # Wöchentliche Durchschnitte
-    weekly_avg = daily_df.groupby(['user', 'week'])['hours'].mean().reset_index()
-    
-    # Tägliche Durchschnitte nach Wochentag
-    weekday_avg = daily_df.groupby(['user', 'weekday'])['hours'].mean().reset_index()
-    weekday_avg['weekday'] = pd.Categorical(
-        weekday_avg['weekday'], 
-        categories=['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
-        ordered=True
+                continue
+        if not date_obj:
+            print(f"Warnung: Datum '{date}' konnte nicht geparst werden")
+            continue
+
+        daily_hours.append({
+            "user": user,
+            "date": date,
+            "weekday": date_obj.strftime("%A"),
+            "week": date_obj.isocalendar().week,
+            "hours": total_hours,
+        })
+
+    daily_df = pl.DataFrame(daily_hours)
+    if daily_df.is_empty():
+        return daily_df, pl.DataFrame(), pl.DataFrame()
+
+    weekly_avg = (
+        daily_df.group_by(["user", "week"])
+        .agg(pl.col("hours").mean().alias("hours"))
+        .sort(["user", "week"])
     )
-    weekday_avg = weekday_avg.sort_values('weekday')
-    
+    weekday_avg = (
+        daily_df.group_by(["user", "weekday"])
+        .agg(pl.col("hours").mean().alias("hours"))
+    )
+    weekday_order = {
+        "Monday": 1,
+        "Tuesday": 2,
+        "Wednesday": 3,
+        "Thursday": 4,
+        "Friday": 5,
+        "Saturday": 6,
+        "Sunday": 7,
+    }
+    weekday_avg = (
+        weekday_avg.with_columns(
+            pl.col("weekday").map_elements(lambda d: weekday_order.get(d, 999)).alias("weekday_order")
+        )
+        .sort(["user", "weekday_order"])
+        .drop("weekday_order")
+    )
+
     return daily_df, weekly_avg, weekday_avg
 
 def perform_cluster_analysis(data):
@@ -365,42 +382,41 @@ def perform_cluster_analysis(data):
             - features_df: DataFrame mit User-Features und Cluster-Zuordnung
             - cluster_profiles: Liste der Cluster-Charakteristiken
     """
+    if data.is_empty():
+        return pl.DataFrame(), []
+
     # Feature-Extraktion für Clustering
     user_features = []
-    
-    for user in data['user'].unique():
-        if user == 'users':
+    for user in _unique_list(data, "user"):
+        if user == "users":
             continue
-            
-        user_data = data[data['user'] == user]
-        
-        # Durchschnittliche Startzeit
-        start_times = user_data[user_data['event_type'] == 'start']['timestamp']
-        avg_start_hour = start_times.dt.hour.mean()
-        
-        # Projektwechsel pro Tag
-        num_days = max(1, len(user_data['date'].unique()))
-        switches_per_day = len(calculate_project_switches(user_data)) / num_days
-        
-        # Durchschnittliche Arbeitsdauer
+        user_data = data.filter(pl.col("user") == user)
+
+        start_times = user_data.filter(pl.col("event_type") == "start").select("timestamp").to_series().to_list()
+        avg_start_hour = float(np.mean([t.hour for t in start_times])) if start_times else 0.0
+
+        num_days = max(1, user_data.select(pl.col("date").unique()).height)
+        switches_per_day = calculate_project_switches(user_data).height / num_days
+
         avg_hours_df = calculate_average_hours_per_user(user_data)
-        avg_duration = avg_hours_df['average_hours'].iloc[0] if not avg_hours_df.empty else 0
-        
+        avg_row = avg_hours_df.filter(pl.col("user") == user)
+        avg_duration = avg_row["average_hours"][0] if avg_row.height > 0 else 0
+
         user_features.append({
-            'user': user,
-            'avg_start_hour': avg_start_hour,
-            'switches_per_day': switches_per_day,
-            'avg_duration': avg_duration
+            "user": user,
+            "avg_start_hour": avg_start_hour,
+            "switches_per_day": switches_per_day,
+            "avg_duration": avg_duration,
         })
-    
-    features_df = pd.DataFrame(user_features)
-    
-    if features_df.empty or len(features_df) < 2:
+
+    features_df = pl.DataFrame(user_features)
+
+    if features_df.is_empty() or features_df.height < 2:
         return features_df, []
 
     # Standardisierung der Features
     scaler = StandardScaler()
-    X = scaler.fit_transform(features_df.drop('user', axis=1))
+    X = scaler.fit_transform(features_df.select(["avg_start_hour", "switches_per_day", "avg_duration"]).to_numpy())
     
     # Clustering (optimal k wird automatisch bestimmt)
     k_range = range(2, min(5, len(X) + 1))
@@ -416,19 +432,20 @@ def perform_cluster_analysis(data):
     
     # Finales Clustering
     kmeans = KMeans(n_clusters=optimal_k, random_state=42)
-    features_df['cluster'] = kmeans.fit_predict(X)
+    clusters = kmeans.fit_predict(X)
+    features_df = features_df.with_columns(pl.Series("cluster", clusters))
     
     # Cluster-Charakteristiken
     cluster_profiles = []
     for cluster in range(optimal_k):
-        cluster_data = features_df[features_df['cluster'] == cluster]
+        cluster_data = features_df.filter(pl.col("cluster") == cluster)
         profile = {
             'cluster': cluster,
-            'size': len(cluster_data),
-            'avg_start': cluster_data['avg_start_hour'].mean(),
-            'avg_switches': cluster_data['switches_per_day'].mean(),
-            'avg_duration': cluster_data['avg_duration'].mean(),
-            'users': cluster_data['user'].tolist()
+            'size': cluster_data.height,
+            'avg_start': float(cluster_data['avg_start_hour'].mean()),
+            'avg_switches': float(cluster_data['switches_per_day'].mean()),
+            'avg_duration': float(cluster_data['avg_duration'].mean()),
+            'users': cluster_data['user'].to_list()
         }
         cluster_profiles.append(profile)
     
@@ -460,58 +477,50 @@ def perform_regression_analysis(data):
     Returns:
         dict: Regressionsergebnisse mit Model, Importance, R², Predictions
     """
-    data = data.copy()
-    if data.empty:
+    if data.is_empty():
         return {}
-    data['timestamp'] = pd.to_datetime(data['timestamp'], errors='coerce')
-    data = data.dropna(subset=['timestamp'])
-    if data.empty:
-        return {}
-    data['timestamp'] = data['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
     
     # Feature-Vorbereitung
     work_sessions = []
     
-    for (user, project), group in data.groupby(['user', 'project']):
-        if user == 'users':
+    for (user, project), group in data.partition_by(["user", "project"], as_dict=True).items():
+        if user == "users":
             continue
-            
-        starts = group[group['event_type'] == 'start']
-        stops = group[group['event_type'] == 'stop']
-        
+
+        starts = group.filter(pl.col("event_type") == "start").select("timestamp").to_series().to_list()
+        stops = group.filter(pl.col("event_type") == "stop").select("timestamp").to_series().to_list()
         min_length = min(len(starts), len(stops))
         if min_length == 0:
             continue
 
-        for start, stop in zip(starts['timestamp'].iloc[:min_length], stops['timestamp'].iloc[:min_length]):
-            start_dt = pd.to_datetime(start)
-            duration = (pd.to_datetime(stop) - start_dt).total_seconds() / 3600
-            
+        for start, stop in zip(starts[:min_length], stops[:min_length]):
+            duration = (stop - start).total_seconds() / 3600
             work_sessions.append({
-                'user': user,
-                'project': project,
-                'start_hour': start_dt.hour,
-                'weekday': start_dt.weekday(),
-                'duration': duration
+                "user": user,
+                "project": project,
+                "start_hour": start.hour,
+                "weekday": start.weekday(),
+                "duration": duration,
             })
-    
-    sessions_df = pd.DataFrame(work_sessions)
-    if sessions_df.empty:
+
+    sessions_df = pl.DataFrame(work_sessions)
+    if sessions_df.is_empty():
         return {}
-    
+
     # Dummy-Variablen für kategorische Features
-    X = pd.get_dummies(sessions_df[['user', 'project', 'start_hour', 'weekday']])
-    y = sessions_df['duration']
+    X_df = sessions_df.select(["user", "project", "start_hour", "weekday"]).to_dummies()
+    X = X_df.to_numpy()
+    y = sessions_df["duration"].to_numpy()
     
     # Regression
     model = LinearRegression()
     model.fit(X, y)
     
     # Feature Importance
-    importance = pd.DataFrame({
-        'feature': X.columns,
-        'importance': abs(model.coef_)
-    }).sort_values('importance', ascending=False)
+    importance = pl.DataFrame({
+        "feature": X_df.columns,
+        "importance": np.abs(model.coef_),
+    }).sort("importance", descending=True)
     
     # Modellperformance
     predictions = model.predict(X)
@@ -519,12 +528,12 @@ def perform_regression_analysis(data):
     
     return {
         'model': model,
-        'importance': importance,
-        'r2_score': r2_score,
-        'actual_vs_predicted': pd.DataFrame({
-            'actual': y,
-            'predicted': predictions
-        })
+        "importance": importance,
+        "r2_score": r2_score,
+        "actual_vs_predicted": pl.DataFrame({
+            "actual": y,
+            "predicted": predictions,
+        }),
     }
 
 def perform_anova_analysis(data):
@@ -552,50 +561,48 @@ def perform_anova_analysis(data):
         dict: ANOVA-Ergebnisse mit F-Statistik, p-Werten und Tukey-Tests
     """
     work_durations = []
-    
-    for (user, project), group in data.groupby(['user', 'project']):
-        if user == 'users':
-            continue
-            
-        starts = group[group['event_type'] == 'start']['timestamp']
-        stops = group[group['event_type'] == 'stop']['timestamp']
-        
-        min_length = min(len(starts), len(stops))
-        if min_length == 0:
+
+    for (user, project), group in data.partition_by(["user", "project"], as_dict=True).items():
+        if user == "users":
             continue
 
-        durations = [(stop - start).total_seconds() / 3600
-                    for start, stop in zip(starts.iloc[:min_length], stops.iloc[:min_length])]
-        
+        durations = _paired_durations_hours(group)
+        if not durations:
+            continue
+
         work_durations.extend([{
-            'user': user,
-            'project': project,
-            'duration': float(duration)  # Konvertiere zu float für die Analyse
+            "user": user,
+            "project": project,
+            "duration": float(duration),
         } for duration in durations])
-    
-    durations_df = pd.DataFrame(work_durations)
+
+    durations_df = pl.DataFrame(work_durations)
     
     try:
-        if durations_df.empty or durations_df['user'].nunique() < 2 or durations_df['project'].nunique() < 2:
+        if durations_df.is_empty() or durations_df["user"].n_unique() < 2 or durations_df["project"].n_unique() < 2:
             return {}
 
         # ANOVA zwischen Usern
-        user_groups = [group['duration'].values 
-                      for _, group in durations_df.groupby('user')]
+        user_groups = [
+            group["duration"].to_numpy()
+            for group in durations_df.partition_by("user", as_dict=True).values()
+        ]
         f_stat_users, p_value_users = stats.f_oneway(*user_groups)
         
         # ANOVA zwischen Projekten
-        project_groups = [group['duration'].values 
-                         for _, group in durations_df.groupby('project')]
+        project_groups = [
+            group["duration"].to_numpy()
+            for group in durations_df.partition_by("project", as_dict=True).values()
+        ]
         f_stat_projects, p_value_projects = stats.f_oneway(*project_groups)
         
         # Post-hoc Tests (Tukey's HSD)
         from statsmodels.stats.multicomp import pairwise_tukeyhsd
         
-        tukey_users = pairwise_tukeyhsd(durations_df['duration'], 
-                                       durations_df['user'])
-        tukey_projects = pairwise_tukeyhsd(durations_df['duration'], 
-                                          durations_df['project'])
+        tukey_users = pairwise_tukeyhsd(durations_df["duration"].to_numpy(),
+                                        durations_df["user"].to_numpy())
+        tukey_projects = pairwise_tukeyhsd(durations_df["duration"].to_numpy(),
+                                           durations_df["project"].to_numpy())
         
         return {
             'user_anova': {
