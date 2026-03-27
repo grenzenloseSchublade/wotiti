@@ -17,8 +17,10 @@ WoTiTi ist ein umfassendes Zeiterfassungssystem, bestehend aus zwei Hauptkompone
 > - ▶ Start / ■ Stop pro Benutzer & Projekt mit Echtzeit-Timer
 > - Benutzerverwaltung (Dropdown-Auswahl, eigenes Verwaltungsfenster)
 > - Projektverwaltung (Combobox mit bestehenden Projekten)
+> - ⚙ Einstellungen (Datenbank wechseln/erstellen/löschen, Defaults, Theme)
 > - Integriertes Analytics-Dashboard mit Cluster-Analyse, Regression, ANOVA
 > - SQLite-Datenbank, keine externe Infrastruktur nötig
+> - Konfiguration wird in `data/config.json` persistiert
 > - Standalone-EXE via PyInstaller (`bash build.sh` / `build_windows.ps1`)
 
 ## 🎯 Systemübersicht
@@ -28,12 +30,17 @@ WoTiTi ist ein umfassendes Zeiterfassungssystem, bestehend aus zwei Hauptkompone
 - Mehrbenutzer-Unterstützung mit Dropdown-Auswahl
 - Projektbasierte Zeiterfassung mit Combobox
 - Benutzerverwaltung (eigenes Fenster zum Anlegen/Auswählen)
+- **Einstellungen (⚙)**: Datenbank erstellen/auswählen/löschen, Standard-Benutzer/-Projekt, Dashboard-Port, Theme
+- Persistente Konfiguration (`data/config.json`)
 - SQLite-Datenbankintegration (users, projects, events)
 - Echtzeit-Timer-Anzeige
 - Session-Schutz bei App-Schließen
 - Eingabevalidierung (Datumsformat DD-MM-YYYY)
 
 ### Work Time Insights (Dashboard)
+- Durchgehend **deutschsprachige** Oberfläche (Titel, Achsen, UI-Elemente)
+- Eigenes Plotly-Template „wotiti" (Dark Theme, konsistente Farben, automargin)
+- 4 Tab-Bereiche: Grundlagen, Projekte & Muster, Zeitreihen & Trends, Erweiterte Analysen
 - Interaktive Datenvisualisierung
 - Fortgeschrittene statistische Analysen
 - Arbeitsmuster-Erkennung
@@ -52,10 +59,10 @@ wotiti/
 │   ├── stats_calculations.py # Statistische Berechnungen
 │   ├── stats_plotting.py    # Visualisierungsfunktionen (Plotly)
 │   ├── stats_generator.py   # Testdatengenerierung
-│   ├── utils.py             # Hilfsfunktionen & Konfiguration
+│   ├── utils.py             # Hilfsfunktionen, Pfade & Konfiguration
 │   └── assets/
 │       └── style.css        # Dashboard-Styles
-├── data/                    # Datenspeicherung (SQLite DBs, gitignored)
+├── data/                    # Datenspeicherung (SQLite DBs, config.json, gitignored)
 ├── tests/
 │   ├── test_app.py         # GUI-Tests
 │   └── test_db_helper.py   # Datenbank-Tests
@@ -105,12 +112,20 @@ uv run python src/stats_generator.py
 - **Benutzer-Auswahl**: Combobox mit Dropdown aller bestehenden Benutzer
 - **Projekt-Auswahl**: Combobox mit bestehenden Projekten
 - **Benutzerverwaltung**: Eigenes Fenster zum Anlegen/Auswählen von Benutzern
+- **Einstellungen (⚙)**: Konfigurationsfenster mit:
+  - Datenbank auswählen, erstellen oder löschen (mit Bestätigung)
+  - Standard-Benutzer und Standard-Projekt festlegen
+  - Dashboard-Port konfigurieren
+  - Theme-Auswahl (Modern / Synthwave)
 - **Datum-Setter**: Schnelle Datumseinstellung mit Validierung (DD-MM-YYYY)
 - **Gesamtzeit**: Zeigt die kumulierte Arbeitszeit pro Benutzer/Projekt
 - **Konsole**: Statusmeldungen und Fehler
 - **Session-Schutz**: Warnung bei App-Schließen mit aktiver Session
 
 ### Analytics-Dashboard Features
+- **Durchgehend deutschsprachig**: Alle Plot-Titel, Achsenbeschriftungen und UI-Elemente
+- **Eigenes Plotly-Template** „wotiti": Dark Theme, 8-Farben-Palette, automargin, Inter-Font
+- **4 Tab-Bereiche**: Grundlagen, Projekte & Muster, Zeitreihen & Trends, Erweiterte Analysen
 - **Echtzeit-Visualisierungen** der Arbeitszeiten
 - **Interaktive Grafiken** mit Drill-Down
 - **Arbeitsmuster-Erkennung**
@@ -161,22 +176,54 @@ Beide Skripte erzeugen ein ausführbares Verzeichnis unter `dist/wotiti/` via Py
 
 ## 🔍 Testdatengenerierung
 
-### Features
-- Flexible Benutzer- und Projektzahlen
-- Realistische Arbeitszeitverteilung
-- Verschiedene Speicheroptionen (CSV/DB)
-- Parameter-Logging für Reproduzierbarkeit
+Der Generator erzeugt statistisch aussagekräftige Beispieldaten mit einem **Archetypen-System**:
+
+### Benutzer-Archetypen
+| Archetyp | Arbeitszeit | Verhalten |
+|---|---|---|
+| **Frühaufsteher** | 06:00–14:00 | Fokussiert, wenige Projektwechsel |
+| **Kernzeit-Arbeiter** | 09:00–17:00 | Moderate Wechselrate |
+| **Spätarbeiter** | 11:00–19:30 | Viele kurze Blöcke, häufige Wechsel |
+| **Teilzeit** | 08:00–13:00 | Kurzer Tag, keine Mittagspause |
+| **Flexibler Arbeiter** | 07:00–18:00 | ±90 Min Startzeit-Variation, Context-Switcher |
+
+### Realismus-Features
+- **Wochenenden** werden übersprungen (nur Mo–Fr)
+- **Kranktage** (~3 % der Arbeitstage)
+- **Ausreißer-Tage** (~7 %: Überstunden oder halber Tag)
+- **Wochentags-Effekte** (Mo/Fr kürzer, Mi am produktivsten)
+- **Zeitlicher Trend** (Sinuswelle über 90 Tage)
+- **Ermüdungskurve** (Blocklänge nimmt im Tagesverlauf ab)
+- **Mittagspause** (30–60 Min, archetyp-abhängig)
+- **Projekt-Spezialisierung** (Primärprojekt erhält 55–70 %)
+- 10 Benutzer (2 pro Archetyp), 90 Tage → ~8.000 Events
 
 ### Beispieldaten
 ```
 user    project     event_type  timestamp           date
-user_1  projekt_3   start      01-01-2023 09:00:00 01-01-2023
-user_1  projekt_3   stop       01-01-2023 10:30:00 01-01-2023
+user_1  projekt_2   start      01-01-2025 06:12:00 2025-01-01
+user_1  projekt_2   stop       01-01-2025 08:45:00 2025-01-01
 ```
+
+## ⚙ Konfiguration
+
+Einstellungen werden in `data/config.json` persistiert und beim App-Start automatisch geladen.
+
+| Option | Beschreibung | Standard |
+|---|---|---|
+| `database_path` | Pfad zur aktiven SQLite-Datenbank | `data/app_database.db` |
+| `default_user` | Vorausgewählter Benutzer beim Start | `Hans` |
+| `default_project` | Vorausgewähltes Projekt beim Start | `1` |
+| `dashboard_port` | Startport für das Analytics-Dashboard | `8052` |
+| `theme` | Farbschema für das Dashboard | `Modern` |
+
+Alle Optionen sind über das Zahnrad-Menü (⚙) in der GUI erreichbar.
 
 ## 🐛 Bekannte Probleme
 - Timestamp-Konvertierung bei ungewöhnlichen Formaten
 - CPU-Last bei komplexen Dashboard-Analysen
+- Port-Änderung in den Einstellungen wird erst beim nächsten App-Start wirksam
+- Theme-Umschaltung erfordert Dashboard-Neustart
 
 ## 🔜 Geplante Features
 - [ ] QT-Migration (geplant für späteres Release)
