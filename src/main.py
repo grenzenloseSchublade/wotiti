@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import messagebox
 from app import App
+import multiprocessing
 import subprocess
 import os
 import threading
@@ -42,6 +43,7 @@ def run_tkinter_app(stats_port=None):
 
 def main():
     """Main function to start both the Tkinter app and the statistics dashboard."""
+    multiprocessing.freeze_support()
     stats_process = None  # To store the statistics dashboard process
     root = None
     config = load_config()
@@ -52,25 +54,31 @@ def main():
         root = tk.Tk()
         app = App(root, stats_port=stats_port)
 
-        # Start the statistics dashboard in a separate process
+        # Start the statistics dashboard in a separate thread/process
         def run_stats():
             nonlocal stats_process
             try:
                 print("Starting the statistics dashboard...")
-                project_root = os.path.dirname(os.path.abspath(__file__))
-                env = os.environ.copy()
-                env["DASH_PORT"] = str(stats_port)
-                stats_process = subprocess.Popen(
-                    [sys.executable, os.path.join(project_root, "stats_dashboard.py")],
-                    cwd=project_root,
-                    env=env
-                )
+                if getattr(sys, 'frozen', False):
+                    # Frozen EXE: run dashboard in-process (subprocess would re-launch the EXE)
+                    from stats_dashboard import app as dash_app
+                    dash_app.run(debug=False, use_reloader=False, port=stats_port)
+                else:
+                    # Development: run as subprocess
+                    project_root = os.path.dirname(os.path.abspath(__file__))
+                    env = os.environ.copy()
+                    env["DASH_PORT"] = str(stats_port)
+                    stats_process = subprocess.Popen(
+                        [sys.executable, os.path.join(project_root, "stats_dashboard.py")],
+                        cwd=project_root,
+                        env=env
+                    )
+                    stats_process.wait()
                 print("Statistics dashboard started successfully.")
-                stats_process.wait()  # Wait for the dashboard to complete
             except Exception as e:
                 print(f"An unexpected error occurred in statistics dashboard: {e}")
             finally:
-                stats_process = None  # Reset stats_process after completion or error
+                stats_process = None
 
         stats_thread = threading.Thread(target=run_stats)
         stats_thread.daemon = True  # Allow the main thread to exit even if this thread is running
@@ -104,4 +112,5 @@ def main():
         print("Exiting main function.")
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     main()

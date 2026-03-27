@@ -1,6 +1,7 @@
 import sqlite3
 import json
 import os
+import sys
 import glob
 from datetime import datetime
 from tkinter import Tk, filedialog
@@ -17,7 +18,11 @@ SYNTHWAVE_COLORS = {
 }
 
 # Pfade
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if getattr(sys, 'frozen', False):
+    # PyInstaller frozen EXE: use the directory containing the executable
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 PATH_TO_DATA = os.path.join(BASE_DIR, "data")
 PATH_TO_DASHBOARD_DATA = PATH_TO_DATA
 DATABASE_PATH = os.path.join(PATH_TO_DATA, "app_database.db")
