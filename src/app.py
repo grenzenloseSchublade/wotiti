@@ -371,7 +371,7 @@ class App:
         win = Toplevel(self.master)
         win.title("Einstellungen")
         win.configure(bg='#C0C0C0')
-        win.geometry("520x480")
+        win.geometry("520x680")
         win.transient(self.master)
         win.grab_set()
 
@@ -493,6 +493,48 @@ class App:
                              values=["Modern", "Synthwave"], state='readonly')
         theme_var.grid(row=1, column=1, padx=5, pady=2, sticky='w')
         theme_var.set(self.config.get("theme", "Modern"))
+
+        # ── Entwickler ──
+        dev_frame = LabelFrame(win, text="Entwickler", bg='#C0C0C0', fg='black',
+                               font=('MS Sans Serif', 10, 'bold'), padx=8, pady=8)
+        dev_frame.pack(fill='both', expand=True, padx=10, pady=5)
+
+        log_text = Text(dev_frame, wrap='word', state='disabled', height=8,
+                        bg='black', fg='#00ff00', font=('Courier', 9))
+        log_text.grid(row=0, column=0, sticky="nsew")
+        log_scroll = Scrollbar(dev_frame, orient='vertical', command=log_text.yview,
+                               bg='#C0C0C0', width=14)
+        log_scroll.grid(row=0, column=1, sticky="ns")
+        log_text['yscrollcommand'] = log_scroll.set
+        dev_frame.grid_rowconfigure(0, weight=1)
+        dev_frame.grid_columnconfigure(0, weight=1)
+
+        log_path = os.path.join(PATH_TO_DATA, "wotiti.log")
+
+        def _load_log():
+            log_text.configure(state='normal')
+            log_text.delete('1.0', END)
+            if os.path.isfile(log_path):
+                try:
+                    with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
+                        content = f.read()
+                    log_text.insert(END, content if content else "(Logdatei ist leer)")
+                except Exception as e:
+                    log_text.insert(END, f"Fehler beim Lesen: {e}")
+            else:
+                log_text.insert(END, "(Keine Logdatei vorhanden)")
+            log_text.configure(state='disabled')
+            log_text.see(END)
+
+        log_btn_frame = Frame(dev_frame, bg='#C0C0C0')
+        log_btn_frame.grid(row=1, column=0, columnspan=2, sticky='ew', pady=(4, 0))
+        Button(log_btn_frame, text="Aktualisieren", command=_load_log, **btn).pack(side='left')
+        Button(log_btn_frame, text="Log löschen", command=lambda: (
+            open(log_path, 'w').close() if os.path.isfile(log_path) else None,
+            _load_log()
+        ), **btn).pack(side='left', padx=(8, 0))
+
+        _load_log()
 
         # ── Speichern / Abbrechen ──
         action_frame = Frame(win, bg='#C0C0C0')
@@ -633,8 +675,9 @@ class App:
     def _fallback_write(self, message, error=False):
         """Writes to real stdout/stderr when GUI is unavailable."""
         stream = sys.__stderr__ if error else sys.__stdout__
-        stream.write(message + "\n")
-        stream.flush()
+        if stream is not None:
+            stream.write(message + "\n")
+            stream.flush()
 
     def flush(self):
         """Support file-like API for redirected stdout/stderr."""

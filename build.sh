@@ -15,6 +15,7 @@ uv run pyinstaller \
     --hidden-import=tkinter.filedialog \
     --collect-submodules sklearn \
     --collect-submodules scipy \
+    --exclude-module torch \
     --add-data "src/assets:assets" \
     src/main.py
 

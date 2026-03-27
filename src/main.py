@@ -11,12 +11,29 @@ import logging
 from utils import load_config
 
 # Centralized logging configuration
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] %(levelname)s - %(name)s - %(message)s',
+# Always log to data/wotiti.log so the in-app developer console can show entries.
+# In frozen --noconsole mode, sys.__stdout__/stderr are None → also redirect streams.
+from utils import PATH_TO_DATA
+_log_file = os.path.join(PATH_TO_DATA, "wotiti.log")
+os.makedirs(PATH_TO_DATA, exist_ok=True)
+_log_fmt = logging.Formatter(
+    '[%(asctime)s] %(levelname)s - %(name)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
-    stream=sys.__stdout__  # Always write to real stdout, not the GUI-redirected one
 )
+_file_handler = logging.FileHandler(_log_file, encoding="utf-8")
+_file_handler.setFormatter(_log_fmt)
+
+if getattr(sys, 'frozen', False) and sys.__stdout__ is None:
+    # Frozen --noconsole: file-only logging; give streams a safe target
+    logging.basicConfig(level=logging.INFO, handlers=[_file_handler])
+    _devnull = open(os.devnull, "w")          # noqa: SIM115
+    sys.stdout = sys.stderr = _devnull
+    sys.__stdout__ = sys.__stderr__ = _devnull
+else:
+    # Development: log to both console and file
+    _stream_handler = logging.StreamHandler(sys.__stdout__)
+    _stream_handler.setFormatter(_log_fmt)
+    logging.basicConfig(level=logging.INFO, handlers=[_stream_handler, _file_handler])
 # Suppress noisy debug output from internal modules
 logging.getLogger('db_helper').setLevel(logging.WARNING)
 
