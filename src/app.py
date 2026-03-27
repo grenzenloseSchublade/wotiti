@@ -1,4 +1,4 @@
-from tkinter import Button, Text, Scrollbar, VERTICAL, END, Frame, Entry, Label, Listbox, W, E, Toplevel
+from tkinter import Button, Text, Scrollbar, VERTICAL, END, Frame, Entry, Label, Listbox, W, E, Toplevel, messagebox, LabelFrame, Spinbox
 from tkinter.ttk import Combobox
 import sys
 import threading
@@ -6,15 +6,19 @@ import webbrowser
 import time
 import socket
 import re
+import os
+import glob
 from datetime import datetime
-from db_helper import create_connection, create_main_table, check_user, check_project, log_start, log_stop, calculate_duration, migrate_legacy_user_tables, migrate_projects_to_table, get_all_users, get_all_projects
-from utils import DATABASE_PATH
+from db_helper import create_connection, create_main_table, check_user, check_project, log_start, log_stop, calculate_duration, migrate_legacy_user_tables, migrate_projects_to_table, get_all_users, get_all_projects, create_events_table
+from utils import DATABASE_PATH, PATH_TO_DATA, load_config, save_config
 
 class App:
     def __init__(self, master, stats_port=None):
         self.master = master
         self._ui_thread = threading.current_thread()
         self._stats_port = stats_port
+        self.config = load_config()
+        self._db_path = self.config.get("database_path", DATABASE_PATH)
         master.title("WoTITI - Work Time Timer")
         master.configure(bg='#C0C0C0')
 
@@ -92,6 +96,14 @@ class App:
         )
         self.user_mgmt_button.grid(row=0, column=5, pady=5, padx=5, sticky=W+E)
 
+        # Settings button (gear icon)
+        self.settings_button = Button(
+            self.button_frame, text="\u2699", command=self.open_settings,
+            font=('MS Sans Serif', 14), bg='#D4D0C8', fg='black',
+            relief='raised', borderwidth=2, width=3
+        )
+        self.settings_button.grid(row=0, column=6, pady=5, padx=(2, 5), sticky=W+E)
+
         # Configure button frame columns
         self.button_frame.grid_columnconfigure(0, weight=2)
         self.button_frame.grid_columnconfigure(1, weight=2)
@@ -99,6 +111,7 @@ class App:
         self.button_frame.grid_columnconfigure(3, weight=1)
         self.button_frame.grid_columnconfigure(4, weight=1)
         self.button_frame.grid_columnconfigure(5, weight=1)
+        self.button_frame.grid_columnconfigure(6, weight=0)
 
         # =====================================================
         # ROW 1: Entry frame (Name, Datum, Projekt)
@@ -225,13 +238,18 @@ class App:
 
         # Database connection
         try:
-            self.db_conn = create_connection(DATABASE_PATH)
+            self.db_conn = create_connection(self._db_path)
             if self.db_conn:
                 create_main_table(self.db_conn)
-                check_user(self.db_conn, "Hans")
+                create_events_table(self.db_conn)
+                default_user = self.config.get("default_user", "Hans")
+                check_user(self.db_conn, default_user)
                 migrate_legacy_user_tables(self.db_conn)
                 migrate_projects_to_table(self.db_conn)
                 self._refresh_comboboxes()
+                self.name_entry.set(default_user)
+                default_project = self.config.get("default_project", "1")
+                self.project_entry.set(default_project)
                 self.update_db_content()
         except Exception as e:
             self.write(f"Failed to connect to the database: {e}", error=True)
@@ -249,7 +267,6 @@ class App:
         """Handle window close — stop active sessions first."""
         active = [k for k, v in self.session_active.items() if v]
         if active:
-            from tkinter import messagebox
             name, project = active[0]
             if messagebox.askyesno(
                 "Session aktiv",
@@ -314,7 +331,7 @@ class App:
             if not name:
                 return
             if not re.match(r'^[A-Za-z0-9_\-\s]+$', name):
-                from tkinter import messagebox
+
                 messagebox.showwarning("Ung\u00fcltiger Name", "Name darf nur Buchstaben, Zahlen, Leerzeichen, - und _ enthalten.", parent=win)
                 return
             check_user(self.db_conn, name)
@@ -338,7 +355,195 @@ class App:
 
         Button(btn_frame, text="Benutzer ausw\u00e4hlen", command=select_user, **button_config).pack(side='left', padx=(0, 5))
         Button(btn_frame, text="Schlie\u00dfen", command=win.destroy, **button_config).pack(side='right')
+    # ----- Settings Window -----
+    def open_settings(self):
+        """Open the settings/configuration window."""
+        # Block if any session is active
+        active = [k for k, v in self.session_active.items() if v]
+        if active:
+            messagebox.showwarning(
+                "Session aktiv",
+                "Bitte alle laufenden Sessions stoppen, bevor die Einstellungen geöffnet werden.",
+                parent=self.master,
+            )
+            return
 
+        win = Toplevel(self.master)
+        win.title("Einstellungen")
+        win.configure(bg='#C0C0C0')
+        win.geometry("520x480")
+        win.transient(self.master)
+        win.grab_set()
+
+        lbl = {'bg': '#C0C0C0', 'fg': 'black', 'font': ('MS Sans Serif', 10)}
+        btn = {'bg': '#D4D0C8', 'fg': 'black', 'font': ('MS Sans Serif', 10), 'relief': 'raised', 'borderwidth': 2}
+
+        # ── Datenbank ──
+        db_frame = LabelFrame(win, text="Datenbank", bg='#C0C0C0', fg='black',
+                              font=('MS Sans Serif', 10, 'bold'), padx=8, pady=8)
+        db_frame.pack(fill='x', padx=10, pady=(10, 5))
+
+        Label(db_frame, text="Aktive Datenbank:", **lbl).grid(row=0, column=0, sticky='w', pady=2)
+        db_var = Combobox(db_frame, font=('MS Sans Serif', 10), width=35)
+        db_var.grid(row=0, column=1, padx=5, pady=2, sticky='ew')
+
+        def _refresh_db_list():
+            dbs = sorted(glob.glob(os.path.join(PATH_TO_DATA, "**", "*.db"), recursive=True))
+            db_var['values'] = dbs
+            if self._db_path in dbs:
+                db_var.set(self._db_path)
+            elif dbs:
+                db_var.set(dbs[0])
+
+        _refresh_db_list()
+
+        btn_row = Frame(db_frame, bg='#C0C0C0')
+        btn_row.grid(row=1, column=0, columnspan=2, pady=(5, 0), sticky='ew')
+
+        def _browse_db():
+            from tkinter import filedialog
+            path = filedialog.askopenfilename(
+                initialdir=PATH_TO_DATA,
+                filetypes=[("SQLite Datenbank", "*.db"), ("Alle Dateien", "*.*")],
+                parent=win,
+            )
+            if path:
+                db_var.set(path)
+
+        def _new_db():
+            from tkinter import filedialog
+            path = filedialog.asksaveasfilename(
+                initialdir=PATH_TO_DATA,
+                defaultextension=".db",
+                filetypes=[("SQLite Datenbank", "*.db")],
+                parent=win,
+            )
+            if path:
+                try:
+                    conn = create_connection(path)
+                    if conn:
+                        create_main_table(conn)
+                        create_events_table(conn)
+                        conn.close()
+                        _refresh_db_list()
+                        db_var.set(path)
+                        self.write(f"Neue Datenbank erstellt: {path}")
+                except Exception as e:
+                    messagebox.showerror("Fehler", f"Datenbank konnte nicht erstellt werden:\n{e}", parent=win)
+
+        def _delete_db():
+            target = db_var.get().strip()
+            if not target or not os.path.isfile(target):
+                messagebox.showwarning("Keine Auswahl", "Bitte eine vorhandene Datenbank auswählen.", parent=win)
+                return
+            if os.path.abspath(target) == os.path.abspath(self._db_path):
+                messagebox.showwarning("Nicht möglich", "Die aktive Datenbank kann nicht gelöscht werden.\nBitte zuerst eine andere Datenbank auswählen.", parent=win)
+                return
+            if messagebox.askyesno("Datenbank löschen",
+                                   f"Datenbank wirklich löschen?\n\n{target}\n\nDieser Vorgang kann nicht rückgängig gemacht werden!",
+                                   parent=win):
+                try:
+                    os.remove(target)
+                    _refresh_db_list()
+                    self.write(f"Datenbank gelöscht: {target}")
+                except OSError as e:
+                    messagebox.showerror("Fehler", f"Löschen fehlgeschlagen:\n{e}", parent=win)
+
+        Button(btn_row, text="Durchsuchen...", command=_browse_db, **btn).pack(side='left', padx=(0, 5))
+        Button(btn_row, text="Neue DB", command=_new_db, **btn).pack(side='left', padx=(0, 5))
+        Button(btn_row, text="DB löschen", command=_delete_db, fg='#B00020', **{k: v for k, v in btn.items() if k != 'fg'}).pack(side='left')
+
+        db_frame.grid_columnconfigure(1, weight=1)
+
+        # ── Benutzer ──
+        user_frame = LabelFrame(win, text="Benutzer & Projekt", bg='#C0C0C0', fg='black',
+                                font=('MS Sans Serif', 10, 'bold'), padx=8, pady=8)
+        user_frame.pack(fill='x', padx=10, pady=5)
+
+        Label(user_frame, text="Standard-Benutzer:", **lbl).grid(row=0, column=0, sticky='w', pady=2)
+        default_user_var = Combobox(user_frame, font=('MS Sans Serif', 10), width=20)
+        default_user_var.grid(row=0, column=1, padx=5, pady=2, sticky='ew')
+        if self.db_conn:
+            default_user_var['values'] = get_all_users(self.db_conn)
+        default_user_var.set(self.config.get("default_user", "Hans"))
+
+        Label(user_frame, text="Standard-Projekt:", **lbl).grid(row=1, column=0, sticky='w', pady=2)
+        default_proj_var = Combobox(user_frame, font=('MS Sans Serif', 10), width=20)
+        default_proj_var.grid(row=1, column=1, padx=5, pady=2, sticky='ew')
+        if self.db_conn:
+            default_proj_var['values'] = get_all_projects(self.db_conn)
+        default_proj_var.set(self.config.get("default_project", "1"))
+
+        user_frame.grid_columnconfigure(1, weight=1)
+
+        # ── Dashboard ──
+        dash_frame = LabelFrame(win, text="Dashboard", bg='#C0C0C0', fg='black',
+                                font=('MS Sans Serif', 10, 'bold'), padx=8, pady=8)
+        dash_frame.pack(fill='x', padx=10, pady=5)
+
+        Label(dash_frame, text="Port:", **lbl).grid(row=0, column=0, sticky='w', pady=2)
+        port_var = Spinbox(dash_frame, from_=1024, to=65535, width=8,
+                           font=('MS Sans Serif', 10), bg='#FFFFFF', fg='black')
+        port_var.grid(row=0, column=1, padx=5, pady=2, sticky='w')
+        port_var.delete(0, END)
+        port_var.insert(0, str(self.config.get("dashboard_port", 8052)))
+
+        Label(dash_frame, text="Theme:", **lbl).grid(row=1, column=0, sticky='w', pady=2)
+        theme_var = Combobox(dash_frame, font=('MS Sans Serif', 10), width=15,
+                             values=["Modern", "Synthwave"], state='readonly')
+        theme_var.grid(row=1, column=1, padx=5, pady=2, sticky='w')
+        theme_var.set(self.config.get("theme", "Modern"))
+
+        # ── Speichern / Abbrechen ──
+        action_frame = Frame(win, bg='#C0C0C0')
+        action_frame.pack(fill='x', padx=10, pady=(10, 10))
+
+        def _save():
+            new_db = db_var.get().strip()
+            new_port = port_var.get().strip()
+            if not new_port.isdigit() or not (1024 <= int(new_port) <= 65535):
+                messagebox.showwarning("Ungültiger Port", "Port muss zwischen 1024 und 65535 liegen.", parent=win)
+                return
+
+            new_config = {
+                "database_path": new_db if new_db else self._db_path,
+                "default_user": default_user_var.get().strip() or "Hans",
+                "default_project": default_proj_var.get().strip() or "1",
+                "dashboard_port": int(new_port),
+                "theme": theme_var.get(),
+            }
+            save_config(new_config)
+            self.config = new_config
+
+            # Switch database if changed
+            old_path = self._db_path
+            if new_config["database_path"] != old_path:
+                try:
+                    if self.db_conn:
+                        self.db_conn.close()
+                    self._db_path = new_config["database_path"]
+                    self.db_conn = create_connection(self._db_path)
+                    if self.db_conn:
+                        create_main_table(self.db_conn)
+                        create_events_table(self.db_conn)
+                        migrate_legacy_user_tables(self.db_conn)
+                        migrate_projects_to_table(self.db_conn)
+                    self.write(f"Datenbank gewechselt: {self._db_path}")
+                except Exception as e:
+                    self.write(f"Fehler beim DB-Wechsel: {e}", error=True)
+
+            self._refresh_comboboxes()
+            self.name_entry.set(new_config["default_user"])
+            self.project_entry.set(new_config["default_project"])
+            self.update_db_content()
+
+            if int(new_port) != self._stats_port:
+                self.write(f"Port-Änderung ({self._stats_port} → {new_port}) wird beim nächsten App-Start wirksam.")
+
+            win.destroy()
+
+        Button(action_frame, text="Speichern", command=_save, **btn).pack(side='left', padx=(0, 10))
+        Button(action_frame, text="Abbrechen", command=win.destroy, **btn).pack(side='left')
     # ----- Session management -----
     def start_session(self):
         if self.db_conn:

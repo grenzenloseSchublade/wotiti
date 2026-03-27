@@ -120,10 +120,10 @@ def calculate_project_time_stats(data):
     - Standardabweichung für Konsistenzanalyse
     
     Args:
-        data (pd.DataFrame): DataFrame mit Spalten [user, project, event_type, timestamp]
+        data (pl.DataFrame): DataFrame mit Spalten [user, project, event_type, timestamp]
     
     Returns:
-        pd.DataFrame: Statistiken mit Spalten [user, project, avg_hours, min_hours, max_hours, std_hours]
+        pl.DataFrame: Statistiken mit Spalten [user, project, avg_hours, min_hours, max_hours, std_hours]
     """
     if data.is_empty():
         return pl.DataFrame()
@@ -156,10 +156,10 @@ def calculate_daily_project_hours(data):
     - Identifikation von Arbeitstagen
     
     Args:
-        data (pd.DataFrame): DataFrame mit Spalten [user, project, event_type, timestamp, date]
+        data (pl.DataFrame): DataFrame mit Spalten [user, project, event_type, timestamp, date]
     
     Returns:
-        pd.DataFrame: Tägliche Stunden mit Spalten [user, date, project, hours]
+        pl.DataFrame: Tägliche Stunden mit Spalten [user, date, project, hours]
     """
     if data.is_empty():
         return pl.DataFrame()
@@ -192,10 +192,10 @@ def calculate_project_switches(data):
     - Identifikation häufiger Projektkombinationen
     
     Args:
-        data (pd.DataFrame): Arbeitszeitdaten
+        data (pl.DataFrame): Arbeitszeitdaten
     
     Returns:
-        pd.DataFrame: Wechselstatistiken mit [user, date, from_project, to_project, pause_minutes]
+        pl.DataFrame: Wechselstatistiken mit [user, date, from_project, to_project, pause_minutes]
     """
     if data.is_empty():
         return pl.DataFrame()
@@ -240,26 +240,30 @@ def analyze_daily_patterns(data):
     3. Spätarbeiter (nach 17 Uhr)
     
     Args:
-        data (pd.DataFrame): Arbeitszeitdaten
+        data (pl.DataFrame): Arbeitszeitdaten
     
     Returns:
-        pd.DataFrame: Tagesmuster mit [user, project, avg_start_hour, most_common_start_hour]
+        pl.DataFrame: Tagesmuster mit [user, project, avg_start_hour, most_common_start_hour]
     """
     if data.is_empty():
         return pl.DataFrame()
-    formats = [
-        '%Y-%m-%d %H:%M:%S',
-        '%d-%m-%Y %H:%M:%S',
-        '%Y/%m/%d %H:%M:%S',
-        '%d/%m/%Y %H:%M:%S',
-    ]
-    data = data.with_columns(
-        pl.coalesce([
-            pl.col("timestamp").cast(pl.Utf8).str.strptime(pl.Datetime, fmt, strict=False)
-            for fmt in formats
-        ]).alias("timestamp")
-    )
-    data = data.filter(pl.col("timestamp").is_not_null())
+    # Timestamps are already parsed as Datetime by read_database().
+    # If they're still strings (e.g. from CSV), parse them.
+    ts_dtype = data.schema.get("timestamp")
+    if ts_dtype is None or not str(ts_dtype).startswith("Datetime"):
+        formats = [
+            '%Y-%m-%d %H:%M:%S',
+            '%d-%m-%Y %H:%M:%S',
+            '%Y/%m/%d %H:%M:%S',
+            '%d/%m/%Y %H:%M:%S',
+        ]
+        data = data.with_columns(
+            pl.coalesce([
+                pl.col("timestamp").cast(pl.Utf8).str.strptime(pl.Datetime, fmt, strict=False)
+                for fmt in formats
+            ]).alias("timestamp")
+        )
+        data = data.filter(pl.col("timestamp").is_not_null())
     data = data.with_columns(pl.col("timestamp").dt.hour().alias("hour"))
     patterns = []
 
@@ -375,7 +379,7 @@ def perform_cluster_analysis(data):
     - "Späte Beständige": Später Start, moderate Wechsel
     
     Args:
-        data (pd.DataFrame): Arbeitszeitdaten
+        data (pl.DataFrame): Arbeitszeitdaten
     
     Returns:
         tuple: (features_df, cluster_profiles)
@@ -475,7 +479,7 @@ def perform_regression_analysis(data):
     3. Planung von Ressourcen
     
     Args:
-        data (pd.DataFrame): Arbeitszeitdaten
+        data (pl.DataFrame): Arbeitszeitdaten
     
     Returns:
         dict: Regressionsergebnisse mit Model, Importance, R², Predictions
@@ -558,11 +562,14 @@ def perform_anova_analysis(data):
     - Effektgrößen für praktische Relevanz
     
     Args:
-        data (pd.DataFrame): Arbeitszeitdaten
+        data (pl.DataFrame): Arbeitszeitdaten
     
     Returns:
         dict: ANOVA-Ergebnisse mit F-Statistik, p-Werten und Tukey-Tests
     """
+    if data.is_empty():
+        return {}
+
     work_durations = []
 
     for (user, project), group in data.partition_by(["user", "project"], as_dict=True).items():

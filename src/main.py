@@ -7,6 +7,7 @@ import threading
 import sys
 import socket
 import logging
+from utils import load_config
 
 # Centralized logging configuration
 logging.basicConfig(
@@ -43,7 +44,8 @@ def main():
     """Main function to start both the Tkinter app and the statistics dashboard."""
     stats_process = None  # To store the statistics dashboard process
     root = None
-    stats_port = _find_available_port(8052)
+    config = load_config()
+    stats_port = _find_available_port(config.get("dashboard_port", 8052))
 
     try:
         # Start the Tkinter app in the main thread

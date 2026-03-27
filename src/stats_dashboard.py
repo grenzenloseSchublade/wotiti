@@ -59,10 +59,12 @@ DROPDOWN_STYLE = {
     'backgroundColor': MODERN_COLORS['secondary']
 }
 
-# Dash App
+# Dash App — serve_locally=False so plotly.min.js loads from CDN
+# (avoids ERR_CONTENT_LENGTH_MISMATCH in devcontainer port forwarding)
 app = Dash(__name__, 
            external_stylesheets=[dbc.themes.DARKLY],
-           suppress_callback_exceptions=True)
+           suppress_callback_exceptions=True,
+           serve_locally=False)
 
 _DATA_CACHE = {
     "db_path": None,
@@ -111,39 +113,57 @@ def get_cached_stat(key, compute_fn):
 
 def create_card(header_text, content, md_value=6):
     """Hilfsfunktion zum Erstellen einer einheitlichen Card mit Toggle-Funktion."""
-    card_id = header_text.lower().replace(" ", "-")  # Eindeutige ID für die Card
+    card_id = header_text.lower().replace(" ", "-")
     return dbc.Col([
         dbc.Card([
             dbc.CardHeader([
                 html.Div([
-                    html.Span(header_text, style={'color': MODERN_COLORS['text']}),
+                    html.Span(header_text, style={'color': MODERN_COLORS['text'], 'fontWeight': '500'}),
                     dbc.Button(
-                        "Toggle",
+                        "\u25BC",
                         id={'type': 'toggle-card', 'index': card_id},
-                        color="secondary",
+                        color="link",
                         size="sm",
-                        style={'float': 'right'}
+                        style={'float': 'right', 'color': MODERN_COLORS['text'], 'textDecoration': 'none',
+                               'fontSize': '12px', 'padding': '2px 8px', 'opacity': '0.7'}
                     )
-                ])
-            ]),
+                ], style={'display': 'flex', 'justifyContent': 'space-between', 'alignItems': 'center'})
+            ], style={'borderBottom': f'2px solid {MODERN_COLORS["primary"]}'}),
             dbc.Collapse(
                 dbc.CardBody(content),
                 id={'type': 'collapse-card', 'index': card_id},
                 is_open=True
             )
-        ], className="mb-3", style=CARD_STYLE)
+        ], className="mb-3 shadow-sm", style={**CARD_STYLE, 'border': 'none', 'borderRadius': '8px'})
     ], md=md_value)
 
 app.layout = dbc.Container([
-    html.H1("WoTITI Stats", style={'textAlign': 'center', 'color': MODERN_COLORS['text']}),
+    # Modern header with gradient accent
+    html.Div([
+        html.H1("WoTiTi Stats", style={
+            'textAlign': 'center', 'color': MODERN_COLORS['text'],
+            'fontWeight': '300', 'letterSpacing': '2px', 'marginBottom': '5px'
+        }),
+        html.P("Work Time Tracking & Insights Dashboard", style={
+            'textAlign': 'center', 'color': MODERN_COLORS['primary'],
+            'fontSize': '14px', 'marginBottom': '0'
+        }),
+    ], style={'paddingTop': '20px', 'paddingBottom': '10px',
+             'borderBottom': f'2px solid {MODERN_COLORS["primary"]}', 'marginBottom': '20px'}),
     
     # Verzeichnisauswahl
     dbc.Row([
         dbc.Col([
             dbc.Row([
                 dbc.Col([
-                    dbc.Button('Select Directory', id='browse-button', n_clicks=0, color="primary", className="mb-3"),
-                    dbc.Button('Load Example Data', id='example-button', n_clicks=0, color="secondary", className="mb-3", style={'marginLeft': '10px'}),
+                    dbc.ButtonGroup([
+                        dbc.Button('\U0001F4C1 Verzeichnis', id='browse-button', n_clicks=0,
+                                   color="primary", className="mb-3", size="sm"),
+                        dbc.Button('\U0001F4CA Beispieldaten', id='example-button', n_clicks=0,
+                                   color="outline-primary", className="mb-3", size="sm"),
+                        dbc.Button('\U0001F504 Aktualisieren', id='refresh-button', n_clicks=0,
+                                   color="outline-info", className="mb-3", size="sm"),
+                    ]),
                 ], width="auto"),
                 dbc.Col([
                     dbc.Progress(
@@ -187,19 +207,19 @@ app.layout = dbc.Container([
             html.P("Vergleich der Arbeitszeiten zwischen Benutzern und Projekten",
                    style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginBottom': '20px'}),
             dbc.Row([
-                create_card("Hours per Project (Left)", [
+                create_card("Stunden pro Projekt (1)", [
                     dcc.Dropdown(
                         id='left-user-dropdown',
-                        placeholder="Select a user",
+                        placeholder="Benutzer auswählen",
                         style=DROPDOWN_STYLE,
                         className='dropdown-custom'
                     ),
                     dbc.Spinner(dcc.Graph(id='left-pie-chart', style=GRAPH_STYLE), size="sm")
                 ]),
-                create_card("Hours per Project (Right)", [
+                create_card("Stunden pro Projekt (2)", [
                     dcc.Dropdown(
                         id='right-user-dropdown',
-                        placeholder="Select a user",
+                        placeholder="Benutzer auswählen",
                         style=DROPDOWN_STYLE,
                         className='dropdown-custom'
                     ),
@@ -216,7 +236,7 @@ app.layout = dbc.Container([
                    style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginBottom': '20px'}),
             dbc.Row([
                 create_card(
-                    "Total Hours per User",
+                    "Gesamtstunden pro Benutzer",
                     [
                         html.P("Gesamtarbeitszeit pro Benutzer über den gesamten Zeitraum",
                                style={'color': MODERN_COLORS['text']}),
@@ -224,12 +244,30 @@ app.layout = dbc.Container([
                     ]
                 ),
                 create_card(
-                    "Average Hours per User",
+                    "Durchschnittliche Stunden pro Tag",
                     [
                         html.P("Durchschnittliche tägliche Arbeitszeit pro Benutzer",
                                style={'color': MODERN_COLORS['text']}),
                         dbc.Spinner(dcc.Graph(id='average-hours-per-user-chart', style=GRAPH_STYLE), size="sm")
                     ]
+                )
+            ]),
+            dbc.Row([
+                create_card(
+                    "Durchschnitt pro Zeitraum",
+                    [
+                        html.P("Durchschnittliche Arbeitszeit pro benutzerdefiniertem Zeitraum",
+                               style={'color': MODERN_COLORS['text']}),
+                        dbc.InputGroup([
+                            dbc.Input(id='period-days-input', type='number', value=7, min=1, max=365,
+                                      style={'backgroundColor': MODERN_COLORS['secondary'], 'color': MODERN_COLORS['text'],
+                                             'border': f'1px solid {MODERN_COLORS["primary"]}'}),
+                            dbc.InputGroupText("Tage"),
+                            dbc.Button("Berechnen", id='update-period-button', n_clicks=0, color="primary", size="sm"),
+                        ], className="mb-3"),
+                        dbc.Spinner(dcc.Graph(id='average-hours-per-period-chart', style=GRAPH_STYLE), size="sm")
+                    ],
+                    md_value=12
                 )
             ]),
         ], label="Grundlagen"),
@@ -240,7 +278,7 @@ app.layout = dbc.Container([
                    style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginBottom': '20px'}),
             dbc.Row([
                 create_card(
-                    "Project Time Statistics",
+                    "Projektzeit-Statistiken",
                     [
                         html.P("Durchschnittliche, minimale und maximale Arbeitsdauer pro Projekt",
                                style={'color': MODERN_COLORS['text']}),
@@ -251,7 +289,7 @@ app.layout = dbc.Container([
             ]),
             dbc.Row([
                 create_card(
-                    "Daily Project Hours",
+                    "Tägliche Projektstunden",
                     [
                         html.P("Tägliche Arbeitszeit aufgeschlüsselt nach Projekten",
                                style={'color': MODERN_COLORS['text']}),
@@ -259,7 +297,7 @@ app.layout = dbc.Container([
                     ]
                 ),
                 create_card(
-                    "Project Switches",
+                    "Projektwechsel",
                     [
                         html.P("Analyse der Projektwechsel und Pausen zwischen Projekten",
                                style={'color': MODERN_COLORS['text']}),
@@ -273,7 +311,7 @@ app.layout = dbc.Container([
                    style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginBottom': '20px'}),
             dbc.Row([
                 create_card(
-                    "Daily Work Patterns",
+                    "Arbeitsmuster",
                     [
                         html.P("Tageszeitliche Arbeitsmuster: Frühe Starter (vor 8 Uhr), Kernzeitarbeiter (9-17 Uhr), Spätarbeiter (nach 17 Uhr)",
                                style={'color': MODERN_COLORS['text']}),
@@ -281,7 +319,7 @@ app.layout = dbc.Container([
                             dbc.Col([
                                 dcc.Dropdown(
                                     id='pattern-user-dropdown',
-                                    placeholder="Select users to compare",
+                                    placeholder="Benutzer zum Vergleich auswählen",
                                     multi=True,
                                     style=DROPDOWN_STYLE,
                                     className='dropdown-custom'
@@ -299,13 +337,13 @@ app.layout = dbc.Container([
             ]),
         ], label="Projekte & Muster"),
         dbc.Tab([
-            html.H2("Zeitanalyse",
+            html.H2("Zeitreihen & Trends",
                     style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginTop': '30px'}),
             html.P("Analyse der Arbeitszeiten über verschiedene Zeiträume",
                    style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginBottom': '20px'}),
             dbc.Row([
                 create_card(
-                    "Daily Working Hours Trend",
+                    "Täglicher Arbeitsstunden-Trend",
                     dbc.Spinner(dcc.Graph(
                         id='daily-trend-chart',
                         style=GRAPH_STYLE,
@@ -316,7 +354,7 @@ app.layout = dbc.Container([
             ]),
             dbc.Row([
                 create_card(
-                    "Weekly Average Hours",
+                    "Wöchentliche Durchschnittsstunden",
                     dbc.Spinner(dcc.Graph(
                         id='weekly-trend-chart',
                         style=GRAPH_STYLE,
@@ -324,7 +362,7 @@ app.layout = dbc.Container([
                     ), size="sm")
                 ),
                 create_card(
-                    "Weekday Patterns",
+                    "Wochentags-Muster",
                     dbc.Spinner(dcc.Graph(
                         id='weekday-pattern-chart',
                         style=GRAPH_STYLE,
@@ -334,11 +372,11 @@ app.layout = dbc.Container([
             ]),
         ], label="Zeitreihen"),
         dbc.Tab([
-            html.H2("Advanced Analytics",
+            html.H2("Erweiterte Analysen",
                     style={'textAlign': 'center', 'color': MODERN_COLORS['text'], 'marginTop': '30px'}),
             dbc.Row([
                 create_card(
-                    "User Clusters Overview",
+                    "Benutzer-Cluster Übersicht",
                     dbc.Spinner(dcc.Graph(
                         id='cluster-overview-chart',
                         style=GRAPH_STYLE,
@@ -346,7 +384,7 @@ app.layout = dbc.Container([
                     ), size="sm")
                 ),
                 create_card(
-                    "Cluster Profiles",
+                    "Cluster-Profile",
                     dbc.Spinner(dcc.Graph(
                         id='cluster-profile-chart',
                         style=GRAPH_STYLE,
@@ -356,7 +394,7 @@ app.layout = dbc.Container([
             ]),
             dbc.Row([
                 create_card(
-                    "Duration Predictors",
+                    "Dauer-Prädiktoren",
                     dbc.Spinner(dcc.Graph(
                         id='regression-importance-chart',
                         style=GRAPH_STYLE,
@@ -364,7 +402,7 @@ app.layout = dbc.Container([
                     ), size="sm")
                 ),
                 create_card(
-                    "Prediction Accuracy",
+                    "Vorhersagegenauigkeit",
                     dbc.Spinner(dcc.Graph(
                         id='regression-accuracy-chart',
                         style=GRAPH_STYLE,
@@ -374,7 +412,7 @@ app.layout = dbc.Container([
             ]),
             dbc.Row([
                 create_card(
-                    "User Differences",
+                    "Benutzer-Unterschiede",
                     dbc.Spinner(dcc.Graph(
                         id='anova-user-chart',
                         style=GRAPH_STYLE,
@@ -382,7 +420,7 @@ app.layout = dbc.Container([
                     ), size="sm")
                 ),
                 create_card(
-                    "Project Differences",
+                    "Projekt-Unterschiede",
                     dbc.Spinner(dcc.Graph(
                         id='anova-project-chart',
                         style=GRAPH_STYLE,
@@ -392,7 +430,8 @@ app.layout = dbc.Container([
             ]),
         ], label="Erweitert"),
     ], className="mt-4")
-], fluid=True, style={'backgroundColor': MODERN_COLORS['background'], 'color': MODERN_COLORS['text'], 'padding': '20px'})
+], fluid=True, style={'backgroundColor': MODERN_COLORS['background'], 'color': MODERN_COLORS['text'],
+                       'padding': '20px 30px', 'minHeight': '100vh'})
 
 def _load_dashboard_data(db_path, param_path, label, params_required=True):
     def update_progress(value, text, animated=True, striped=True):
@@ -433,9 +472,10 @@ def _load_dashboard_data(db_path, param_path, label, params_required=True):
      Output('right-user-dropdown', 'value')],
     [Input('browse-button', 'n_clicks'),
      Input('example-button', 'n_clicks'),
+     Input('refresh-button', 'n_clicks'),
      Input('appdb-autoload', 'n_intervals')]
 )
-def update_paths(browse_clicks, example_clicks, autoload_intervals):
+def update_paths(browse_clicks, example_clicks, refresh_clicks, autoload_intervals):
     """Updates database and parameter paths based on selected source."""
     ctx = dash.callback_context
     if not ctx.triggered:
@@ -443,9 +483,10 @@ def update_paths(browse_clicks, example_clicks, autoload_intervals):
 
     trigger_id = ctx.triggered[0]["prop_id"].split(".")[0]
 
-    if trigger_id == "appdb-autoload":
+    if trigger_id in ("appdb-autoload", "refresh-button"):
         db_path = get_app_database_path(PATH_TO_DATA)
         label = "app_database.db"
+        force = trigger_id == "refresh-button"
         if db_path:
             preview = read_database(db_path)
             if preview.is_empty():
@@ -511,13 +552,13 @@ def update_parameters_table(param_path):
                 # Kompakter Header mit Dropdown für Details
                 dbc.Row([
                     dbc.Col([
-                        html.H4("Run Parameters", style={
+                        html.H4("Generierungsparameter", style={
                             'color': MODERN_COLORS['text'],
                             'margin': '5px 0',
                             'display': 'inline-block'
                         }),
                         dbc.Button(
-                            "Toggle Details",
+                            "Details ein/ausblenden",
                             id="toggle-params",
                             color="secondary",
                             size="sm",
@@ -669,8 +710,8 @@ def update_average_hours_per_period_chart(db_path, n_clicks, period_days):
     try:
         period_days = int(period_days)
         if period_days <= 0:
-            return go.Figure(layout=go.Layout(title=f'Invalid period: Please enter a value greater than 0',
-                                  xaxis_title='User', yaxis_title='Average Hours',
+            return go.Figure(layout=go.Layout(title='Ungültiger Zeitraum: Bitte einen Wert größer als 0 eingeben',
+                                  xaxis_title='Benutzer', yaxis_title='Durchschn. Stunden',
                                   plot_bgcolor=MODERN_COLORS['background'], paper_bgcolor=MODERN_COLORS['background'], font_color=MODERN_COLORS['text']))
         if db_path:
             data = get_cached_data(db_path)
@@ -681,8 +722,8 @@ def update_average_hours_per_period_chart(db_path, n_clicks, period_days):
         else:
             return go.Figure(layout=go.Layout(plot_bgcolor=MODERN_COLORS['background'], paper_bgcolor=MODERN_COLORS['background']))
     except ValueError:
-        return go.Figure(layout=go.Layout(title=f'Invalid period: Please enter a valid number',
-                              xaxis_title='User', yaxis_title='Average Hours',
+        return go.Figure(layout=go.Layout(title='Ungültiger Zeitraum: Bitte eine gültige Zahl eingeben',
+                              xaxis_title='Benutzer', yaxis_title='Durchschn. Stunden',
                               plot_bgcolor=MODERN_COLORS['background'], paper_bgcolor=MODERN_COLORS['background'], font_color=MODERN_COLORS['text']))
 
 # Callback für alle Card-Toggles

@@ -22,6 +22,38 @@ PATH_TO_DATA = os.path.join(BASE_DIR, "data")
 PATH_TO_DASHBOARD_DATA = PATH_TO_DATA
 DATABASE_PATH = os.path.join(PATH_TO_DATA, "app_database.db")
 GENERATE_DATABASE_PATH = os.path.join(PATH_TO_DATA, "generate_database.db")
+CONFIG_PATH = os.path.join(PATH_TO_DATA, "config.json")
+
+DEFAULT_CONFIG = {
+    "database_path": DATABASE_PATH,
+    "default_user": "Hans",
+    "default_project": "1",
+    "dashboard_port": 8052,
+    "theme": "Modern",
+}
+
+
+def load_config():
+    """Lädt die Konfiguration aus config.json oder gibt Defaults zurück."""
+    os.makedirs(PATH_TO_DATA, exist_ok=True)
+    if os.path.isfile(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            # Fehlende Schlüssel mit Defaults auffüllen
+            for key, value in DEFAULT_CONFIG.items():
+                cfg.setdefault(key, value)
+            return cfg
+        except (json.JSONDecodeError, OSError):
+            pass
+    return dict(DEFAULT_CONFIG)
+
+
+def save_config(config):
+    """Speichert die Konfiguration in config.json."""
+    os.makedirs(PATH_TO_DATA, exist_ok=True)
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=4, ensure_ascii=False)
 
 
 

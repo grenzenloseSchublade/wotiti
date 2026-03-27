@@ -1,14 +1,158 @@
-/* assets/style.css */
-.Select-menu-outer {
+/* assets/style.css — WoTiTi Dashboard Dark Theme */
+
+/* ── Dropdown styling ── */
+.Select-menu-outer,
+.dash-dropdown .Select-menu-outer {
+    background-color: #44475a !important;
+    color: #f8f8f2 !important;
+    border: 1px solid #6272a4 !important;
+    border-radius: 4px !important;
+}
+
+.Select-option,
+.dash-dropdown .Select-option,
+.VirtualizedSelectOption {
     background-color: #44475a !important;
     color: #f8f8f2 !important;
 }
 
-.Select-option {
-    background-color: #44475a !important;
-    color: #f8f8f2 !important;
-}
-
-.Select-option:hover {
+.Select-option:hover,
+.dash-dropdown .Select-option:hover,
+.VirtualizedSelectOption:hover {
     background-color: #6272a4 !important;
+}
+
+.Select-control,
+.dash-dropdown .Select-control {
+    background-color: #44475a !important;
+    color: #f8f8f2 !important;
+    border: 1px solid #6272a4 !important;
+    border-radius: 4px !important;
+}
+
+.Select-value-label,
+.Select-placeholder {
+    color: #f8f8f2 !important;
+}
+
+.Select-input > input {
+    color: #f8f8f2 !important;
+}
+
+/* ── Card & container styling ── */
+.card {
+    transition: box-shadow 0.2s ease;
+    border: none !important;
+    border-radius: 8px !important;
+}
+
+.card:hover {
+    box-shadow: 0 4px 15px rgba(98, 114, 164, 0.3) !important;
+}
+
+.card-header {
+    background-color: #44475a !important;
+    border-radius: 8px 8px 0 0 !important;
+}
+
+.card-body {
+    background-color: #383a59 !important;
+    border-radius: 0 0 8px 8px !important;
+}
+
+/* ── Tab styling ── */
+.nav-tabs .nav-link {
+    color: #6272a4 !important;
+    border: none !important;
+    border-bottom: 2px solid transparent !important;
+    padding: 10px 20px !important;
+    font-weight: 500 !important;
+    transition: all 0.2s ease !important;
+}
+
+.nav-tabs .nav-link:hover {
+    color: #8be9fd !important;
+    border-bottom: 2px solid #8be9fd !important;
+}
+
+.nav-tabs .nav-link.active {
+    color: #f8f8f2 !important;
+    background-color: transparent !important;
+    border-bottom: 2px solid #8be9fd !important;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #282a36;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #6272a4;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #8be9fd;
+}
+
+/* ── Input fields ── */
+.form-control {
+    background-color: #44475a !important;
+    color: #f8f8f2 !important;
+    border: 1px solid #6272a4 !important;
+}
+
+.form-control:focus {
+    box-shadow: 0 0 0 0.2rem rgba(139, 233, 253, 0.25) !important;
+    border-color: #8be9fd !important;
+}
+
+.input-group-text {
+    background-color: #6272a4 !important;
+    color: #f8f8f2 !important;
+    border: 1px solid #6272a4 !important;
+}
+
+/* ── Progress bar ── */
+.progress {
+    border-radius: 6px !important;
+    overflow: hidden;
+}
+
+/* ── Badge ── */
+.badge {
+    font-weight: 400 !important;
+    letter-spacing: 0.5px;
+}
+
+/* ── Button group spacing ── */
+.btn-group .btn {
+    border-radius: 4px !important;
+    margin-right: 4px !important;
+}
+
+/* ── Section headers ── */
+h2 {
+    font-weight: 300 !important;
+    letter-spacing: 1px !important;
+}
+
+/* ── Spinner ── */
+.spinner-border {
+    color: #8be9fd !important;
+}
+
+/* ── Plotly modebar (chart toolbar) ── */ 
+.modebar {
+    opacity: 0.4 !important;
+    transition: opacity 0.2s ease !important;
+}
+
+.modebar:hover {
+    opacity: 1 !important;
 }
