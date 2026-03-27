@@ -10,7 +10,7 @@ Write-Host "Syncing dependencies (stats + dev)..."
 uv sync --extra stats --extra dev
 
 Write-Host "Building onedir executable..."
-pyinstaller --noconsole --onedir --name wotiti src/main.py --add-data "src/assets;assets"
+uv run pyinstaller --noconsole --onedir --name wotiti --hidden-import=tkinter.filedialog --collect-submodules sklearn --collect-submodules scipy --add-data "src/assets;assets" src/main.py
 
 Write-Host "Placing data/ next to EXE..."
 $distDir = Join-Path $RepoRoot "dist\wotiti"

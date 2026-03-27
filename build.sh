@@ -12,8 +12,11 @@ uv run pyinstaller \
     --noconsole \
     --onedir \
     --name wotiti \
-    src/main.py \
-    --add-data "src/assets:assets"
+    --hidden-import=tkinter.filedialog \
+    --collect-submodules sklearn \
+    --collect-submodules scipy \
+    --add-data "src/assets:assets" \
+    src/main.py
 
 DIST_DIR="$REPO_ROOT/dist/wotiti"
 
