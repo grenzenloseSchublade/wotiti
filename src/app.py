@@ -209,6 +209,11 @@ class App:
             bg='#D4D0C8', fg='black', font=('MS Sans Serif', 8), relief='raised', borderwidth=1
         )
         self.clear_button.pack(side='right', padx=2, pady=1)
+        self.copy_console_button = Button(
+            self.console_toolbar, text="Copy", command=self._copy_console,
+            bg='#D4D0C8', fg='black', font=('MS Sans Serif', 8), relief='raised', borderwidth=1
+        )
+        self.copy_console_button.pack(side='right', padx=2, pady=1)
 
         self.console = Text(self.console_frame, wrap='word', state='disabled', height=8, bg='black', fg='white', font=('Courier', 10))
         self.console.grid(row=1, column=0, sticky="nsew")
@@ -533,6 +538,8 @@ class App:
             open(log_path, 'w').close() if os.path.isfile(log_path) else None,
             _load_log()
         ), **btn).pack(side='left', padx=(8, 0))
+        Button(log_btn_frame, text="Copy", command=lambda: self._copy_text_widget(log_text),
+               **btn).pack(side='left', padx=(8, 0))
 
         _load_log()
 
@@ -671,6 +678,16 @@ class App:
         self.console.configure(state='normal')
         self.console.delete(1.0, END)
         self.console.configure(state='disabled')
+
+    def _copy_text_widget(self, text_widget):
+        """Copies the full content of a Text widget to the system clipboard."""
+        content = text_widget.get("1.0", END).strip()
+        self.master.clipboard_clear()
+        self.master.clipboard_append(content)
+
+    def _copy_console(self):
+        """Copies the main console content to the clipboard."""
+        self._copy_text_widget(self.console)
 
     def _fallback_write(self, message, error=False):
         """Writes to real stdout/stderr when GUI is unavailable."""
