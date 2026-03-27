@@ -428,7 +428,10 @@ def perform_cluster_analysis(data):
         inertias.append(kmeans.inertia_)
     
     # Optimales k durch Ellenbogenmethode
-    optimal_k = k_range[np.argmin(np.diff(inertias)) + 1]
+    if len(inertias) < 2:
+        optimal_k = k_range[0] if k_range else 2
+    else:
+        optimal_k = k_range[np.argmin(np.diff(inertias)) + 1]
     
     # Finales Clustering
     kmeans = KMeans(n_clusters=optimal_k, random_state=42)

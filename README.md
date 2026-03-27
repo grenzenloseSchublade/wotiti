@@ -4,15 +4,34 @@ WoTiTi ist ein umfassendes Zeiterfassungssystem, bestehend aus zwei Hauptkompone
 1. **Work Time Timer**: Eine benutzerfreundliche GUI-Anwendung zur Zeiterfassung
 2. **Work Time Insights**: Ein fortgeschrittenes Analyse-Dashboard für Zeitdaten
 
+## ⚡ TL;DR
+
+> **Was?** Desktop-App (tkinter) zum Tracken von Arbeitszeiten pro Benutzer und Projekt, mit integriertem Analytics-Dashboard (Dash/Plotly).
+>
+> **Schnellstart:**
+> ```bash
+> pip install uv && uv sync && uv run python src/main.py
+> ```
+>
+> **Kernfunktionen:**
+> - ▶ Start / ■ Stop pro Benutzer & Projekt mit Echtzeit-Timer
+> - Benutzerverwaltung (Dropdown-Auswahl, eigenes Verwaltungsfenster)
+> - Projektverwaltung (Combobox mit bestehenden Projekten)
+> - Integriertes Analytics-Dashboard mit Cluster-Analyse, Regression, ANOVA
+> - SQLite-Datenbank, keine externe Infrastruktur nötig
+> - Standalone-EXE via PyInstaller (`bash build.sh` / `build_windows.ps1`)
+
 ## 🎯 Systemübersicht
 
 ### Work Time Timer (GUI)
 - Start/Stop-Funktionalität für Arbeitssitzungen
-- Mehrbenutzer-Unterstützung
-- Projektbasierte Zeiterfassung
-- SQLite-Datenbankintegration
+- Mehrbenutzer-Unterstützung mit Dropdown-Auswahl
+- Projektbasierte Zeiterfassung mit Combobox
+- Benutzerverwaltung (eigenes Fenster zum Anlegen/Auswählen)
+- SQLite-Datenbankintegration (users, projects, events)
 - Echtzeit-Timer-Anzeige
-- Nachträgliche Zeitkorrekturen
+- Session-Schutz bei App-Schließen
+- Eingabevalidierung (Datumsformat DD-MM-YYYY)
 
 ### Work Time Insights (Dashboard)
 - Interaktive Datenvisualisierung
@@ -26,20 +45,24 @@ WoTiTi ist ein umfassendes Zeiterfassungssystem, bestehend aus zwei Hauptkompone
 ```
 wotiti/
 ├── src/
-│   ├── main.py              # GUI-Hauptanwendung
-│   ├── app.py               # GUI-Implementation
-│   ├── db_helper.py         # Datenbankoperationen
-│   ├── stats_dashboard.py   # Analyse-Dashboard
+│   ├── main.py              # Einstiegspunkt (GUI + Dashboard-Start)
+│   ├── app.py               # GUI-Implementation (tkinter)
+│   ├── db_helper.py         # Datenbankoperationen (SQLite)
+│   ├── stats_dashboard.py   # Analyse-Dashboard (Dash)
 │   ├── stats_calculations.py # Statistische Berechnungen
-│   ├── stats_plotting.py    # Visualisierungsfunktionen
+│   ├── stats_plotting.py    # Visualisierungsfunktionen (Plotly)
 │   ├── stats_generator.py   # Testdatengenerierung
-│   └── utils.py             # Hilfsfunktionen
-├── data/                    # Datenspeicherung
-├── tests/                   # Testdateien
+│   ├── utils.py             # Hilfsfunktionen & Konfiguration
+│   └── assets/
+│       └── style.css        # Dashboard-Styles
+├── data/                    # Datenspeicherung (SQLite DBs, gitignored)
+├── tests/
 │   ├── test_app.py         # GUI-Tests
 │   └── test_db_helper.py   # Datenbank-Tests
+├── build.sh                # Linux/macOS Build-Skript
+├── build_windows.ps1       # Windows Build-Skript
 ├── pyproject.toml          # uv/pyproject-Konfiguration
-└── README.md              # Dokumentation
+└── README.md
 ```
 
 ## 🚀 Installation & Setup
@@ -78,11 +101,14 @@ uv run python src/stats_generator.py
 ## 🔧 Funktionen im Detail
 
 ### Timer-GUI Komponenten
-- **Start/Stop-Buttons**: Sitzungssteuerung
-- **Projekt-Auswahl**: Zuordnung von Zeiten
-- **Benutzer-Management**: Mehrbenutzer-Unterstützung
-- **Datum-Setter**: Schnelle Datumseinstellung
+- **Start/Stop-Buttons**: Prominente Sitzungssteuerung (▶/■)
+- **Benutzer-Auswahl**: Combobox mit Dropdown aller bestehenden Benutzer
+- **Projekt-Auswahl**: Combobox mit bestehenden Projekten
+- **Benutzerverwaltung**: Eigenes Fenster zum Anlegen/Auswählen von Benutzern
+- **Datum-Setter**: Schnelle Datumseinstellung mit Validierung (DD-MM-YYYY)
+- **Gesamtzeit**: Zeigt die kumulierte Arbeitszeit pro Benutzer/Projekt
 - **Konsole**: Statusmeldungen und Fehler
+- **Session-Schutz**: Warnung bei App-Schließen mit aktiver Session
 
 ### Analytics-Dashboard Features
 - **Echtzeit-Visualisierungen** der Arbeitszeiten
@@ -113,23 +139,25 @@ uv run python src/stats_generator.py
 
 ## 🛠️ Build-Optionen
 
-### uv Build (empfohlen)
+### Linux / macOS
 ```bash
-uv run pyinstaller --onefile --windowed src/main.py
+./build.sh
 ```
 
-### Debian 11 Build (GLIBC 2.31)
-```bash
-pip install pyinstaller==6.12
-pyinstaller --windowed --onefile src/main.py
+### Windows (PowerShell)
+```powershell
+.\build_windows.ps1
 ```
+
+Beide Skripte erzeugen ein ausführbares Verzeichnis unter `dist/wotiti/` via PyInstaller (`--onedir`).
 
 ## 📚 Dependencies
-- **GUI**: tkinter
-- **Dashboard**: dash, plotly
-- **Datenverarbeitung**: pandas, numpy
-- **Analysen**: scikit-learn, scipy
-- **Datenbank**: sqlite3
+- **GUI**: tkinter (Standardbibliothek)
+- **Datenverarbeitung**: polars
+- **Dashboard** (optional): dash, plotly, dash-bootstrap-components
+- **Analysen** (optional): scikit-learn, scipy, statsmodels
+- **Datenbank**: sqlite3 (Standardbibliothek)
+- **Build** (optional): pyinstaller
 
 ## 🔍 Testdatengenerierung
 
@@ -148,16 +176,15 @@ user_1  projekt_3   stop       01-01-2023 10:30:00 01-01-2023
 
 ## 🐛 Bekannte Probleme
 - Timestamp-Konvertierung bei ungewöhnlichen Formaten
-- CPU-Last bei komplexen Analysen
-- Async-Timer-Implementierung ausstehend
+- CPU-Last bei komplexen Dashboard-Analysen
 
 ## 🔜 Geplante Features
+- [ ] QT-Migration (geplant für späteres Release)
 - [ ] Export-Funktionen für Analysen
-- [ ] Erweiterte Benutzerrollen
+- [ ] Nachträgliche Zeitkorrekturen
 - [ ] API-Schnittstelle
 - [ ] Docker-Container
 - [ ] Automatische Backups
-- [ ] Nachträgliche Zeitkorrekturen
 - [ ] Performance-Optimierungen
 
 ## 🤝 Beitragen

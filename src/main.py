@@ -6,6 +6,17 @@ import os
 import threading
 import sys
 import socket
+import logging
+
+# Centralized logging configuration
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s - %(name)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    stream=sys.__stdout__  # Always write to real stdout, not the GUI-redirected one
+)
+# Suppress noisy debug output from internal modules
+logging.getLogger('db_helper').setLevel(logging.WARNING)
 
 
 def _find_available_port(start_port):

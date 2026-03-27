@@ -21,14 +21,12 @@ def app_instance():
 
 def test_start_session(app_instance):
     """Test starting a session."""
-    app_instance.name_entry.delete(0, END)
-    app_instance.name_entry.insert(0, "test_user")
-    app_instance.project_entry.delete(0, END)
-    app_instance.project_entry.insert(0, "1")
+    app_instance.name_entry.set("test_user")
+    app_instance.project_entry.set("1")
     app_instance.date_entry.delete(0, END)
-    app_instance.date_entry.insert(0, "1991-01-01")
+    app_instance.date_entry.insert(0, "01-01-1991")
     app_instance.start_session()
-    assert app_instance.session_active.get(("test_user", 1), True) is True
+    assert app_instance.session_active.get(("test_user", "1"), False) is True
 
 def test_set_today_date(app_instance):
     """Test setting today's date."""
@@ -57,74 +55,63 @@ def test_update_timer_with_duration(app_instance):
 
 def test_start_session_invalid_project(app_instance):
     """Test starting a session with an invalid project ID."""
-    app_instance.name_entry.delete(0, END)
-    app_instance.name_entry.insert(0, "test_user")
-    app_instance.project_entry.delete(0, END)
-    app_instance.project_entry.insert(0, "invalid")
+    app_instance.name_entry.set("test_user")
+    app_instance.project_entry.set("invalid")
     app_instance.date_entry.delete(0, END)
-    app_instance.date_entry.insert(0, "1991-01-01")
+    app_instance.date_entry.insert(0, "01-01-1991")
     app_instance.start_session()
-    assert app_instance.session_active.get(("test_user", None)) is None
+    # "invalid" is still a valid project string, session should start
+    assert app_instance.session_active.get(("test_user", "invalid"), False) is True
 
 def test_start_session_no_name(app_instance):
     """Test starting a session without a name."""
-    app_instance.name_entry.delete(0, END)
-    app_instance.project_entry.delete(0, END)
-    app_instance.project_entry.insert(0, "1")
+    app_instance.name_entry.set("")
+    app_instance.project_entry.set("1")
     app_instance.date_entry.delete(0, END)
-    app_instance.date_entry.insert(0, "1991-01-01")
+    app_instance.date_entry.insert(0, "01-01-1991")
     app_instance.start_session()
-    assert app_instance.session_active.get(("", 1)) is None
+    assert app_instance.session_active.get(("", "1")) is None
 
 def test_start_session_no_date(app_instance):
     """Test starting a session without a date."""
-    app_instance.name_entry.delete(0, END)
-    app_instance.name_entry.insert(0, "test_user")
-    app_instance.project_entry.delete(0, END)
-    app_instance.project_entry.insert(0, "1")
+    app_instance.name_entry.set("test_user")
+    app_instance.project_entry.set("1")
     app_instance.date_entry.delete(0, END)
     app_instance.start_session()
-    assert app_instance.session_active.get(("test_user", 1)) is None
+    assert app_instance.session_active.get(("test_user", "1")) is None
 
 def test_stop_session_invalid_project(app_instance):
     """Test stopping a session with an invalid project ID."""
-    app_instance.name_entry.delete(0, END)
-    app_instance.name_entry.insert(0, "test_user")
-    app_instance.project_entry.delete(0, END)
-    app_instance.project_entry.insert(0, "invalid")
+    app_instance.name_entry.set("test_user")
+    app_instance.project_entry.set("invalid")
     app_instance.date_entry.delete(0, END)
-    app_instance.date_entry.insert(0, "1991-01-01")
+    app_instance.date_entry.insert(0, "01-01-1991")
     app_instance.stop_session()
-    assert app_instance.session_active.get(("test_user", None)) is None
+    assert app_instance.session_active.get(("test_user", "invalid")) is None
 
 def test_stop_session_no_name(app_instance):
     """Test stopping a session without a name."""
-    app_instance.name_entry.delete(0, END)
-    app_instance.project_entry.delete(0, END)
-    app_instance.project_entry.insert(0, "1")
+    app_instance.name_entry.set("")
+    app_instance.project_entry.set("1")
     app_instance.date_entry.delete(0, END)
-    app_instance.date_entry.insert(0, "1991-01-01")
+    app_instance.date_entry.insert(0, "01-01-1991")
     app_instance.stop_session()
-    assert app_instance.session_active.get(("", 1)) is None
+    assert app_instance.session_active.get(("", "1")) is None
 
 def test_stop_session_no_date(app_instance):
     """Test stopping a session without a date."""
-    app_instance.name_entry.delete(0, END)
-    app_instance.name_entry.insert(0, "test_user")
-    app_instance.project_entry.delete(0, END)
-    app_instance.project_entry.insert(0, "1")
+    app_instance.name_entry.set("test_user")
+    app_instance.project_entry.set("1")
     app_instance.date_entry.delete(0, END)
     app_instance.stop_session()
-    assert app_instance.session_active.get(("test_user", 1)) is None
+    assert app_instance.session_active.get(("test_user", "1")) is None
 
 def test_start_session_already_active(app_instance):
     """Test starting a session when one is already active."""
-    app_instance.name_entry.delete(0, END)
-    app_instance.name_entry.insert(0, "test_user")
-    app_instance.project_entry.delete(0, END)
-    app_instance.project_entry.insert(0, "1")
+    app_instance.name_entry.set("test_user")
+    app_instance.project_entry.set("1")
     app_instance.date_entry.delete(0, END)
-    app_instance.date_entry.insert(0, "1991-01-01")
+    app_instance.date_entry.insert(0, "01-01-1991")
     app_instance.start_session()
     app_instance.start_session()
     assert "Session already started" in app_instance.console.get("1.0", END)
@@ -152,21 +139,25 @@ def test_clear_console(app_instance):
 
 def test_get_project(app_instance):
     """Test getting the project ID."""
-    app_instance.project_entry.delete(0, END)
-    app_instance.project_entry.insert(0, "1")
+    app_instance.project_entry.set("1")
     assert app_instance.get_project() == "1"
 
 def test_get_name(app_instance):
     """Test getting the user name."""
-    app_instance.name_entry.delete(0, END)
-    app_instance.name_entry.insert(0, "test_user")
+    app_instance.name_entry.set("test_user")
     assert app_instance.get_name() == "test_user"
 
 def test_get_date(app_instance):
     """Test getting the date."""
     app_instance.date_entry.delete(0, END)
+    app_instance.date_entry.insert(0, "01-01-1991")
+    assert app_instance.get_date() == "01-01-1991"
+
+def test_get_date_invalid_format(app_instance):
+    """Test getting the date with invalid format."""
+    app_instance.date_entry.delete(0, END)
     app_instance.date_entry.insert(0, "01.01.1991")
-    assert app_instance.get_date() == "01.01.1991"
+    assert app_instance.get_date() is None
 
 def test_write_to_console(app_instance):
     """Test writing to the console."""
@@ -177,22 +168,18 @@ def test_write_to_console(app_instance):
 def test_start_session_without_db_connection(app_instance):
     """Test starting a session without a database connection."""
     app_instance.db_conn = None
-    app_instance.name_entry.delete(0, END)
-    app_instance.name_entry.insert(0, "test_user")
-    app_instance.project_entry.delete(0, END)
-    app_instance.project_entry.insert(0, "1")
+    app_instance.name_entry.set("test_user")
+    app_instance.project_entry.set("1")
     app_instance.start_session()
-    assert app_instance.session_active.get(("test_user", 1)) is None
+    assert app_instance.session_active.get(("test_user", "1")) is None
 
 def test_stop_session_without_db_connection(app_instance):
     """Test stopping a session without a database connection."""
     app_instance.db_conn = None
-    app_instance.name_entry.delete(0, END)
-    app_instance.name_entry.insert(0, "test_user")
-    app_instance.project_entry.delete(0, END)
-    app_instance.project_entry.insert(0, "1")
+    app_instance.name_entry.set("test_user")
+    app_instance.project_entry.set("1")
     app_instance.stop_session()
-    assert app_instance.session_active.get(("test_user", 1)) is None
+    assert app_instance.session_active.get(("test_user", "1")) is None
 
 def test_clear_console_with_no_text(app_instance):
     """Test clearing the console when there is no text."""

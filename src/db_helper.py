@@ -1,10 +1,13 @@
 from datetime import datetime
+import logging
 import os
 import re
 import sqlite3
 from sqlite3 import Error
 from utils import DATABASE_PATH, PATH_TO_DATA
 import polars as pl
+
+logger = logging.getLogger(__name__)
 
 # Konstanten für Datumsformate
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -16,19 +19,19 @@ def create_connection(db_file=DATABASE_PATH):
         directory = os.path.dirname(db_file)
         if not os.path.exists(directory):
             os.makedirs(directory)
-            print(f"Directory '{directory}' created.")
+            logger.debug("Directory '%s' created.", directory)
 
         conn = sqlite3.connect(db_file)
-        print("Database connection created successfully.")
+        logger.debug("Database connection created successfully.")
         return conn
     except Error as e:
-        print(f"Error creating database connection: {e}")
+        logger.error("Error creating database connection: %s", e)
         return None
 
 def execute_sql(conn, sql_statement, params=None):
     """Execute SQL statement with error handling."""
     if conn is None:
-        print("Error: No database connection.")
+        logger.error("No database connection.")
         return False
     
     try:
@@ -40,7 +43,7 @@ def execute_sql(conn, sql_statement, params=None):
         conn.commit()
         return True
     except Error as e:
-        print(f"Error executing SQL: {e}")
+        logger.error("Error executing SQL: %s", e)
         return False
     finally:
         cursor.close()
@@ -55,8 +58,9 @@ def create_main_table(conn):
     '''
     success = execute_sql(conn, sql_create_main_table)
     if success:
-        print("Main table created successfully.")
+        logger.debug("Main table created successfully.")
         create_events_table(conn)
+        create_projects_table(conn)
     return success
 
 def create_events_table(conn):
@@ -78,21 +82,16 @@ def create_events_table(conn):
         execute_sql(conn, "CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);")
     return success
 
-def create_user_table(conn, name):
-    """Create a subtable for a user in the SQLite database."""
-    sql_create_user_table = f'''
-        CREATE TABLE IF NOT EXISTS {name}_events (
+def create_projects_table(conn):
+    """Create the projects table in the SQLite database."""
+    sql_create_projects_table = '''
+        CREATE TABLE IF NOT EXISTS projects (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            project TEXT NOT NULL,
-            event_type TEXT CHECK(event_type IN ('start', 'stop')),
-            timestamp DATETIME NOT NULL,
-            date TEXT NOT NULL
+            name TEXT UNIQUE NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
     '''
-    success = execute_sql(conn, sql_create_user_table)
-    if success:
-        print(f"Table for user '{name}' created successfully.")
-    return success
+    return execute_sql(conn, sql_create_projects_table)
 
 def migrate_legacy_user_tables(conn):
     """Migrate legacy {name}_events tables into the centralized events table."""
@@ -143,45 +142,108 @@ def migrate_legacy_user_tables(conn):
         conn.commit()
         return True
     except Error as e:
-        print(f"Error migrating legacy tables: {e}")
+        logger.error("Error migrating legacy tables: %s", e)
         return False
     finally:
         cursor.close()
 
 def check_user(conn, name):
-    """Insert a new user into the main table if not already exists."""
+    """Insert a new user into the main table if not already exists. Returns user_id."""
     if not name or not conn:
-        print("Error: Invalid user name or connection.")
+        logger.debug("Invalid user name or connection.")
         return None
 
     try:
         cur = conn.cursor()
-        # Prüfe ob Benutzer existiert
         cur.execute('SELECT id FROM users WHERE name = ?', (name,))
         user = cur.fetchone()
         
         if user is None:
-            # Füge neuen Benutzer hinzu
             cur.execute('INSERT INTO users(name) VALUES(?)', (name,))
             conn.commit()
             user_id = cur.lastrowid
-            print(f"User '{name}' inserted successfully.")
-            create_events_table(conn)
+            logger.info("User '%s' created.", name)
             return user_id
         
-        print(f"User '{name}' already exists.")
-        create_events_table(conn)
         return user[0]
     except Error as e:
-        print(f"Error checking user: {e}")
+        logger.error("Error checking user: %s", e)
         return None
+    finally:
+        cur.close()
+
+def check_project(conn, name):
+    """Insert a new project if not already exists. Returns project_id."""
+    if not name or not conn:
+        logger.debug("Invalid project name or connection.")
+        return None
+
+    try:
+        cur = conn.cursor()
+        cur.execute('SELECT id FROM projects WHERE name = ?', (name,))
+        project = cur.fetchone()
+        
+        if project is None:
+            cur.execute('INSERT INTO projects(name) VALUES(?)', (name,))
+            conn.commit()
+            project_id = cur.lastrowid
+            logger.info("Project '%s' created.", name)
+            return project_id
+        
+        return project[0]
+    except Error as e:
+        logger.error("Error checking project: %s", e)
+        return None
+    finally:
+        cur.close()
+
+def get_all_users(conn):
+    """Return list of all user names from the database."""
+    if not conn:
+        return []
+    try:
+        cur = conn.cursor()
+        cur.execute('SELECT name FROM users ORDER BY name')
+        return [row[0] for row in cur.fetchall()]
+    except Error:
+        return []
+    finally:
+        cur.close()
+
+def get_all_projects(conn):
+    """Return list of all project names from the projects table."""
+    if not conn:
+        return []
+    try:
+        cur = conn.cursor()
+        cur.execute('SELECT name FROM projects ORDER BY name')
+        return [row[0] for row in cur.fetchall()]
+    except Error:
+        return []
+    finally:
+        cur.close()
+
+def migrate_projects_to_table(conn):
+    """Migrate existing project names from events into the projects table."""
+    if not conn:
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute('SELECT DISTINCT project FROM events')
+        for (name,) in cur.fetchall():
+            if name:
+                check_project(conn, name)
+        return True
+    except Error as e:
+        logger.error("Error migrating projects: %s", e)
+        return False
     finally:
         cur.close()
 
 def log_event(conn, project, name, event_type, timestamp=None, date=None):
     """Log an event (start/stop) for a session."""
     if not all([conn, name, date, event_type in ['start', 'stop']]):
-        print("Error: Missing required parameters.")
+        logger.error("Missing required parameters for log_event.")
         return False
 
     try:
@@ -189,8 +251,9 @@ def log_event(conn, project, name, event_type, timestamp=None, date=None):
         user_id = check_user(conn, name)
         if user_id is None:
             return False
-        if not create_events_table(conn):
-            return False
+
+        # Ensure project exists in projects table
+        check_project(conn, project)
 
         # Format timestamp
         timestamp_str = timestamp.strftime(TIMESTAMP_FORMAT) if timestamp else datetime.now().strftime(TIMESTAMP_FORMAT)
@@ -205,7 +268,7 @@ def log_event(conn, project, name, event_type, timestamp=None, date=None):
         print(f"{event_type.capitalize()} time for project {project} logged for user '{name}' on {date}: {timestamp_str}")
         return True
     except Error as e:
-        print(f"Error logging {event_type} event: {e}")
+        logger.error("Error logging %s event: %s", event_type, e)
         return False
     finally:
         cursor.close()
@@ -224,14 +287,17 @@ def log_stop(project="1", name="Hans", timestamp=None, date=None, conn=None):
 def calculate_duration(project="1", name="Hans", conn=None):
     """Calculate the total duration of a session."""
     if not conn or not name:
-        print("Error: Connection and name are required.")
+        logger.debug("Connection and name are required.")
         return 0
 
     try:
         cursor = conn.cursor()
-        user_id = check_user(conn, name)
-        if user_id is None:
+        # Look up user_id directly to avoid side effects
+        cursor.execute('SELECT id FROM users WHERE name = ?', (name,))
+        row = cursor.fetchone()
+        if row is None:
             return 0
+        user_id = row[0]
         cursor.execute('''
             SELECT event_type, timestamp
             FROM events
@@ -256,7 +322,7 @@ def calculate_duration(project="1", name="Hans", conn=None):
                 
         return total_duration
     except Error as e:
-        print(f"Error calculating duration: {e}")
+        logger.error("Error calculating duration: %s", e)
         return 0
     finally:
         cursor.close()
@@ -280,5 +346,5 @@ def read_database(db_path=PATH_TO_DATA):
             columns = [desc[0] for desc in cursor.description]
             return pl.DataFrame(rows, schema=columns)
     except sqlite3.Error as e:
-        print(f"Error reading database: {e}")
+        logger.error("Error reading database: %s", e)
         return pl.DataFrame()

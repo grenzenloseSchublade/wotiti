@@ -24,6 +24,7 @@ from stats_calculations import (
 from stats_plotting import (
     plot_hours_per_project, 
     plot_total_hours_per_user, 
+    plot_average_hours_per_user,
     plot_average_hours_per_period,
     plot_project_time_stats,
     plot_daily_project_hours,
