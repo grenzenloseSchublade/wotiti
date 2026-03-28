@@ -39,7 +39,9 @@ else:
     _stream_handler.setFormatter(_log_fmt)
     logging.basicConfig(level=logging.INFO, handlers=[_stream_handler, _file_handler])
 # Suppress noisy debug output from internal modules
-logging.getLogger('db_helper').setLevel(logging.WARNING)
+logging.getLogger('db_helper').setLevel(logging.INFO)
+
+logger = logging.getLogger(__name__)
 
 
 def _find_available_port(start_port):
@@ -67,7 +69,7 @@ def main():
         def run_stats():
             nonlocal stats_process
             try:
-                print("Starting the statistics dashboard...")
+                logger.info("Dashboard wird gestartet auf Port %d...", stats_port)
                 if getattr(sys, 'frozen', False):
                     # Frozen EXE: run dashboard in-process (subprocess would re-launch the EXE)
                     from stats_dashboard import app as dash_app
@@ -83,9 +85,9 @@ def main():
                         env=env
                     )
                     stats_process.wait()
-                print("Statistics dashboard started successfully.")
+                logger.info("Dashboard erfolgreich gestartet.")
             except Exception as e:
-                print(f"An unexpected error occurred in statistics dashboard: {e}")
+                logger.error("Fehler im Dashboard: %s", e)
             finally:
                 stats_process = None
 
@@ -96,29 +98,29 @@ def main():
         root.mainloop()  # Start Tkinter main loop
 
     except KeyboardInterrupt:
-        print("KeyboardInterrupt detected. Shutting down...")
+        logger.info("KeyboardInterrupt erkannt. Beende...")
         if root:
             try:
-                root.destroy()  # Properly close the Tkinter window
+                root.destroy()
             except Exception as e:
-                print(f"Error destroying Tkinter root: {e}")
+                logger.error("Fehler beim Beenden: %s", e)
         if stats_process:
-            print("Terminating statistics dashboard...")
+            logger.info("Dashboard wird beendet...")
             try:
                 stats_process.terminate()
-                stats_process.wait(timeout=5)  # Wait for the process to terminate
+                stats_process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                print("Statistics dashboard did not terminate in time. Killing...")
+                logger.warning("Dashboard hat nicht rechtzeitig beendet. Kill...")
                 stats_process.kill()
             except Exception as e:
-                print(f"Error terminating statistics dashboard: {e}")
-        print("Shutdown complete.")
+                logger.error("Fehler beim Beenden des Dashboards: %s", e)
+        logger.info("Shutdown abgeschlossen.")
 
     except Exception as e:
         messagebox.showerror("Error", f"An unexpected error occurred: {e}")
-        print(f"An unexpected error occurred: {e}")
+        logger.error("Unerwarteter Fehler: %s", e)
     finally:
-        print("Exiting main function.")
+        logger.info("main() beendet.")
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()

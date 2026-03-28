@@ -1,3 +1,4 @@
+import logging
 import os
 import socket
 import sqlite3
@@ -48,6 +49,8 @@ from utils import (
     read_database,
     read_parameters,
 )
+
+logger = logging.getLogger(__name__)
 
 # Theme-Farben laden
 _colors, _sequence = get_theme_colors()
@@ -788,7 +791,7 @@ def update_advanced_stats(db_path):
         return stats_fig, daily_fig, switches_fig, users
 
     except Exception as e:
-        print(f"Fehler beim Laden der erweiterten Statistiken: {e}")
+        logger.error("Fehler beim Laden der erweiterten Statistiken: %s", e)
         return empty_fig, empty_fig, empty_fig, empty_options
 
 @app.callback(
@@ -808,7 +811,7 @@ def update_daily_patterns(db_path, selected_users):
             return plot_daily_patterns(patterns)
 
         except Exception as e:
-            print(f"Fehler beim Laden der Tagesmuster: {e}")
+            logger.error("Fehler beim Laden der Tagesmuster: %s", e)
             return go.Figure(layout=GRAPH_LAYOUT)
 
     return go.Figure(layout=GRAPH_LAYOUT)
@@ -835,7 +838,7 @@ def update_time_series_analysis(db_path):
         return daily_fig, weekly_fig, weekday_fig
 
     except Exception as e:
-        print(f"Fehler bei der Zeitreihenanalyse: {e}")
+        logger.error("Fehler bei der Zeitreihenanalyse: %s", e)
         return empty_fig, empty_fig, empty_fig
 
 @app.callback(
@@ -859,7 +862,7 @@ def update_cluster_analysis(db_path):
         return overview_fig, profile_fig
 
     except Exception as e:
-        print(f"Fehler bei der Cluster-Analyse: {e}")
+        logger.error("Fehler bei der Cluster-Analyse: %s", e)
         return empty_fig, empty_fig
 
 @app.callback(
@@ -883,7 +886,7 @@ def update_regression_analysis(db_path):
         return importance_fig, accuracy_fig
 
     except Exception as e:
-        print(f"Fehler bei der Regressions-Analyse: {e}")
+        logger.error("Fehler bei der Regressions-Analyse: %s", e)
         return empty_fig, empty_fig
 
 @app.callback(
@@ -907,7 +910,7 @@ def update_anova_analysis(db_path):
         return user_fig, project_fig
 
     except Exception as e:
-        print(f"Fehler bei der ANOVA-Analyse: {e}")
+        logger.error("Fehler bei der ANOVA-Analyse: %s", e)
         return empty_fig, empty_fig
 
 def _find_available_port(start_port):
@@ -923,5 +926,5 @@ if __name__ == '__main__':
     base_port = int(os.getenv("DASH_PORT", "8052"))
     port = _find_available_port(base_port)
     if port != base_port:
-        print(f"Port {base_port} in use, starting on {port} instead.")
+        logger.info("Port %d belegt, starte auf %d", base_port, port)
     app.run(debug=debug_mode, use_reloader=False, port=port)

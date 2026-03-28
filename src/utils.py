@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import glob
 import json
+import logging
 import os
 import sqlite3
 import sys
@@ -10,6 +11,8 @@ from datetime import datetime
 from tkinter import Tk, filedialog
 
 import polars as pl
+
+logger = logging.getLogger(__name__)
 
 # Color schemes
 MODERN_COLORS = {
@@ -96,11 +99,11 @@ def save_to_csv(data: pl.DataFrame, csv_path: str) -> None:
         if isinstance(data, pl.DataFrame):
             data.write_csv(csv_path)
         else:
-            print("Error saving data to CSV: data is not a Polars DataFrame.")
+            logger.error("CSV-Export fehlgeschlagen: Daten sind kein Polars DataFrame.")
             return
-        print(f"Data saved to {csv_path} successfully.")
+        logger.info("Daten gespeichert: %s", csv_path)
     except (OSError, ValueError, TypeError) as e:
-        print(f"Error saving data to CSV: {e}")
+        logger.error("CSV-Export fehlgeschlagen: %s", e)
 
 
 def convert_timestamp_format(timestamp_str: str | None) -> datetime | None:
@@ -122,7 +125,7 @@ def convert_timestamp_format(timestamp_str: str | None) -> datetime | None:
     try:
         return datetime.fromisoformat(timestamp_str)
     except (ValueError, TypeError) as e:
-        print(f"Fehler bei der Konvertierung von {timestamp_str}: {e}")
+        logger.warning("Timestamp-Konvertierung fehlgeschlagen: %s — %s", timestamp_str, e)
         return None
 
 def read_database(db_path: str) -> pl.DataFrame:
@@ -167,7 +170,7 @@ def read_database(db_path: str) -> pl.DataFrame:
             return combined_data
 
     except sqlite3.Error as e:
-        print(f"Fehler beim Lesen der Datenbank: {e}")
+        logger.error("Fehler beim Lesen der Datenbank: %s", e)
         return pl.DataFrame()
 
 def read_parameters(file_path: str) -> dict:
@@ -176,7 +179,7 @@ def read_parameters(file_path: str) -> dict:
         with open(file_path, encoding='utf-8') as file:
             return json.load(file)
     except (OSError, json.JSONDecodeError) as e:
-        print(f"Error reading parameters: {e}")
+        logger.error("Parameter-Datei konnte nicht gelesen werden: %s", e)
         return {}
 
 def browse_directory() -> str:

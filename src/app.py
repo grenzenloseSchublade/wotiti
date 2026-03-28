@@ -1,4 +1,5 @@
 import glob
+import logging
 import os
 import re
 import socket
@@ -40,6 +41,8 @@ from db_helper import (
     migrate_projects_to_table,
 )
 from utils import DATABASE_PATH, PATH_TO_DATA, load_config, save_config
+
+logger = logging.getLogger(__name__)
 
 
 class App:
@@ -280,6 +283,7 @@ class App:
         try:
             self.db_conn = create_connection(self._db_path)
             if self.db_conn:
+                logger.info("Datenbankverbindung hergestellt: %s", self._db_path)
                 create_main_table(self.db_conn)
                 create_events_table(self.db_conn)
                 default_user = self.config.get("default_user", "Hans")
@@ -292,6 +296,7 @@ class App:
                 self.project_entry.set(default_project)
                 self.update_db_content()
         except Exception as e:
+            logger.error("Datenbankverbindung fehlgeschlagen: %s", e)
             self.write(f"Datenbankverbindung fehlgeschlagen: {e}", error=True)
             self.db_conn = None
 
@@ -570,6 +575,7 @@ class App:
                         conn.close()
                         _refresh_db_list()
                         db_var.set(path)
+                        logger.info("Neue Datenbank erstellt: %s", path)
                         self.write(f"Neue Datenbank erstellt: {path}")
                 except Exception as e:
                     messagebox.showerror("Fehler", f"Datenbank konnte nicht erstellt werden:\n{e}", parent=win)
@@ -588,6 +594,7 @@ class App:
                 try:
                     os.remove(target)
                     _refresh_db_list()
+                    logger.info("Datenbank gelöscht: %s", target)
                     self.write(f"Datenbank gelöscht: {target}")
                 except OSError as e:
                     messagebox.showerror("Fehler", f"Löschen fehlgeschlagen:\n{e}", parent=win)
@@ -700,6 +707,9 @@ class App:
                 "theme": theme_var.get(),
             }
             save_config(new_config)
+            logger.info("Einstellungen gespeichert: theme=%s, port=%s, db=%s",
+                        new_config["theme"], new_config["dashboard_port"],
+                        new_config["database_path"])
             self.config = new_config
 
             # Switch database if changed
@@ -716,7 +726,9 @@ class App:
                         migrate_legacy_user_tables(self.db_conn)
                         migrate_projects_to_table(self.db_conn)
                     self.write(f"Datenbank gewechselt: {self._db_path}")
+                    logger.info("Datenbank gewechselt: %s → %s", old_path, self._db_path)
                 except Exception as e:
+                    logger.error("Fehler beim DB-Wechsel: %s", e)
                     self.write(f"Fehler beim DB-Wechsel: {e}", error=True)
 
             self._combobox_dirty = True
@@ -742,7 +754,7 @@ class App:
                 if self.session_active.get((name, project), False):
                     self.write("Session bereits gestartet. Bitte zuerst stoppen.", error=True)
                 else:
-                    print("Starting session...")
+                    logger.info("Session gestartet: user=%s, project=%s, date=%s", name, project, date)
                     log_start(project=project, name=name, date=date, conn=self.db_conn)
                     self.session_active[(name, project)] = True
                     self.timer_running = True
@@ -762,7 +774,7 @@ class App:
                 if not self.session_active.get((name, project), False):
                     self.write("Keine aktive Session. Bitte zuerst starten.", error=True)
                 else:
-                    print("Stopping session...")
+                    logger.info("Session gestoppt: user=%s, project=%s", name, project)
                     log_stop(project=project, name=name, date=date, conn=self.db_conn)
                     self.session_active[(name, project)] = False
                     self.timer_running = False
@@ -776,7 +788,7 @@ class App:
             name = self.get_name()
             if project is not None and name:
                 duration = calculate_duration(project=project, name=name, conn=self.db_conn)
-                print(f"Gesamtdauer: {duration:.0f} Sekunden")
+                logger.info("Dauer aktualisiert: user=%s, project=%s, %.0f s", name, project, duration)
                 self.update_timer(duration)
             else:
                 self.write("Ungültige Dauer. Bitte erneut versuchen.", error=True)
@@ -971,7 +983,7 @@ class App:
 
         try:
             url = f"http://127.0.0.1:{self._stats_port}/"
-            print(f"Öffne Dashboard: {url}")
+            logger.info("Dashboard geöffnet: %s", url)
             webbrowser.open(url)
         except Exception as e:
             self.write(f"Dashboard konnte nicht geöffnet werden: {e}", error=True)
