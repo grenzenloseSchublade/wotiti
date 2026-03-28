@@ -344,8 +344,7 @@ class App:
         # Save full-mode geometry for restoration
         self._full_geometry = self.master.geometry()
 
-        # Hide non-essential UI elements
-        self.entry_frame.grid_remove()
+        # Hide non-essential UI elements (keep timer_frame and project visible)
         self.db_content_frame.grid_remove()
         self.console_frame.grid_remove()
         self.calculate_button.grid_remove()
@@ -355,6 +354,18 @@ class App:
         self.button_separator.grid_remove()
         self.mini_button.configure(text="\u25B3 Voll")
 
+        # In entry_frame: hide Name/Datum, show only Projekt
+        self.name_label.grid_remove()
+        self.name_entry.grid_remove()
+        self.date_label.grid_remove()
+        self.date_entry.grid_remove()
+        self.heute_button.grid_remove()
+
+        # Make timer font smaller for compact view
+        self.timer_time_label.configure(font=('MS Sans Serif', 14, 'bold'))
+        self.timer_name_label.configure(font=('MS Sans Serif', 9))
+        self.timer_project_label.configure(font=('MS Sans Serif', 9))
+
         # Reduce padding for compact look
         self.frame.configure(padx=2, pady=2)
         self.start_button.configure(height=1, width=6)
@@ -363,7 +374,7 @@ class App:
         # Compact window: withdraw → reconfigure → deiconify avoids flicker
         self.master.withdraw()
         self.master.overrideredirect(True)
-        self.master.geometry("300x80")
+        self.master.geometry("380x150")
         self.master.resizable(False, False)
         self.master.attributes('-topmost', True)
         self.master.deiconify()
@@ -397,8 +408,19 @@ class App:
         self.start_button.configure(height=2, width=12)
         self.stop_button.configure(height=2, width=12)
 
+        # Restore timer font sizes
+        self.timer_time_label.configure(font=('MS Sans Serif', 20, 'bold'))
+        self.timer_name_label.configure(font=('MS Sans Serif', 12))
+        self.timer_project_label.configure(font=('MS Sans Serif', 12))
+
+        # Restore hidden entry_frame elements
+        self.name_label.grid()
+        self.name_entry.grid()
+        self.date_label.grid()
+        self.date_entry.grid()
+        self.heute_button.grid()
+
         # Show hidden elements
-        self.entry_frame.grid()
         self.db_content_frame.grid()
         self.console_frame.grid()
         self.calculate_button.grid()
