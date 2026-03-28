@@ -273,7 +273,7 @@ def generate_random_sample_data():
         "user_specific_params": serializable,
         "path_to_save": directory,
     }
-    json_path = os.path.join(directory, f"parameter_run_{timestamp}.json")
+    json_path = os.path.join(directory, f"parameter_{timestamp}.json")
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(params, f, indent=4)
 
@@ -307,8 +307,8 @@ def generate_sample_data(storage_type, start_date, end_date, path_to_save=PATH_T
     if not os.path.exists(path_to_save):
         raise ValueError(f"Pfad existiert nicht: {path_to_save}")
 
-    database_path = os.path.join(path_to_save, "generate_database.db")
-    csv_path = os.path.join(path_to_save, "generate_database.csv")
+    database_path = os.path.join(path_to_save, "beispieldaten.db")
+    csv_path = os.path.join(path_to_save, "beispieldaten.csv")
     all_events = []
     conn = None
 

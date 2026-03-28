@@ -8,6 +8,7 @@ import threading
 import sys
 import socket
 import logging
+import logging.handlers
 from utils import load_config
 
 # Centralized logging configuration
@@ -20,7 +21,9 @@ _log_fmt = logging.Formatter(
     '[%(asctime)s] %(levelname)s - %(name)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
 )
-_file_handler = logging.FileHandler(_log_file, encoding="utf-8")
+_file_handler = logging.handlers.RotatingFileHandler(
+    _log_file, encoding="utf-8", maxBytes=1_000_000, backupCount=3
+)
 _file_handler.setFormatter(_log_fmt)
 
 if getattr(sys, 'frozen', False) and sys.__stdout__ is None:
@@ -45,18 +48,6 @@ def _find_available_port(start_port):
             if sock.connect_ex(("127.0.0.1", port)) != 0:
                 return port
     return start_port
-
-def run_tkinter_app(stats_port=None):
-    """Runs the Tkinter GUI application."""
-    try:
-        print("Starting the Tkinter application...")
-        root = tk.Tk()
-        app = App(root, stats_port=stats_port)
-        print("Tkinter application started successfully.")
-        root.mainloop()
-    except Exception as e:
-        messagebox.showerror("Error", f"An unexpected error occurred in Tkinter app: {e}")
-        print(f"An unexpected error occurred in Tkinter app: {e}")
 
 def main():
     """Main function to start both the Tkinter app and the statistics dashboard."""

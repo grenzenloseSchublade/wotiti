@@ -19,6 +19,8 @@ class App:
         self._stats_port = stats_port
         self.config = load_config()
         self._db_path = self.config.get("database_path", DATABASE_PATH)
+        self._mini_mode = False
+        self._drag_data = {"x": 0, "y": 0}
         master.title("WoTITI - Work Time Timer")
         master.configure(bg='#C0C0C0')
 
@@ -75,34 +77,33 @@ class App:
         self.stop_button.grid(row=0, column=1, pady=5, padx=5, sticky=W+E)
 
         # Separator
-        sep = Frame(self.button_frame, width=20, bg='#C0C0C0')
-        sep.grid(row=0, column=2, padx=5)
+        self.button_separator = Frame(self.button_frame, width=20, bg='#C0C0C0')
+        self.button_separator.grid(row=0, column=2, padx=5)
 
-        # Gesamtzeit button (was "Update TimyTimer")
         self.calculate_button = Button(
-            self.button_frame, text="Gesamtzeit", command=self.update_duration, **button_config
+            self.button_frame, text="Aktualisieren", command=self.update_duration, **button_config
         )
         self.calculate_button.grid(row=0, column=3, pady=5, padx=5, sticky=W+E)
 
-        # Statistics Dashboard button
         self.stats_button = Button(
-            self.button_frame, text="Stats Dashboard", command=self.open_stats_dashboard, **button_config
+            self.button_frame, text="Dashboard", command=self.open_stats_dashboard, **button_config
         )
         self.stats_button.grid(row=0, column=4, pady=5, padx=5, sticky=W+E)
 
-        # User Management button
         self.user_mgmt_button = Button(
             self.button_frame, text="Benutzer...", command=self.open_user_management, **button_config
         )
         self.user_mgmt_button.grid(row=0, column=5, pady=5, padx=5, sticky=W+E)
 
-        # Settings button (gear icon)
         self.settings_button = Button(
-            self.button_frame, text="\u2699", command=self.open_settings,
-            font=('MS Sans Serif', 14), bg='#D4D0C8', fg='black',
-            relief='raised', borderwidth=2, width=3
+            self.button_frame, text="\u2699 Einst.", command=self.open_settings, **button_config
         )
-        self.settings_button.grid(row=0, column=6, pady=5, padx=(2, 5), sticky=W+E)
+        self.settings_button.grid(row=0, column=6, pady=5, padx=5, sticky=W+E)
+
+        self.mini_button = Button(
+            self.button_frame, text="\u25BD Mini", command=self._toggle_mini_mode, **button_config
+        )
+        self.mini_button.grid(row=0, column=7, pady=5, padx=5, sticky=W+E)
 
         # Configure button frame columns
         self.button_frame.grid_columnconfigure(0, weight=2)
@@ -111,7 +112,8 @@ class App:
         self.button_frame.grid_columnconfigure(3, weight=1)
         self.button_frame.grid_columnconfigure(4, weight=1)
         self.button_frame.grid_columnconfigure(5, weight=1)
-        self.button_frame.grid_columnconfigure(6, weight=0)
+        self.button_frame.grid_columnconfigure(6, weight=1)
+        self.button_frame.grid_columnconfigure(7, weight=1)
 
         # =====================================================
         # ROW 1: Entry frame (Name, Datum, Projekt)
@@ -205,7 +207,7 @@ class App:
         self.console_toolbar = Frame(self.console_frame, bg='#C0C0C0')
         self.console_toolbar.grid(row=0, column=0, columnspan=2, sticky="ew")
         self.clear_button = Button(
-            self.console_toolbar, text="Clear Console", command=self.clear_console,
+            self.console_toolbar, text="Konsole leeren", command=self.clear_console,
             bg='#D4D0C8', fg='black', font=('MS Sans Serif', 8), relief='raised', borderwidth=1
         )
         self.clear_button.pack(side='right', padx=2, pady=1)
@@ -257,13 +259,18 @@ class App:
                 self.project_entry.set(default_project)
                 self.update_db_content()
         except Exception as e:
-            self.write(f"Failed to connect to the database: {e}", error=True)
+            self.write(f"Datenbankverbindung fehlgeschlagen: {e}", error=True)
             self.db_conn = None
 
         self.session_active = {}
         self.timer_running = False
         self.timer_start_time = None
         self.update_timer_realtime()
+
+        # Keyboard shortcuts
+        master.bind("<Control-s>", lambda e: self.start_session())
+        master.bind("<Control-e>", lambda e: self.stop_session())
+        master.bind("<Control-m>", lambda e: self._toggle_mini_mode())
 
         # Session protection: ask before closing with active session
         master.protocol("WM_DELETE_WINDOW", self._on_closing)
@@ -284,6 +291,79 @@ class App:
             # else: do nothing, keep app open
         else:
             self.master.destroy()
+
+    # ----- Mini Mode -----
+    def _toggle_mini_mode(self):
+        """Toggle between full and compact mini mode."""
+        if self._mini_mode:
+            self._exit_mini_mode()
+        else:
+            self._enter_mini_mode()
+
+    def _enter_mini_mode(self):
+        """Switch to compact always-on-top view."""
+        self._mini_mode = True
+        # Save full-mode geometry for restoration
+        self._full_geometry = self.master.geometry()
+
+        # Hide non-essential UI elements
+        self.entry_frame.grid_remove()
+        self.db_content_frame.grid_remove()
+        self.console_frame.grid_remove()
+        self.calculate_button.grid_remove()
+        self.stats_button.grid_remove()
+        self.user_mgmt_button.grid_remove()
+        self.settings_button.grid_remove()
+        self.mini_button.configure(text="\U0001F5D6")  # 🗖 restore icon
+
+        # Compact window
+        self.master.attributes('-topmost', True)
+        self.master.overrideredirect(True)
+        self.master.geometry("280x100")
+        self.master.resizable(False, False)
+
+        # Enable dragging on the frame
+        self.frame.bind("<Button-1>", self._drag_start)
+        self.frame.bind("<B1-Motion>", self._drag_move)
+        self.timer_frame.bind("<Button-1>", self._drag_start)
+        self.timer_frame.bind("<B1-Motion>", self._drag_move)
+
+    def _exit_mini_mode(self):
+        """Restore full window from mini mode."""
+        self._mini_mode = False
+
+        # Unbind drag
+        self.frame.unbind("<Button-1>")
+        self.frame.unbind("<B1-Motion>")
+        self.timer_frame.unbind("<Button-1>")
+        self.timer_frame.unbind("<B1-Motion>")
+
+        # Restore window
+        self.master.overrideredirect(False)
+        self.master.attributes('-topmost', False)
+        self.master.resizable(True, True)
+        self.master.geometry(self._full_geometry)
+
+        # Show hidden elements
+        self.entry_frame.grid()
+        self.db_content_frame.grid()
+        self.console_frame.grid()
+        self.calculate_button.grid()
+        self.stats_button.grid()
+        self.user_mgmt_button.grid()
+        self.settings_button.grid()
+        self.mini_button.configure(text="\U0001F5D5")  # 🗕 minimize icon
+
+    def _drag_start(self, event):
+        """Record starting position for window drag."""
+        self._drag_data["x"] = event.x_root - self.master.winfo_x()
+        self._drag_data["y"] = event.y_root - self.master.winfo_y()
+
+    def _drag_move(self, event):
+        """Move window as mouse drags."""
+        x = event.x_root - self._drag_data["x"]
+        y = event.y_root - self._drag_data["y"]
+        self.master.geometry(f"+{x}+{y}")
 
     def _refresh_comboboxes(self):
         """Refresh user and project comboboxes from database."""
@@ -601,7 +681,7 @@ class App:
             date = self.get_date()
             if project is not None and name and date:
                 if self.session_active.get((name, project), False):
-                    self.write("Session already started. Please stop the session before starting again.", error=True)
+                    self.write("Session bereits gestartet. Bitte zuerst stoppen.", error=True)
                 else:
                     print("Starting session...")
                     log_start(project=project, name=name, date=date, conn=self.db_conn)
@@ -620,7 +700,7 @@ class App:
             date = self.get_date()
             if project is not None and name:
                 if not self.session_active.get((name, project), False):
-                    self.write("Session not started. Please start the session before stopping.", error=True)
+                    self.write("Keine aktive Session. Bitte zuerst starten.", error=True)
                 else:
                     print("Stopping session...")
                     log_stop(project=project, name=name, date=date, conn=self.db_conn)
@@ -636,10 +716,10 @@ class App:
             name = self.get_name()
             if project is not None and name:
                 duration = calculate_duration(project=project, name=name, conn=self.db_conn)
-                print(f"Total duration: {duration:.0f} seconds")
+                print(f"Gesamtdauer: {duration:.0f} Sekunden")
                 self.update_timer(duration)
             else:
-                self.write("Invalid duration. Please try again.", error=True)
+                self.write("Ungültige Dauer. Bitte erneut versuchen.", error=True)
                 return None
 
     # ----- Input getters with validation -----
@@ -662,9 +742,11 @@ class App:
         if not val:
             self.write("Datum darf nicht leer sein.", error=True)
             return None
-        # Validate format DD-MM-YYYY
-        if not re.match(r'^\d{2}-\d{2}-\d{4}$', val):
-            self.write(f"Ung\u00fcltiges Datumsformat: '{val}'. Erwartet: DD-MM-YYYY", error=True)
+        # Validate format DD-MM-YYYY and semantic correctness
+        try:
+            datetime.strptime(val, '%d-%m-%Y')
+        except ValueError:
+            self.write(f"Ungültiges Datum: '{val}'. Erwartet: DD-MM-YYYY", error=True)
             return None
         return val
 
@@ -757,6 +839,7 @@ class App:
                     JOIN users u ON u.id = e.user_id
                     WHERE u.name = ?
                     ORDER BY e.timestamp
+                    LIMIT 500
                 """, (current_name,))
             else:
                 cursor.execute("""
@@ -764,6 +847,7 @@ class App:
                     FROM events e
                     JOIN users u ON u.id = e.user_id
                     ORDER BY u.name, e.timestamp
+                    LIMIT 500
                 """)
             events = cursor.fetchall()
             current_user = None
@@ -807,7 +891,7 @@ class App:
             self.timer_name_label.config(text=f"[{name}]")
             self.timer_project_label.config(text=f"Projekt: {project}")
         else:
-            self.write("Invalid project or name. Please try again.", error=True)
+            self.write("Ungültiges Projekt oder Name.", error=True)
 
     def _get_project_silent(self):
         """Get project without validation errors (for timer updates)."""
@@ -822,15 +906,15 @@ class App:
     def open_stats_dashboard(self):
         """Opens the statistics dashboard."""
         if not self._stats_port or not self._is_dashboard_running():
-            self.write("Stats dashboard is not running yet.", error=True)
+            self.write("Dashboard läuft noch nicht.", error=True)
             return
 
         try:
             url = f"http://127.0.0.1:{self._stats_port}/"
-            print(f"Opening statistics dashboard at {url}")
+            print(f"Öffne Dashboard: {url}")
             webbrowser.open(url)
         except Exception as e:
-            self.write(f"Failed to open statistics dashboard: {e}", error=True)
+            self.write(f"Dashboard konnte nicht geöffnet werden: {e}", error=True)
 
     def _is_dashboard_running(self):
         if not self._stats_port:

@@ -26,7 +26,7 @@ else:
 PATH_TO_DATA = os.path.join(BASE_DIR, "data")
 PATH_TO_DASHBOARD_DATA = PATH_TO_DATA
 DATABASE_PATH = os.path.join(PATH_TO_DATA, "app_database.db")
-GENERATE_DATABASE_PATH = os.path.join(PATH_TO_DATA, "generate_database.db")
+GENERATE_DATABASE_PATH = os.path.join(PATH_TO_DATA, "beispieldaten.db")
 CONFIG_PATH = os.path.join(PATH_TO_DATA, "config.json")
 
 DEFAULT_CONFIG = {
@@ -55,10 +55,12 @@ def load_config():
 
 
 def save_config(config):
-    """Speichert die Konfiguration in config.json."""
+    """Speichert die Konfiguration in config.json (atomar via tmp + rename)."""
     os.makedirs(PATH_TO_DATA, exist_ok=True)
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+    tmp_path = CONFIG_PATH + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=4, ensure_ascii=False)
+    os.replace(tmp_path, CONFIG_PATH)
 
 
 
@@ -165,11 +167,11 @@ def get_app_database_path(directory=PATH_TO_DATA):
     return db_path if os.path.isfile(db_path) else None
 
 def find_latest_example_dataset(directory=PATH_TO_DATA, update_progress=None):
-    """Finds the newest example dataset (generate_database.db + parameter_run_*.json) recursively."""
+    """Finds the newest example dataset (beispieldaten.db + parameter*.json) recursively."""
     if update_progress:
         update_progress(20, "Searching for example datasets...")
 
-    db_candidates = glob.glob(os.path.join(directory, "**", "generate_database.db"), recursive=True)
+    db_candidates = glob.glob(os.path.join(directory, "**", "beispieldaten.db"), recursive=True)
     if not db_candidates:
         return None, None
 
@@ -179,7 +181,7 @@ def find_latest_example_dataset(directory=PATH_TO_DATA, update_progress=None):
 
     for db_path in db_candidates:
         db_dir = os.path.dirname(db_path)
-        param_candidates = glob.glob(os.path.join(db_dir, "parameter_run_*.json"))
+        param_candidates = glob.glob(os.path.join(db_dir, "parameter*.json"))
         if not param_candidates:
             continue
         db_mtime = os.path.getmtime(db_path)

@@ -5,7 +5,6 @@ import re
 import sqlite3
 from sqlite3 import Error
 from utils import DATABASE_PATH, PATH_TO_DATA
-import polars as pl
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +79,7 @@ def create_events_table(conn):
     if success:
         execute_sql(conn, "CREATE INDEX IF NOT EXISTS idx_events_user_id ON events(user_id);")
         execute_sql(conn, "CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);")
+        execute_sql(conn, "CREATE INDEX IF NOT EXISTS idx_events_project_user ON events(project, user_id);")
     return success
 
 def create_projects_table(conn):

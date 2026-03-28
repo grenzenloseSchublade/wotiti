@@ -114,7 +114,7 @@ def test_start_session_already_active(app_instance):
     app_instance.date_entry.insert(0, "01-01-1991")
     app_instance.start_session()
     app_instance.start_session()
-    assert "Session already started" in app_instance.console.get("1.0", END)
+    assert "Session bereits gestartet" in app_instance.console.get("1.0", END)
 
 def test_update_db_content(app_instance):
     """Test updating the database content listbox."""
