@@ -276,6 +276,44 @@ class App:
         sys.stdout = self
         sys.stderr = self
 
+        # =====================================================
+        # MINI MODE: Dedicated compact frame (hidden by default)
+        # =====================================================
+        self._mini_frame = Frame(master, bg='#C0C0C0')
+        mini_btn = {'bg': '#D4D0C8', 'fg': 'black', 'font': ('MS Sans Serif', 9),
+                    'relief': 'raised', 'borderwidth': 2}
+
+        # Row 0: Buttons
+        self._mini_start_btn = Button(
+            self._mini_frame, text="\u25B6", command=self.start_session,
+            width=4, height=1, bg='#D4D0C8', fg='green',
+            font=('MS Sans Serif', 11, 'bold'), relief='raised', borderwidth=2)
+        self._mini_start_btn.grid(row=0, column=0, padx=2, pady=2, sticky='ew')
+
+        self._mini_stop_btn = Button(
+            self._mini_frame, text="\u25A0", command=self.stop_session,
+            width=4, height=1, bg='#D4D0C8', fg='red',
+            font=('MS Sans Serif', 11, 'bold'), relief='raised', borderwidth=2)
+        self._mini_stop_btn.grid(row=0, column=1, padx=2, pady=2, sticky='ew')
+
+        self._mini_restore_btn = Button(
+            self._mini_frame, text="\u25B3 Voll", command=self._toggle_mini_mode, **mini_btn)
+        self._mini_restore_btn.grid(row=0, column=2, padx=2, pady=2, sticky='ew')
+
+        # Row 1: Timer + Projekt
+        self._mini_timer_label = Label(
+            self._mini_frame, text="00:00:00", bg='#C0C0C0', fg='red',
+            font=('MS Sans Serif', 16, 'bold'))
+        self._mini_timer_label.grid(row=1, column=0, padx=4, pady=2, sticky='w')
+
+        self._mini_project_combo = Combobox(
+            self._mini_frame, font=('MS Sans Serif', 9), width=14)
+        self._mini_project_combo.grid(row=1, column=1, columnspan=2, padx=4, pady=2, sticky='ew')
+
+        self._mini_frame.grid_columnconfigure(0, weight=1)
+        self._mini_frame.grid_columnconfigure(1, weight=1)
+        self._mini_frame.grid_columnconfigure(2, weight=1)
+
         # Reflect dashboard status on the button
         self.update_stats_button_state()
 
@@ -339,96 +377,57 @@ class App:
             self._enter_mini_mode()
 
     def _enter_mini_mode(self):
-        """Switch to compact always-on-top view."""
+        """Switch to compact always-on-top view with dedicated mini frame."""
         self._mini_mode = True
-        # Save full-mode geometry for restoration
         self._full_geometry = self.master.geometry()
 
-        # Hide non-essential UI elements (keep timer_frame and project visible)
-        self.db_content_frame.grid_remove()
-        self.console_frame.grid_remove()
-        self.calculate_button.grid_remove()
-        self.stats_button.grid_remove()
-        self.user_mgmt_button.grid_remove()
-        self.settings_button.grid_remove()
-        self.button_separator.grid_remove()
-        self.mini_button.configure(text="\u25B3 Voll")
+        # Sync project values from main to mini
+        self._mini_project_combo['values'] = self.project_entry['values']
+        self._mini_project_combo.set(self.project_entry.get())
+        self._mini_timer_label.configure(text=self.timer_time_label.cget('text'))
 
-        # In entry_frame: hide Name/Datum, show only Projekt
-        self.name_label.grid_remove()
-        self.name_entry.grid_remove()
-        self.date_label.grid_remove()
-        self.date_entry.grid_remove()
-        self.heute_button.grid_remove()
+        # Swap frames: hide main, show mini
+        self.frame.grid_remove()
+        self._mini_frame.grid(padx=4, pady=4, sticky='nsew')
 
-        # Make timer font smaller for compact view
-        self.timer_time_label.configure(font=('MS Sans Serif', 14, 'bold'))
-        self.timer_name_label.configure(font=('MS Sans Serif', 9))
-        self.timer_project_label.configure(font=('MS Sans Serif', 9))
-
-        # Reduce padding for compact look
-        self.frame.configure(padx=2, pady=2)
-        self.start_button.configure(height=1, width=6)
-        self.stop_button.configure(height=1, width=6)
-
-        # Compact window: withdraw → reconfigure → deiconify avoids flicker
+        # Compact window
         self.master.withdraw()
         self.master.overrideredirect(True)
-        self.master.geometry("380x150")
+        self.master.geometry("300x80")
         self.master.resizable(False, False)
         self.master.attributes('-topmost', True)
         self.master.deiconify()
 
-        # Enable dragging on the frame
-        self.frame.bind("<Button-1>", self._drag_start)
-        self.frame.bind("<B1-Motion>", self._drag_move)
-        self.timer_frame.bind("<Button-1>", self._drag_start)
-        self.timer_frame.bind("<B1-Motion>", self._drag_move)
+        # Enable dragging
+        self._mini_frame.bind("<Button-1>", self._drag_start)
+        self._mini_frame.bind("<B1-Motion>", self._drag_move)
+        self._mini_timer_label.bind("<Button-1>", self._drag_start)
+        self._mini_timer_label.bind("<B1-Motion>", self._drag_move)
 
     def _exit_mini_mode(self):
         """Restore full window from mini mode."""
         self._mini_mode = False
 
         # Unbind drag
-        self.frame.unbind("<Button-1>")
-        self.frame.unbind("<B1-Motion>")
-        self.timer_frame.unbind("<Button-1>")
-        self.timer_frame.unbind("<B1-Motion>")
+        self._mini_frame.unbind("<Button-1>")
+        self._mini_frame.unbind("<B1-Motion>")
+        self._mini_timer_label.unbind("<Button-1>")
+        self._mini_timer_label.unbind("<B1-Motion>")
 
-        # Restore window: withdraw → reconfigure → deiconify
+        # Sync project selection back from mini to main
+        self.project_entry.set(self._mini_project_combo.get())
+
+        # Swap frames: hide mini, show main
+        self._mini_frame.grid_remove()
+        self.frame.grid(padx=10, pady=10, sticky='nsew')
+
+        # Restore window
         self.master.withdraw()
         self.master.overrideredirect(False)
         self.master.attributes('-topmost', False)
         self.master.resizable(True, True)
         self.master.geometry(self._full_geometry)
         self.master.deiconify()
-
-        # Restore padding and button sizes
-        self.frame.configure(padx=10, pady=10)
-        self.start_button.configure(height=2, width=12)
-        self.stop_button.configure(height=2, width=12)
-
-        # Restore timer font sizes
-        self.timer_time_label.configure(font=('MS Sans Serif', 20, 'bold'))
-        self.timer_name_label.configure(font=('MS Sans Serif', 12))
-        self.timer_project_label.configure(font=('MS Sans Serif', 12))
-
-        # Restore hidden entry_frame elements
-        self.name_label.grid()
-        self.name_entry.grid()
-        self.date_label.grid()
-        self.date_entry.grid()
-        self.heute_button.grid()
-
-        # Show hidden elements
-        self.db_content_frame.grid()
-        self.console_frame.grid()
-        self.calculate_button.grid()
-        self.stats_button.grid()
-        self.user_mgmt_button.grid()
-        self.settings_button.grid()
-        self.button_separator.grid()
-        self.mini_button.configure(text="\u25BD Mini")
 
     def _drag_start(self, event):
         """Record starting position for window drag."""
@@ -455,6 +454,7 @@ class App:
         if projects != self._cached_projects:
             self._cached_projects = projects
             self.project_entry['values'] = projects
+            self._mini_project_combo['values'] = projects
         self._combobox_dirty = False
 
     # ----- User Management Window -----
@@ -786,6 +786,8 @@ class App:
                     self.update_db_content()
                     self.start_button.config(state="disabled", bg='#A9A9A9')
                     self.stop_button.config(state="normal", bg='#D4D0C8')
+                    self._mini_start_btn.config(state="disabled", bg='#A9A9A9')
+                    self._mini_stop_btn.config(state="normal", bg='#D4D0C8')
 
     def stop_session(self):
         if self.db_conn:
@@ -803,6 +805,8 @@ class App:
                     self.update_db_content()
                     self.start_button.config(state="normal", bg='#D4D0C8')
                     self.stop_button.config(state="disabled", bg='#A9A9A9')
+                    self._mini_start_btn.config(state="normal", bg='#D4D0C8')
+                    self._mini_stop_btn.config(state="disabled", bg='#A9A9A9')
 
     def update_duration(self):
         if self.db_conn:
@@ -817,8 +821,12 @@ class App:
                 return None
 
     # ----- Input getters with validation -----
+    def _active_project_combo(self):
+        """Return the currently visible project combobox."""
+        return self._mini_project_combo if self._mini_mode else self.project_entry
+
     def get_project(self):
-        val = self.project_entry.get().strip()
+        val = self._active_project_combo().get().strip()
         if not val:
             self.write("Projekt darf nicht leer sein.", error=True)
             return None
@@ -964,9 +972,12 @@ class App:
                 elapsed_time = duration
             minutes, seconds = divmod(elapsed_time, 60)
             hours, minutes = divmod(minutes, 60)
-            self.timer_time_label.config(text=f"{int(hours):02}:{int(minutes):02}:{int(seconds):02}")
+            time_text = f"{int(hours):02}:{int(minutes):02}:{int(seconds):02}"
+            self.timer_time_label.config(text=time_text)
             self.timer_name_label.config(text=f"[{name}]")
             self.timer_project_label.config(text=f"Projekt: {project}")
+            # Sync to mini mode timer
+            self._mini_timer_label.config(text=time_text)
         self.master.after(1000, self.update_timer_realtime)
 
     def update_timer(self, duration):
@@ -981,15 +992,17 @@ class App:
                 elapsed_time = duration
             minutes, seconds = divmod(elapsed_time, 60)
             hours, minutes = divmod(minutes, 60)
-            self.timer_time_label.config(text=f"{int(hours):02}:{int(minutes):02}:{int(seconds):02}")
+            time_text = f"{int(hours):02}:{int(minutes):02}:{int(seconds):02}"
+            self.timer_time_label.config(text=time_text)
             self.timer_name_label.config(text=f"[{name}]")
             self.timer_project_label.config(text=f"Projekt: {project}")
+            self._mini_timer_label.config(text=time_text)
         else:
             self.write("Ungültiges Projekt oder Name.", error=True)
 
     def _get_project_silent(self):
         """Get project without validation errors (for timer updates)."""
-        val = self.project_entry.get().strip()
+        val = self._active_project_combo().get().strip()
         return val if val else None
 
     def _get_name_silent(self):
