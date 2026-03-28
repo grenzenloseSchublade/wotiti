@@ -10,13 +10,14 @@ Die Funktionen erwarten Zeitstempel im Format 'dd-mm-yyyy HH:MM:SS' und
 arbeiten mit pandas DataFrames für effiziente Datenverarbeitung.
 """
 
-import polars as pl
-from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LinearRegression
-from scipy import stats
+from datetime import datetime
+
 import numpy as np
-from datetime import datetime, timedelta
+import polars as pl
+from scipy import stats
+from sklearn.cluster import KMeans
+from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import StandardScaler
 
 # Konstanten für Zeitkonvertierung
 TIMESTAMP_FORMAT = "%d-%m-%Y %H:%M:%S"
@@ -113,15 +114,15 @@ def calculate_average_hours_per_period(data, period_days):
 def calculate_project_time_stats(data):
     """
     Berechnet detaillierte Zeitstatistiken pro Projekt und User.
-    
+
     Features:
     - Durchschnittliche Arbeitszeit pro Projekt
     - Minimale und maximale Arbeitsdauer
     - Standardabweichung für Konsistenzanalyse
-    
+
     Args:
         data (pl.DataFrame): DataFrame mit Spalten [user, project, event_type, timestamp]
-    
+
     Returns:
         pl.DataFrame: Statistiken mit Spalten [user, project, avg_hours, min_hours, max_hours, std_hours]
     """
@@ -149,15 +150,15 @@ def calculate_project_time_stats(data):
 def calculate_daily_project_hours(data):
     """
     Berechnet die tägliche Arbeitszeit pro User und Projekt.
-    
+
     Features:
     - Gesamtarbeitszeit pro Tag
     - Aufschlüsselung nach Projekten
     - Identifikation von Arbeitstagen
-    
+
     Args:
         data (pl.DataFrame): DataFrame mit Spalten [user, project, event_type, timestamp, date]
-    
+
     Returns:
         pl.DataFrame: Tägliche Stunden mit Spalten [user, date, project, hours]
     """
@@ -181,19 +182,19 @@ def calculate_daily_project_hours(data):
 def calculate_project_switches(data):
     """
     Analysiert Projektwechsel und Pausen zwischen Projekten.
-    
+
     Features:
     - Anzahl der Projektwechsel pro Tag
     - Pausendauer zwischen Projekten
     - Wechselmuster zwischen spezifischen Projekten
-    
+
     Beispiel:
     - User wechselt von Projekt A zu B mit 30 Minuten Pause
     - Identifikation häufiger Projektkombinationen
-    
+
     Args:
         data (pl.DataFrame): Arbeitszeitdaten
-    
+
     Returns:
         pl.DataFrame: Wechselstatistiken mit [user, date, from_project, to_project, pause_minutes]
     """
@@ -228,20 +229,20 @@ def calculate_project_switches(data):
 def analyze_daily_patterns(data):
     """
     Untersucht tageszeitliche Arbeitsmuster.
-    
+
     Features:
     - Durchschnittliche Startzeiten pro Projekt
     - Häufigste Arbeitszeiten
     - Produktivitätsmuster über den Tag
-    
+
     Mustertypen:
     1. Frühe Starter (vor 8 Uhr)
     2. Kernzeitarbeiter (9-17 Uhr)
     3. Spätarbeiter (nach 17 Uhr)
-    
+
     Args:
         data (pl.DataFrame): Arbeitszeitdaten
-    
+
     Returns:
         pl.DataFrame: Tagesmuster mit [user, project, avg_start_hour, most_common_start_hour]
     """
@@ -362,25 +363,25 @@ def analyze_time_series(data):
 def perform_cluster_analysis(data):
     """
     Führt Clusteranalyse der Arbeitsmuster durch.
-    
+
     Analysierte Merkmale:
     1. Durchschnittliche Startzeit
     2. Projektwechselhäufigkeit
     3. Arbeitsdauer
-    
+
     Clustering-Methode:
     - K-Means mit automatischer k-Bestimmung
     - Standardisierte Features
     - Ellenbogenmethode für optimales k
-    
+
     Cluster-Interpretation:
     - "Frühe Konzentrierte": Früher Start, wenig Wechsel
     - "Flexible Wechsler": Mittlere Startzeit, viele Wechsel
     - "Späte Beständige": Später Start, moderate Wechsel
-    
+
     Args:
         data (pl.DataFrame): Arbeitszeitdaten
-    
+
     Returns:
         tuple: (features_df, cluster_profiles)
             - features_df: DataFrame mit User-Features und Cluster-Zuordnung
@@ -421,27 +422,27 @@ def perform_cluster_analysis(data):
     # Standardisierung der Features
     scaler = StandardScaler()
     X = scaler.fit_transform(features_df.select(["avg_start_hour", "switches_per_day", "avg_duration"]).to_numpy())
-    
+
     # Clustering (optimal k wird automatisch bestimmt)
     k_range = range(2, min(5, len(X) + 1))
     inertias = []
-    
+
     for k in k_range:
         kmeans = KMeans(n_clusters=k, random_state=42)
         kmeans.fit(X)
         inertias.append(kmeans.inertia_)
-    
+
     # Optimales k durch Ellenbogenmethode
     if len(inertias) < 2:
         optimal_k = k_range[0] if k_range else 2
     else:
         optimal_k = k_range[np.argmin(np.diff(inertias)) + 1]
-    
+
     # Finales Clustering
     kmeans = KMeans(n_clusters=optimal_k, random_state=42)
     clusters = kmeans.fit_predict(X)
     features_df = features_df.with_columns(pl.Series("cluster", clusters))
-    
+
     # Cluster-Charakteristiken
     cluster_profiles = []
     for cluster in range(optimal_k):
@@ -455,41 +456,41 @@ def perform_cluster_analysis(data):
             'users': cluster_data['user'].to_list()
         }
         cluster_profiles.append(profile)
-    
+
     return features_df, cluster_profiles
 
 def perform_regression_analysis(data):
     """
     Führt Regressionsanalyse für Arbeitsdauer durch.
-    
+
     Prädiktoren:
     - User-ID (kategorisch)
     - Projekt (kategorisch)
     - Startstunde (numerisch)
     - Wochentag (kategorisch)
-    
+
     Modelldetails:
     - Lineare Regression
     - One-Hot-Encoding für kategorische Variablen
     - R²-Score für Modellbewertung
-    
+
     Anwendungsfälle:
     1. Vorhersage von Arbeitsdauern
     2. Identifikation wichtiger Einflussfaktoren
     3. Planung von Ressourcen
-    
+
     Args:
         data (pl.DataFrame): Arbeitszeitdaten
-    
+
     Returns:
         dict: Regressionsergebnisse mit Model, Importance, R², Predictions
     """
     if data.is_empty():
         return {}
-    
+
     # Feature-Vorbereitung
     work_sessions = []
-    
+
     for (user, project), group in data.partition_by(["user", "project"], as_dict=True).items():
         if user == "users":
             continue
@@ -500,7 +501,7 @@ def perform_regression_analysis(data):
         if min_length == 0:
             continue
 
-        for start, stop in zip(starts[:min_length], stops[:min_length]):
+        for start, stop in zip(starts[:min_length], stops[:min_length], strict=False):
             duration = (stop - start).total_seconds() / 3600
             work_sessions.append({
                 "user": user,
@@ -518,21 +519,21 @@ def perform_regression_analysis(data):
     X_df = sessions_df.select(["user", "project", "start_hour", "weekday"]).to_dummies()
     X = X_df.to_numpy()
     y = sessions_df["duration"].to_numpy()
-    
+
     # Regression
     model = LinearRegression()
     model.fit(X, y)
-    
+
     # Feature Importance
     importance = pl.DataFrame({
         "feature": X_df.columns,
         "importance": np.abs(model.coef_),
     }).sort("importance", descending=True)
-    
+
     # Modellperformance
     predictions = model.predict(X)
     r2_score = model.score(X, y)
-    
+
     return {
         'model': model,
         "importance": importance,
@@ -546,24 +547,24 @@ def perform_regression_analysis(data):
 def perform_anova_analysis(data):
     """
     Führt ANOVA-Tests für Gruppenunterschiede durch.
-    
+
     Analysierte Unterschiede:
     1. Zwischen Usern
     2. Zwischen Projekten
-    
+
     Statistische Tests:
     - Einfaktorielle ANOVA
     - Tukey's HSD Post-hoc Test
     - p-Wert Analyse
-    
+
     Interpretationshilfen:
     - p < 0.05: Signifikante Unterschiede
     - Tukey-Gruppen für paarweise Vergleiche
     - Effektgrößen für praktische Relevanz
-    
+
     Args:
         data (pl.DataFrame): Arbeitszeitdaten
-    
+
     Returns:
         dict: ANOVA-Ergebnisse mit F-Statistik, p-Werten und Tukey-Tests
     """
@@ -587,7 +588,7 @@ def perform_anova_analysis(data):
         } for duration in durations])
 
     durations_df = pl.DataFrame(work_durations)
-    
+
     try:
         if durations_df.is_empty() or durations_df["user"].n_unique() < 2 or durations_df["project"].n_unique() < 2:
             return {}
@@ -598,22 +599,22 @@ def perform_anova_analysis(data):
             for group in durations_df.partition_by("user", as_dict=True).values()
         ]
         f_stat_users, p_value_users = stats.f_oneway(*user_groups)
-        
+
         # ANOVA zwischen Projekten
         project_groups = [
             group["duration"].to_numpy()
             for group in durations_df.partition_by("project", as_dict=True).values()
         ]
         f_stat_projects, p_value_projects = stats.f_oneway(*project_groups)
-        
+
         # Post-hoc Tests (Tukey's HSD)
         from statsmodels.stats.multicomp import pairwise_tukeyhsd
-        
+
         tukey_users = pairwise_tukeyhsd(durations_df["duration"].to_numpy(),
                                         durations_df["user"].to_numpy())
         tukey_projects = pairwise_tukeyhsd(durations_df["duration"].to_numpy(),
                                            durations_df["project"].to_numpy())
-        
+
         return {
             'user_anova': {
                 'f_statistic': float(f_stat_users),

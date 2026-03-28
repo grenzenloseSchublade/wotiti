@@ -16,9 +16,12 @@ WoTiTi ist ein umfassendes Zeiterfassungssystem, bestehend aus zwei Hauptkompone
 > **Kernfunktionen:**
 > - ▶ Start / ■ Stop pro Benutzer & Projekt mit Echtzeit-Timer
 > - Benutzerverwaltung (Dropdown-Auswahl, eigenes Verwaltungsfenster)
-> - Projektverwaltung (Combobox mit bestehenden Projekten)
-> - ⚙ Einstellungen (Datenbank wechseln/erstellen/löschen, Defaults, Theme)
+> - Projektverwaltung (Combobox mit bestehenden Projekten, intelligentes Caching)
+> - ⚙ Einstellungen (Datenbank, Defaults, Theme, Entwickler-Konsole)
+> - Mini-Modus (kompakte Always-on-top Ansicht)
+> - Tastenkürzel: `Ctrl+S` Start, `Ctrl+E` Stop, `Ctrl+M` Mini
 > - Integriertes Analytics-Dashboard mit Cluster-Analyse, Regression, ANOVA
+> - Theme-System: Modern (Cyan/Pink/Gelb) & Synthwave
 > - SQLite-Datenbank, keine externe Infrastruktur nötig
 > - Konfiguration wird in `data/config.json` persistiert
 > - Standalone-EXE via PyInstaller (`bash build.sh` / `build_windows.ps1`)
@@ -28,18 +31,22 @@ WoTiTi ist ein umfassendes Zeiterfassungssystem, bestehend aus zwei Hauptkompone
 ### Work Time Timer (GUI)
 - Start/Stop-Funktionalität für Arbeitssitzungen
 - Mehrbenutzer-Unterstützung mit Dropdown-Auswahl
-- Projektbasierte Zeiterfassung mit Combobox
+- Projektbasierte Zeiterfassung mit Combobox (intelligentes Caching)
 - Benutzerverwaltung (eigenes Fenster zum Anlegen/Auswählen)
-- **Einstellungen (⚙)**: Datenbank erstellen/auswählen/löschen, Standard-Benutzer/-Projekt, Dashboard-Port, Theme
+- **Mini-Modus** (▽/△): Kompakte Always-on-top Ansicht mit Drag-Support
+- **Tastenkürzel**: `Ctrl+S` Start, `Ctrl+E` Stop, `Ctrl+M` Mini-Modus
+- **Einstellungen (⚙ Einst.)**: Datenbank, Defaults, Port, Theme, Entwickler-Konsole
 - Persistente Konfiguration (`data/config.json`)
 - SQLite-Datenbankintegration (users, projects, events)
 - Echtzeit-Timer-Anzeige
 - Session-Schutz bei App-Schließen
 - Eingabevalidierung (Datumsformat DD-MM-YYYY)
+- Log-Rotation (`data/wotiti.log`, 1 MB, 3 Backups)
 
 ### Work Time Insights (Dashboard)
 - Durchgehend **deutschsprachige** Oberfläche (Titel, Achsen, UI-Elemente)
-- Eigenes Plotly-Template „wotiti" (Dark Theme, konsistente Farben, automargin)
+- **Theme-System**: Modern (Cyan/Pink/Gelb) & Synthwave — umschaltbar in den Einstellungen
+- Eigenes Plotly-Template „wotiti" (Dark Theme, 8-Farben-Palette, automargin, Inter-Font)
 - 4 Tab-Bereiche: Grundlagen, Projekte & Muster, Zeitreihen & Trends, Erweiterte Analysen
 - Interaktive Datenvisualisierung
 - Fortgeschrittene statistische Analysen
@@ -110,17 +117,27 @@ uv run python src/stats_generator.py
 ### Timer-GUI Komponenten
 - **Start/Stop-Buttons**: Prominente Sitzungssteuerung (▶/■)
 - **Benutzer-Auswahl**: Combobox mit Dropdown aller bestehenden Benutzer
-- **Projekt-Auswahl**: Combobox mit bestehenden Projekten
+- **Projekt-Auswahl**: Combobox mit bestehenden Projekten (intelligentes Caching)
 - **Benutzerverwaltung**: Eigenes Fenster zum Anlegen/Auswählen von Benutzern
-- **Einstellungen (⚙)**: Konfigurationsfenster mit:
+- **Aktualisieren**: Zeigt die kumulierte Arbeitszeit pro Benutzer/Projekt
+- **Mini-Modus** (▽ Mini / △ Voll): Kompakte Always-on-top Ansicht mit Drag-Support
+- **Einstellungen (⚙ Einst.)**: Konfigurationsfenster mit:
   - Datenbank auswählen, erstellen oder löschen (mit Bestätigung)
   - Standard-Benutzer und Standard-Projekt festlegen
   - Dashboard-Port konfigurieren
   - Theme-Auswahl (Modern / Synthwave)
+  - Entwickler-Konsole: Log-Viewer mit Aktualisieren, Löschen und Copy-Button
 - **Datum-Setter**: Schnelle Datumseinstellung mit Validierung (DD-MM-YYYY)
-- **Gesamtzeit**: Zeigt die kumulierte Arbeitszeit pro Benutzer/Projekt
-- **Konsole**: Statusmeldungen und Fehler
+- **Konsole**: Statusmeldungen und Fehler mit Copy-Button (📋)
 - **Session-Schutz**: Warnung bei App-Schließen mit aktiver Session
+
+### Tastenkürzel
+
+| Kürzel | Aktion |
+|---|---|
+| `Ctrl+S` | Session starten |
+| `Ctrl+E` | Session stoppen |
+| `Ctrl+M` | Mini-Modus umschalten |
 
 ### Analytics-Dashboard Features
 - **Durchgehend deutschsprachig**: Alle Plot-Titel, Achsenbeschriftungen und UI-Elemente
@@ -173,6 +190,24 @@ Beide Skripte erzeugen ein ausführbares Verzeichnis unter `dist/wotiti/` via Py
 - **Analysen** (optional): scikit-learn, scipy, statsmodels
 - **Datenbank**: sqlite3 (Standardbibliothek)
 - **Build** (optional): pyinstaller
+- **Linting/Formatierung** (dev): ruff
+- **Tests** (dev): pytest, pytest-cov
+
+## 🧹 Code-Qualität
+
+- **Linting**: [ruff](https://docs.astral.sh/ruff/) (ersetzt flake8 + black), konfiguriert in `pyproject.toml`
+- **Type Hints**: Alle öffentlichen Funktionen in `utils.py`, `db_helper.py` und `stats_plotting.py` sind typisiert (`from __future__ import annotations`)
+- **Combobox-Caching**: Benutzer-/Projekt-Dropdowns werden nur bei Datenänderungen aktualisiert (Dirty-Flag)
+- **Log-Rotation**: `RotatingFileHandler` (1 MB, 3 Backups) nach `data/wotiti.log`
+- **Atomare Config-Writes**: `config.json` wird via tmp + `os.replace()` geschrieben
+
+```bash
+# Linting
+ruff check src/ tests/
+
+# Tests
+cd src && python -m pytest ../tests/ -v
+```
 
 ## 🔍 Testdatengenerierung
 
@@ -226,13 +261,11 @@ Alle Optionen sind über das Zahnrad-Menü (⚙) in der GUI erreichbar.
 - Theme-Umschaltung erfordert Dashboard-Neustart
 
 ## 🔜 Geplante Features
-- [ ] QT-Migration (geplant für späteres Release)
 - [ ] Export-Funktionen für Analysen
 - [ ] Nachträgliche Zeitkorrekturen
 - [ ] API-Schnittstelle
 - [ ] Docker-Container
 - [ ] Automatische Backups
-- [ ] Performance-Optimierungen
 
 ## 🤝 Beitragen
 1. Fork des Repositories

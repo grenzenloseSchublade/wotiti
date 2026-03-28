@@ -1,10 +1,14 @@
-import sqlite3
+from __future__ import annotations
+
+import glob
 import json
 import os
+import sqlite3
 import sys
-import glob
+from collections.abc import Callable
 from datetime import datetime
 from tkinter import Tk, filedialog
+
 import polars as pl
 
 # Color schemes
@@ -13,9 +17,31 @@ MODERN_COLORS = {
     'secondary': '#44475a', 'accent': '#8be9fd'
 }
 SYNTHWAVE_COLORS = {
-    'background': '#1f1f1f', 'text': '#e0e0e0', 'blue': '#00d4ff',
-    'pink': '#ff00ff', 'yellow': '#ffff00'
+    'background': '#1a1a2e', 'text': '#e0e0e0', 'primary': '#e94560',
+    'secondary': '#16213e', 'accent': '#00d4ff'
 }
+
+MODERN_SEQUENCE = [
+    '#8be9fd', '#ff79c6', '#f1fa8c', '#50fa7b',
+    '#ffb86c', '#bd93f9', '#ff5555', '#6272a4'
+]
+SYNTHWAVE_SEQUENCE = [
+    '#00d4ff', '#ff00ff', '#ffff00', '#e94560',
+    '#50fa7b', '#bd93f9', '#ff5555', '#ff79c6'
+]
+
+THEMES = {
+    'Modern': {'colors': MODERN_COLORS, 'sequence': MODERN_SEQUENCE},
+    'Synthwave': {'colors': SYNTHWAVE_COLORS, 'sequence': SYNTHWAVE_SEQUENCE},
+}
+
+
+def get_theme_colors(theme_name: str | None = None) -> tuple[dict[str, str], list[str]]:
+    """Gibt das Farbschema für ein Theme zurück. Fällt auf Modern zurück."""
+    if theme_name is None:
+        theme_name = load_config().get("theme", "Modern")
+    theme = THEMES.get(theme_name, THEMES["Modern"])
+    return theme['colors'], theme['sequence']
 
 # Pfade
 if getattr(sys, 'frozen', False):
@@ -38,12 +64,12 @@ DEFAULT_CONFIG = {
 }
 
 
-def load_config():
+def load_config() -> dict:
     """Lädt die Konfiguration aus config.json oder gibt Defaults zurück."""
     os.makedirs(PATH_TO_DATA, exist_ok=True)
     if os.path.isfile(CONFIG_PATH):
         try:
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            with open(CONFIG_PATH, encoding="utf-8") as f:
                 cfg = json.load(f)
             # Fehlende Schlüssel mit Defaults auffüllen
             for key, value in DEFAULT_CONFIG.items():
@@ -54,7 +80,7 @@ def load_config():
     return dict(DEFAULT_CONFIG)
 
 
-def save_config(config):
+def save_config(config: dict) -> None:
     """Speichert die Konfiguration in config.json (atomar via tmp + rename)."""
     os.makedirs(PATH_TO_DATA, exist_ok=True)
     tmp_path = CONFIG_PATH + ".tmp"
@@ -64,7 +90,7 @@ def save_config(config):
 
 
 
-def save_to_csv(data, csv_path):
+def save_to_csv(data: pl.DataFrame, csv_path: str) -> None:
     """Save the DataFrame to a CSV file."""
     try:
         if isinstance(data, pl.DataFrame):
@@ -77,7 +103,7 @@ def save_to_csv(data, csv_path):
         print(f"Error saving data to CSV: {e}")
 
 
-def convert_timestamp_format(timestamp_str):
+def convert_timestamp_format(timestamp_str: str | None) -> datetime | None:
     """
     Konvertiert verschiedene Timestamp-Formate in datetime-Objekte.
     """
@@ -99,7 +125,7 @@ def convert_timestamp_format(timestamp_str):
         print(f"Fehler bei der Konvertierung von {timestamp_str}: {e}")
         return None
 
-def read_database(db_path):
+def read_database(db_path: str) -> pl.DataFrame:
     """Liest die Datenbank (events-Schema) und konvertiert Timestamps in datetime-Objekte."""
     try:
         with sqlite3.connect(db_path) as conn:
@@ -144,16 +170,16 @@ def read_database(db_path):
         print(f"Fehler beim Lesen der Datenbank: {e}")
         return pl.DataFrame()
 
-def read_parameters(file_path):
+def read_parameters(file_path: str) -> dict:
     """Reads parameters from a JSON file."""
     try:
-        with open(file_path, 'r', encoding='utf-8') as file:
+        with open(file_path, encoding='utf-8') as file:
             return json.load(file)
     except (OSError, json.JSONDecodeError) as e:
         print(f"Error reading parameters: {e}")
         return {}
 
-def browse_directory():
+def browse_directory() -> str:
     """Browses for a directory using a Tkinter dialog."""
     root = Tk()
     root.withdraw()
@@ -161,12 +187,12 @@ def browse_directory():
     root.destroy()
     return directory
 
-def get_app_database_path(directory=PATH_TO_DATA):
+def get_app_database_path(directory: str = PATH_TO_DATA) -> str | None:
     """Returns the app_database.db path if it exists in the directory."""
     db_path = os.path.join(directory, "app_database.db")
     return db_path if os.path.isfile(db_path) else None
 
-def find_latest_example_dataset(directory=PATH_TO_DATA, update_progress=None):
+def find_latest_example_dataset(directory: str = PATH_TO_DATA, update_progress: Callable | None = None) -> tuple[str | None, str | None]:
     """Finds the newest example dataset (beispieldaten.db + parameter*.json) recursively."""
     if update_progress:
         update_progress(20, "Searching for example datasets...")

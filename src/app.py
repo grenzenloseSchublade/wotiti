@@ -1,16 +1,46 @@
-from tkinter import Button, Text, Scrollbar, VERTICAL, END, Frame, Entry, Label, Listbox, W, E, Toplevel, messagebox, LabelFrame, Spinbox
-from tkinter.ttk import Combobox
+import glob
+import os
+import re
+import socket
 import sys
 import threading
-import webbrowser
 import time
-import socket
-import re
-import os
-import glob
+import webbrowser
 from datetime import datetime
-from db_helper import create_connection, create_main_table, check_user, check_project, log_start, log_stop, calculate_duration, migrate_legacy_user_tables, migrate_projects_to_table, get_all_users, get_all_projects, create_events_table
+from tkinter import (
+    END,
+    VERTICAL,
+    Button,
+    E,
+    Entry,
+    Frame,
+    Label,
+    LabelFrame,
+    Listbox,
+    Scrollbar,
+    Spinbox,
+    Text,
+    Toplevel,
+    W,
+    messagebox,
+)
+from tkinter.ttk import Combobox
+
+from db_helper import (
+    calculate_duration,
+    check_user,
+    create_connection,
+    create_events_table,
+    create_main_table,
+    get_all_projects,
+    get_all_users,
+    log_start,
+    log_stop,
+    migrate_legacy_user_tables,
+    migrate_projects_to_table,
+)
 from utils import DATABASE_PATH, PATH_TO_DATA, load_config, save_config
+
 
 class App:
     def __init__(self, master, stats_port=None):
@@ -21,6 +51,9 @@ class App:
         self._db_path = self.config.get("database_path", DATABASE_PATH)
         self._mini_mode = False
         self._drag_data = {"x": 0, "y": 0}
+        self._combobox_dirty = True
+        self._cached_users = []
+        self._cached_projects = []
         master.title("WoTITI - Work Time Timer")
         master.configure(bg='#C0C0C0')
 
@@ -253,7 +286,7 @@ class App:
                 check_user(self.db_conn, default_user)
                 migrate_legacy_user_tables(self.db_conn)
                 migrate_projects_to_table(self.db_conn)
-                self._refresh_comboboxes()
+                self._refresh_comboboxes(force=True)
                 self.name_entry.set(default_user)
                 default_project = self.config.get("default_project", "1")
                 self.project_entry.set(default_project)
@@ -314,13 +347,21 @@ class App:
         self.stats_button.grid_remove()
         self.user_mgmt_button.grid_remove()
         self.settings_button.grid_remove()
-        self.mini_button.configure(text="\U0001F5D6")  # 🗖 restore icon
+        self.button_separator.grid_remove()
+        self.mini_button.configure(text="\u25B3 Voll")
 
-        # Compact window
-        self.master.attributes('-topmost', True)
+        # Reduce padding for compact look
+        self.frame.configure(padx=2, pady=2)
+        self.start_button.configure(height=1, width=6)
+        self.stop_button.configure(height=1, width=6)
+
+        # Compact window: withdraw → reconfigure → deiconify avoids flicker
+        self.master.withdraw()
         self.master.overrideredirect(True)
-        self.master.geometry("280x100")
+        self.master.geometry("300x80")
         self.master.resizable(False, False)
+        self.master.attributes('-topmost', True)
+        self.master.deiconify()
 
         # Enable dragging on the frame
         self.frame.bind("<Button-1>", self._drag_start)
@@ -338,11 +379,18 @@ class App:
         self.timer_frame.unbind("<Button-1>")
         self.timer_frame.unbind("<B1-Motion>")
 
-        # Restore window
+        # Restore window: withdraw → reconfigure → deiconify
+        self.master.withdraw()
         self.master.overrideredirect(False)
         self.master.attributes('-topmost', False)
         self.master.resizable(True, True)
         self.master.geometry(self._full_geometry)
+        self.master.deiconify()
+
+        # Restore padding and button sizes
+        self.frame.configure(padx=10, pady=10)
+        self.start_button.configure(height=2, width=12)
+        self.stop_button.configure(height=2, width=12)
 
         # Show hidden elements
         self.entry_frame.grid()
@@ -352,7 +400,8 @@ class App:
         self.stats_button.grid()
         self.user_mgmt_button.grid()
         self.settings_button.grid()
-        self.mini_button.configure(text="\U0001F5D5")  # 🗕 minimize icon
+        self.button_separator.grid()
+        self.mini_button.configure(text="\u25BD Mini")
 
     def _drag_start(self, event):
         """Record starting position for window drag."""
@@ -365,13 +414,21 @@ class App:
         y = event.y_root - self._drag_data["y"]
         self.master.geometry(f"+{x}+{y}")
 
-    def _refresh_comboboxes(self):
-        """Refresh user and project comboboxes from database."""
-        if self.db_conn:
-            users = get_all_users(self.db_conn)
+    def _refresh_comboboxes(self, force=False):
+        """Refresh user and project comboboxes from database (cached)."""
+        if not self.db_conn:
+            return
+        if not force and not self._combobox_dirty:
+            return
+        users = get_all_users(self.db_conn)
+        projects = get_all_projects(self.db_conn)
+        if users != self._cached_users:
+            self._cached_users = users
             self.name_entry['values'] = users
-            projects = get_all_projects(self.db_conn)
+        if projects != self._cached_projects:
+            self._cached_projects = projects
             self.project_entry['values'] = projects
+        self._combobox_dirty = False
 
     # ----- User Management Window -----
     def open_user_management(self):
@@ -422,6 +479,7 @@ class App:
             check_user(self.db_conn, name)
             new_entry.delete(0, END)
             refresh_list()
+            self._combobox_dirty = True
             self._refresh_comboboxes()
 
         Button(new_frame, text="Hinzuf\u00fcgen", command=add_user, **button_config).pack(side='left')
@@ -601,7 +659,7 @@ class App:
             log_text.delete('1.0', END)
             if os.path.isfile(log_path):
                 try:
-                    with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
+                    with open(log_path, encoding='utf-8', errors='replace') as f:
                         content = f.read()
                     log_text.insert(END, content if content else "(Logdatei ist leer)")
                 except Exception as e:
@@ -661,7 +719,8 @@ class App:
                 except Exception as e:
                     self.write(f"Fehler beim DB-Wechsel: {e}", error=True)
 
-            self._refresh_comboboxes()
+            self._combobox_dirty = True
+            self._refresh_comboboxes(force=True)
             self.name_entry.set(new_config["default_user"])
             self.project_entry.set(new_config["default_project"])
             self.update_db_content()
@@ -688,6 +747,7 @@ class App:
                     self.session_active[(name, project)] = True
                     self.timer_running = True
                     self.timer_start_time = time.time()
+                    self._combobox_dirty = True
                     self._refresh_comboboxes()
                     self.update_db_content()
                     self.start_button.config(state="disabled", bg='#A9A9A9')

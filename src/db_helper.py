@@ -1,9 +1,14 @@
-from datetime import datetime
+from __future__ import annotations
+
 import logging
 import os
 import re
 import sqlite3
+from datetime import datetime
 from sqlite3 import Error
+
+import polars as pl
+
 from utils import DATABASE_PATH, PATH_TO_DATA
 
 logger = logging.getLogger(__name__)
@@ -12,7 +17,7 @@ logger = logging.getLogger(__name__)
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 DATE_FORMAT = "%Y-%m-%d"
 
-def create_connection(db_file=DATABASE_PATH):
+def create_connection(db_file: str = DATABASE_PATH) -> sqlite3.Connection | None:
     """Create a database connection to the SQLite database specified by db_file."""
     try:
         directory = os.path.dirname(db_file)
@@ -27,12 +32,12 @@ def create_connection(db_file=DATABASE_PATH):
         logger.error("Error creating database connection: %s", e)
         return None
 
-def execute_sql(conn, sql_statement, params=None):
+def execute_sql(conn: sqlite3.Connection | None, sql_statement: str, params: tuple | None = None) -> bool:
     """Execute SQL statement with error handling."""
     if conn is None:
         logger.error("No database connection.")
         return False
-    
+
     try:
         cursor = conn.cursor()
         if params:
@@ -47,7 +52,7 @@ def execute_sql(conn, sql_statement, params=None):
     finally:
         cursor.close()
 
-def create_main_table(conn):
+def create_main_table(conn: sqlite3.Connection) -> bool:
     """Create the main table in the SQLite database."""
     sql_create_main_table = '''
         CREATE TABLE IF NOT EXISTS users (
@@ -62,7 +67,7 @@ def create_main_table(conn):
         create_projects_table(conn)
     return success
 
-def create_events_table(conn):
+def create_events_table(conn: sqlite3.Connection) -> bool:
     """Create the centralized events table in the SQLite database."""
     sql_create_events_table = '''
         CREATE TABLE IF NOT EXISTS events (
@@ -82,7 +87,7 @@ def create_events_table(conn):
         execute_sql(conn, "CREATE INDEX IF NOT EXISTS idx_events_project_user ON events(project, user_id);")
     return success
 
-def create_projects_table(conn):
+def create_projects_table(conn: sqlite3.Connection) -> bool:
     """Create the projects table in the SQLite database."""
     sql_create_projects_table = '''
         CREATE TABLE IF NOT EXISTS projects (
@@ -93,7 +98,7 @@ def create_projects_table(conn):
     '''
     return execute_sql(conn, sql_create_projects_table)
 
-def migrate_legacy_user_tables(conn):
+def migrate_legacy_user_tables(conn: sqlite3.Connection | None) -> bool:
     """Migrate legacy {name}_events tables into the centralized events table."""
     if conn is None:
         return False
@@ -128,11 +133,11 @@ def migrate_legacy_user_tables(conn):
             if user_id is None:
                 continue
 
-            cursor.execute("""
+            cursor.execute(f"""
                 INSERT INTO events (user_id, project, event_type, timestamp, date)
                 SELECT ?, project, event_type, timestamp, date
-                FROM "{}"
-            """.format(table_name), (user_id,))
+                FROM "{table_name}"
+            """, (user_id,))
 
             cursor.execute(
                 "INSERT INTO migration_log (table_name, migrated_at) VALUES (?, ?);",
@@ -147,7 +152,7 @@ def migrate_legacy_user_tables(conn):
     finally:
         cursor.close()
 
-def check_user(conn, name):
+def check_user(conn: sqlite3.Connection | None, name: str) -> int | None:
     """Insert a new user into the main table if not already exists. Returns user_id."""
     if not name or not conn:
         logger.debug("Invalid user name or connection.")
@@ -157,14 +162,14 @@ def check_user(conn, name):
         cur = conn.cursor()
         cur.execute('SELECT id FROM users WHERE name = ?', (name,))
         user = cur.fetchone()
-        
+
         if user is None:
             cur.execute('INSERT INTO users(name) VALUES(?)', (name,))
             conn.commit()
             user_id = cur.lastrowid
             logger.info("User '%s' created.", name)
             return user_id
-        
+
         return user[0]
     except Error as e:
         logger.error("Error checking user: %s", e)
@@ -172,7 +177,7 @@ def check_user(conn, name):
     finally:
         cur.close()
 
-def check_project(conn, name):
+def check_project(conn: sqlite3.Connection | None, name: str) -> int | None:
     """Insert a new project if not already exists. Returns project_id."""
     if not name or not conn:
         logger.debug("Invalid project name or connection.")
@@ -182,14 +187,14 @@ def check_project(conn, name):
         cur = conn.cursor()
         cur.execute('SELECT id FROM projects WHERE name = ?', (name,))
         project = cur.fetchone()
-        
+
         if project is None:
             cur.execute('INSERT INTO projects(name) VALUES(?)', (name,))
             conn.commit()
             project_id = cur.lastrowid
             logger.info("Project '%s' created.", name)
             return project_id
-        
+
         return project[0]
     except Error as e:
         logger.error("Error checking project: %s", e)
@@ -197,7 +202,7 @@ def check_project(conn, name):
     finally:
         cur.close()
 
-def get_all_users(conn):
+def get_all_users(conn: sqlite3.Connection | None) -> list[str]:
     """Return list of all user names from the database."""
     if not conn:
         return []
@@ -210,7 +215,7 @@ def get_all_users(conn):
     finally:
         cur.close()
 
-def get_all_projects(conn):
+def get_all_projects(conn: sqlite3.Connection | None) -> list[str]:
     """Return list of all project names from the projects table."""
     if not conn:
         return []
@@ -223,7 +228,7 @@ def get_all_projects(conn):
     finally:
         cur.close()
 
-def migrate_projects_to_table(conn):
+def migrate_projects_to_table(conn: sqlite3.Connection | None) -> bool:
     """Migrate existing project names from events into the projects table."""
     if not conn:
         return False
@@ -240,7 +245,7 @@ def migrate_projects_to_table(conn):
     finally:
         cur.close()
 
-def log_event(conn, project, name, event_type, timestamp=None, date=None):
+def log_event(conn: sqlite3.Connection | None, project: str, name: str, event_type: str, timestamp: datetime | None = None, date: str | None = None) -> bool:
     """Log an event (start/stop) for a session."""
     if not all([conn, name, date, event_type in ['start', 'stop']]):
         logger.error("Missing required parameters for log_event.")
@@ -264,7 +269,7 @@ def log_event(conn, project, name, event_type, timestamp=None, date=None):
             VALUES (?, ?, ?, ?, ?)
         ''', (user_id, project, event_type, timestamp_str, date))
         conn.commit()
-        
+
         print(f"{event_type.capitalize()} time for project {project} logged for user '{name}' on {date}: {timestamp_str}")
         return True
     except Error as e:
@@ -273,18 +278,15 @@ def log_event(conn, project, name, event_type, timestamp=None, date=None):
     finally:
         cursor.close()
 
-def log_start(project="1", name="Hans", timestamp=None, date=None, conn=None):
+def log_start(project: str = "1", name: str = "Hans", timestamp: datetime | None = None, date: str | None = None, conn: sqlite3.Connection | None = None) -> bool:
     """Log the start time of a session."""
     return log_event(conn, project, name, 'start', timestamp, date)
 
-def log_stop(project="1", name="Hans", timestamp=None, date=None, conn=None):
+def log_stop(project: str = "1", name: str = "Hans", timestamp: datetime | None = None, date: str | None = None, conn: sqlite3.Connection | None = None) -> bool:
     """Log the stop time of a session."""
-    if not log_event(conn, project, name, 'stop', timestamp, date):
-        return False
-        
-    return True
+    return log_event(conn, project, name, 'stop', timestamp, date)
 
-def calculate_duration(project="1", name="Hans", conn=None):
+def calculate_duration(project: str = "1", name: str = "Hans", conn: sqlite3.Connection | None = None) -> float:
     """Calculate the total duration of a session."""
     if not conn or not name:
         logger.debug("Connection and name are required.")
@@ -304,22 +306,22 @@ def calculate_duration(project="1", name="Hans", conn=None):
             WHERE project = ? AND user_id = ?
             ORDER BY timestamp
         ''', (project, user_id))
-        
+
         events = cursor.fetchall()
         total_duration = 0
         start_time = None
-        
+
         for event in events:
             event_type, timestamp_str = event
             timestamp = datetime.strptime(timestamp_str, TIMESTAMP_FORMAT)
-            
+
             if event_type == 'start':
                 start_time = timestamp
             elif event_type == 'stop' and start_time is not None:
                 duration = (timestamp - start_time).total_seconds()
                 total_duration += duration
                 start_time = None
-                
+
         return total_duration
     except Error as e:
         logger.error("Error calculating duration: %s", e)
@@ -327,7 +329,7 @@ def calculate_duration(project="1", name="Hans", conn=None):
     finally:
         cursor.close()
 
-def read_database(db_path=PATH_TO_DATA):
+def read_database(db_path: str = PATH_TO_DATA) -> pl.DataFrame:
     """Read the SQLite database and return the data as a pandas DataFrame."""
     try:
         with sqlite3.connect(db_path) as conn:

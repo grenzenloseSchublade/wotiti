@@ -1,8 +1,20 @@
-import pytest
 import os
 import sys
+
+import pytest
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
-from db_helper import create_connection, create_main_table, check_user, check_project, log_start, log_stop, calculate_duration, get_all_users, get_all_projects, migrate_projects_to_table
+from db_helper import (
+    calculate_duration,
+    check_project,
+    check_user,
+    create_connection,
+    create_main_table,
+    get_all_projects,
+    get_all_users,
+    log_start,
+    log_stop,
+)
 
 TEST_DB_PATH = "tests/test_database.db"
 

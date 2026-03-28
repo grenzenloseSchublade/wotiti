@@ -1,20 +1,21 @@
-import tkinter as tk
-from tkinter import messagebox
-from app import App
-import multiprocessing
-import subprocess
-import os
-import threading
-import sys
-import socket
 import logging
 import logging.handlers
-from utils import load_config
+import multiprocessing
+import os
+import socket
+import subprocess
+import sys
+import threading
+import tkinter as tk
+from tkinter import messagebox
+
+from app import App
 
 # Centralized logging configuration
 # Always log to data/wotiti.log so the in-app developer console can show entries.
 # In frozen --noconsole mode, sys.__stdout__/stderr are None → also redirect streams.
-from utils import PATH_TO_DATA
+from utils import PATH_TO_DATA, load_config
+
 _log_file = os.path.join(PATH_TO_DATA, "wotiti.log")
 os.makedirs(PATH_TO_DATA, exist_ok=True)
 _log_fmt = logging.Formatter(
@@ -60,7 +61,7 @@ def main():
     try:
         # Start the Tkinter app in the main thread
         root = tk.Tk()
-        app = App(root, stats_port=stats_port)
+        app = App(root, stats_port=stats_port)  # noqa: F841
 
         # Start the statistics dashboard in a separate thread/process
         def run_stats():

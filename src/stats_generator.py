@@ -1,14 +1,15 @@
-import sqlite3
-import os
-import logging
-import polars as pl
-from datetime import datetime, timedelta
-import random
-import math
-
-from db_helper import create_connection, create_main_table, check_user, create_events_table, check_project
 import json
-from utils import save_to_csv, PATH_TO_DATA
+import logging
+import math
+import os
+import random
+import sqlite3
+from datetime import datetime, timedelta
+
+import polars as pl
+
+from db_helper import check_project, check_user, create_connection, create_events_table, create_main_table
+from utils import PATH_TO_DATA, save_to_csv
 
 logger = logging.getLogger(__name__)
 

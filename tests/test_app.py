@@ -1,8 +1,9 @@
-import pytest
-from tkinter import Tk, END
-import sys
 import os
+import sys
 from datetime import datetime
+from tkinter import END, Tk
+
+import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
 from app import App
