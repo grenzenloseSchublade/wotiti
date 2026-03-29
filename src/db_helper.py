@@ -157,6 +157,9 @@ def check_user(conn: sqlite3.Connection | None, name: str) -> int | None:
     if not name or not conn:
         logger.debug("Invalid user name or connection.")
         return None
+    name = name.strip()
+    if not name:
+        return None
 
     try:
         cur = conn.cursor()
@@ -181,6 +184,9 @@ def check_project(conn: sqlite3.Connection | None, name: str) -> int | None:
     """Insert a new project if not already exists. Returns project_id."""
     if not name or not conn:
         logger.debug("Invalid project name or connection.")
+        return None
+    name = name.strip()
+    if not name:
         return None
 
     try:
@@ -250,6 +256,9 @@ def log_event(conn: sqlite3.Connection | None, project: str, name: str, event_ty
     if not all([conn, name, date, event_type in ['start', 'stop']]):
         logger.error("Missing required parameters for log_event.")
         return False
+    project = str(project).strip()
+    name = str(name).strip()
+    date = str(date).strip()
 
     try:
         cursor = conn.cursor()
@@ -350,3 +359,72 @@ def read_database(db_path: str = PATH_TO_DATA) -> pl.DataFrame:
     except sqlite3.Error as e:
         logger.error("Error reading database: %s", e)
         return pl.DataFrame()
+
+
+def get_event_by_id(conn: sqlite3.Connection | None, event_id: int) -> dict | None:
+    """Return a single event as dict, or None if not found."""
+    if not conn:
+        return None
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT e.id, u.name, e.project, e.event_type, e.timestamp, e.date
+            FROM events e
+            JOIN users u ON u.id = e.user_id
+            WHERE e.id = ?
+        """, (event_id,))
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row[0], "user": row[1], "project": row[2],
+            "event_type": row[3], "timestamp": row[4], "date": row[5],
+        }
+    except Error as e:
+        logger.error("Error fetching event %s: %s", event_id, e)
+        return None
+    finally:
+        cur.close()
+
+
+def update_event(conn: sqlite3.Connection | None, event_id: int, project: str, timestamp: str, date: str) -> bool:
+    """Update project, timestamp, and date of an existing event."""
+    if not conn:
+        return False
+    cur = None
+    try:
+        # Validate timestamp format
+        datetime.strptime(timestamp, TIMESTAMP_FORMAT)
+        cur = conn.cursor()
+        # Ensure project exists
+        check_project(conn, project)
+        cur.execute("""
+            UPDATE events SET project = ?, timestamp = ?, date = ?
+            WHERE id = ?
+        """, (project, timestamp, date, event_id))
+        conn.commit()
+        logger.info("Event %s updated: project=%s, timestamp=%s, date=%s", event_id, project, timestamp, date)
+        return cur.rowcount > 0
+    except (Error, ValueError) as e:
+        logger.error("Error updating event %s: %s", event_id, e)
+        return False
+    finally:
+        if cur:
+            cur.close()
+
+
+def delete_event(conn: sqlite3.Connection | None, event_id: int) -> bool:
+    """Delete a single event by ID."""
+    if not conn:
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM events WHERE id = ?", (event_id,))
+        conn.commit()
+        logger.info("Event %s deleted.", event_id)
+        return cur.rowcount > 0
+    except Error as e:
+        logger.error("Error deleting event %s: %s", event_id, e)
+        return False
+    finally:
+        cur.close()

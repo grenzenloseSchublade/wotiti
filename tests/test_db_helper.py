@@ -10,10 +10,13 @@ from db_helper import (
     check_user,
     create_connection,
     create_main_table,
+    delete_event,
     get_all_projects,
     get_all_users,
+    get_event_by_id,
     log_start,
     log_stop,
+    update_event,
 )
 
 TEST_DB_PATH = "tests/test_database.db"
@@ -169,4 +172,88 @@ def test_log_event_creates_project(db_conn):
     log_start(project="auto_project", name="test_user", date="2023-10-01", conn=db_conn)
     projects = get_all_projects(db_conn)
     assert "auto_project" in projects
+
+
+def test_get_event_by_id(db_conn):
+    """Test retrieving a single event by its ID."""
+    from db_helper import create_events_table
+    create_events_table(db_conn)
+    check_user(db_conn, "test_user")
+    log_start(project="proj1", name="test_user", date="01-01-2025", conn=db_conn)
+    # Get the event id
+    cur = db_conn.cursor()
+    cur.execute("SELECT id FROM events ORDER BY id DESC LIMIT 1")
+    event_id = cur.fetchone()[0]
+    cur.close()
+
+    ev = get_event_by_id(db_conn, event_id)
+    assert ev is not None
+    assert ev["project"] == "proj1"
+    assert ev["event_type"] == "start"
+    assert ev["user"] == "test_user"
+
+
+def test_get_event_by_id_not_found(db_conn):
+    """Test that get_event_by_id returns None for non-existent ID."""
+    from db_helper import create_events_table
+    create_events_table(db_conn)
+    assert get_event_by_id(db_conn, 99999) is None
+
+
+def test_update_event(db_conn):
+    """Test updating an existing event's project, timestamp, and date."""
+    from db_helper import create_events_table
+    create_events_table(db_conn)
+    check_user(db_conn, "test_user")
+    log_start(project="old_proj", name="test_user", date="01-01-2025", conn=db_conn)
+    cur = db_conn.cursor()
+    cur.execute("SELECT id FROM events ORDER BY id DESC LIMIT 1")
+    event_id = cur.fetchone()[0]
+    cur.close()
+
+    result = update_event(db_conn, event_id, "new_proj", "2025-06-15 10:30:00", "15-06-2025")
+    assert result is True
+
+    ev = get_event_by_id(db_conn, event_id)
+    assert ev["project"] == "new_proj"
+    assert ev["timestamp"] == "2025-06-15 10:30:00"
+    assert ev["date"] == "15-06-2025"
+
+
+def test_update_event_invalid_timestamp(db_conn):
+    """Test that update_event rejects invalid timestamp format."""
+    from db_helper import create_events_table
+    create_events_table(db_conn)
+    check_user(db_conn, "test_user")
+    log_start(project="proj1", name="test_user", date="01-01-2025", conn=db_conn)
+    cur = db_conn.cursor()
+    cur.execute("SELECT id FROM events ORDER BY id DESC LIMIT 1")
+    event_id = cur.fetchone()[0]
+    cur.close()
+
+    result = update_event(db_conn, event_id, "proj1", "NOT-A-TIMESTAMP", "01-01-2025")
+    assert result is False
+
+
+def test_delete_event(db_conn):
+    """Test deleting an event by ID."""
+    from db_helper import create_events_table
+    create_events_table(db_conn)
+    check_user(db_conn, "test_user")
+    log_start(project="proj1", name="test_user", date="01-01-2025", conn=db_conn)
+    cur = db_conn.cursor()
+    cur.execute("SELECT id FROM events ORDER BY id DESC LIMIT 1")
+    event_id = cur.fetchone()[0]
+    cur.close()
+
+    result = delete_event(db_conn, event_id)
+    assert result is True
+    assert get_event_by_id(db_conn, event_id) is None
+
+
+def test_delete_event_not_found(db_conn):
+    """Test that deleting a non-existent event returns False."""
+    from db_helper import create_events_table
+    create_events_table(db_conn)
+    assert delete_event(db_conn, 99999) is False
 

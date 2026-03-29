@@ -28,17 +28,21 @@ from tkinter import (
 from tkinter.ttk import Combobox
 
 from db_helper import (
+    TIMESTAMP_FORMAT,
     calculate_duration,
     check_user,
     create_connection,
     create_events_table,
     create_main_table,
+    delete_event,
     get_all_projects,
     get_all_users,
+    get_event_by_id,
     log_start,
     log_stop,
     migrate_legacy_user_tables,
     migrate_projects_to_table,
+    update_event,
 )
 from utils import DATABASE_PATH, PATH_TO_DATA, load_config, save_config
 
@@ -96,51 +100,51 @@ class App:
 
         # Start button - prominent, green tint
         self.start_button = Button(
-            self.button_frame, text="\u25B6  Start", height=2, width=12,
+            self.button_frame, text="\u25B6 Start", height=2, width=8,
             command=self.start_session,
-            bg='#D4D0C8', fg='black', font=('MS Sans Serif', 11, 'bold'),
+            bg='#D4D0C8', fg='black', font=('MS Sans Serif', 10, 'bold'),
             activebackground='#90EE90', relief='raised', borderwidth=2
         )
-        self.start_button.grid(row=0, column=0, pady=5, padx=5, sticky=W+E)
+        self.start_button.grid(row=0, column=0, pady=5, padx=3, sticky=W+E)
 
         # Stop button - prominent, red tint when active
         self.stop_button = Button(
-            self.button_frame, text="\u25A0  Stop", height=2, width=12,
+            self.button_frame, text="\u25A0 Stop", height=2, width=8,
             command=self.stop_session,
-            bg='#A9A9A9', fg='black', font=('MS Sans Serif', 11, 'bold'),
+            bg='#A9A9A9', fg='black', font=('MS Sans Serif', 10, 'bold'),
             activebackground='#FF6B6B', relief='raised', borderwidth=2,
             state="disabled"
         )
-        self.stop_button.grid(row=0, column=1, pady=5, padx=5, sticky=W+E)
+        self.stop_button.grid(row=0, column=1, pady=5, padx=3, sticky=W+E)
 
         # Separator
-        self.button_separator = Frame(self.button_frame, width=20, bg='#C0C0C0')
-        self.button_separator.grid(row=0, column=2, padx=5)
+        self.button_separator = Frame(self.button_frame, width=10, bg='#C0C0C0')
+        self.button_separator.grid(row=0, column=2, padx=2)
 
         self.calculate_button = Button(
             self.button_frame, text="Aktualisieren", command=self.update_duration, **button_config
         )
-        self.calculate_button.grid(row=0, column=3, pady=5, padx=5, sticky=W+E)
+        self.calculate_button.grid(row=0, column=3, pady=5, padx=3, sticky=W+E)
 
         self.stats_button = Button(
             self.button_frame, text="Dashboard", command=self.open_stats_dashboard, **button_config
         )
-        self.stats_button.grid(row=0, column=4, pady=5, padx=5, sticky=W+E)
+        self.stats_button.grid(row=0, column=4, pady=5, padx=3, sticky=W+E)
 
         self.user_mgmt_button = Button(
-            self.button_frame, text="Benutzer...", command=self.open_user_management, **button_config
+            self.button_frame, text="Benutzer", command=self.open_user_management, **button_config
         )
-        self.user_mgmt_button.grid(row=0, column=5, pady=5, padx=5, sticky=W+E)
+        self.user_mgmt_button.grid(row=0, column=5, pady=5, padx=3, sticky=W+E)
 
         self.settings_button = Button(
             self.button_frame, text="\u2699 Einst.", command=self.open_settings, **button_config
         )
-        self.settings_button.grid(row=0, column=6, pady=5, padx=5, sticky=W+E)
+        self.settings_button.grid(row=0, column=6, pady=5, padx=3, sticky=W+E)
 
         self.mini_button = Button(
             self.button_frame, text="\u25BD Mini", command=self._toggle_mini_mode, **button_config
         )
-        self.mini_button.grid(row=0, column=7, pady=5, padx=5, sticky=W+E)
+        self.mini_button.grid(row=0, column=7, pady=5, padx=3, sticky=W+E)
 
         # Configure button frame columns
         self.button_frame.grid_columnconfigure(0, weight=2)
@@ -160,33 +164,35 @@ class App:
 
         # Name label and combobox
         self.name_label = Label(self.entry_frame, text="Name:", **label_config)
-        self.name_label.grid(row=0, column=0, pady=5, padx=5, sticky="w")
-        self.name_entry = Combobox(self.entry_frame, font=('MS Sans Serif', 10), width=20)
-        self.name_entry.grid(row=0, column=1, pady=5, padx=5, sticky="ew")
+        self.name_label.grid(row=0, column=0, pady=5, padx=3, sticky="w")
+        self.name_entry = Combobox(self.entry_frame, font=('MS Sans Serif', 10), width=14)
+        self.name_entry.grid(row=0, column=1, pady=5, padx=3, sticky="ew")
         self.name_entry.set("Hans")
 
         # Datum label and entry
-        self.date_label = Label(self.entry_frame, text="Datum:", **label_config)
-        self.date_label.grid(row=0, column=2, pady=5, padx=5, sticky="w")
-        self.date_entry = Entry(self.entry_frame, **entry_config)
-        self.date_entry.grid(row=0, column=3, pady=5, padx=5, sticky="ew")
+        self.date_label = Label(self.entry_frame, text="Datum (TT-MM-JJJJ):", **label_config)
+        self.date_label.grid(row=0, column=2, pady=5, padx=3, sticky="w")
+        self.date_entry = Entry(self.entry_frame, **entry_config, width=12)
+        self.date_entry.grid(row=0, column=3, pady=5, padx=3, sticky="ew")
         self.date_entry.insert(0, str(datetime.today().strftime('%d-%m-%Y')))
 
         # Heute button
         self.heute_button = Button(self.entry_frame, text="Heute", command=self.set_today_date, **button_config)
-        self.heute_button.grid(row=0, column=4, pady=5, padx=5, sticky="ew")
+        self.heute_button.grid(row=0, column=4, pady=5, padx=3, sticky="ew")
 
         # Project label and combobox
         self.project_label = Label(self.entry_frame, text="Projekt:", **label_config)
-        self.project_label.grid(row=0, column=5, pady=5, padx=5, sticky="w")
-        self.project_entry = Combobox(self.entry_frame, font=('MS Sans Serif', 10), width=20)
-        self.project_entry.grid(row=0, column=6, pady=5, padx=5, sticky="ew")
+        self.project_label.grid(row=0, column=5, pady=5, padx=3, sticky="w")
+        self.project_entry = Combobox(self.entry_frame, font=('MS Sans Serif', 10), width=14)
+        self.project_entry.grid(row=0, column=6, pady=5, padx=3, sticky="ew")
         self.project_entry.set("1")
 
-        # Configure entry frame columns — ensure combobox/entry columns are wide enough
+        # Configure entry frame columns — ensure combobox/entry columns are flexible
         for col in range(7):
-            if col in (1, 3, 6):
-                self.entry_frame.grid_columnconfigure(col, weight=2, minsize=150)
+            if col == 3:
+                self.entry_frame.grid_columnconfigure(col, weight=1, minsize=80)
+            elif col in (1, 6):
+                self.entry_frame.grid_columnconfigure(col, weight=2, minsize=100)
             else:
                 self.entry_frame.grid_columnconfigure(col, weight=0)
 
@@ -229,6 +235,8 @@ class App:
 
         self.db_content_listbox = Listbox(self.db_content_frame, bg='#FFFFFF', fg='black', font=('MS Sans Serif', 10))
         self.db_content_listbox.grid(row=0, column=0, sticky="nsew")
+        self.db_content_listbox.bind('<Double-1>', self._edit_event)
+        self._event_ids: list[int | None] = []
 
         self.scrollbar_listbox = Scrollbar(self.db_content_frame, orient=VERTICAL, command=self.db_content_listbox.yview, bg='#C0C0C0', width=20)
         self.scrollbar_listbox.grid(row=0, column=1, sticky="ns")
@@ -389,7 +397,7 @@ class App:
 
         # Sync project values from main to mini
         self._mini_project_combo['values'] = self.project_entry['values']
-        self._mini_project_combo.set(self.project_entry.get())
+        self._mini_project_combo.set(self.project_entry.get().strip())
         self._mini_timer_label.configure(text=self.timer_time_label.cget('text'))
 
         # Swap frames: hide main, show mini
@@ -421,7 +429,7 @@ class App:
         self._mini_timer_label.unbind("<B1-Motion>")
 
         # Sync project selection back from mini to main
-        self.project_entry.set(self._mini_project_combo.get())
+        self.project_entry.set(self._mini_project_combo.get().strip())
 
         # Swap frames: hide mini, show main
         self._mini_frame.grid_remove()
@@ -471,6 +479,7 @@ class App:
         win.configure(bg='#C0C0C0')
         win.geometry("400x350")
         win.transient(self.master)
+        win.wait_visibility()
         win.grab_set()
 
         label_config = {'bg': '#C0C0C0', 'fg': 'black', 'font': ('MS Sans Serif', 10)}
@@ -549,6 +558,7 @@ class App:
         win.configure(bg='#C0C0C0')
         win.geometry("520x680")
         win.transient(self.master)
+        win.wait_visibility()
         win.grab_set()
 
         lbl = {'bg': '#C0C0C0', 'fg': 'black', 'font': ('MS Sans Serif', 10)}
@@ -932,6 +942,7 @@ class App:
     def update_db_content(self):
         """Update the database content listbox with the latest data."""
         self.db_content_listbox.delete(0, END)
+        self._event_ids = []
         if self.db_conn:
             cursor = self.db_conn.cursor()
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='events';")
@@ -942,7 +953,7 @@ class App:
             current_name = self.name_entry.get().strip()
             if current_name:
                 cursor.execute("""
-                    SELECT u.name, e.project, e.event_type, e.timestamp
+                    SELECT e.id, u.name, e.project, e.event_type, e.timestamp
                     FROM events e
                     JOIN users u ON u.id = e.user_id
                     WHERE u.name = ?
@@ -951,7 +962,7 @@ class App:
                 """, (current_name,))
             else:
                 cursor.execute("""
-                    SELECT u.name, e.project, e.event_type, e.timestamp
+                    SELECT e.id, u.name, e.project, e.event_type, e.timestamp
                     FROM events e
                     JOIN users u ON u.id = e.user_id
                     ORDER BY u.name, e.timestamp
@@ -959,11 +970,127 @@ class App:
                 """)
             events = cursor.fetchall()
             current_user = None
-            for user_name, project, event_type, timestamp in events:
+            for event_id, user_name, project, event_type, timestamp in events:
                 if user_name != current_user:
                     current_user = user_name
                     self.db_content_listbox.insert(END, f"User: {user_name}")
+                    self._event_ids.append(None)
                 self.db_content_listbox.insert(END, f"  Projekt {project}: {event_type} at {timestamp}")
+                self._event_ids.append(event_id)
+
+    def _edit_event(self, event=None):
+        """Open edit dialog for the selected event (double-click handler)."""
+        sel = self.db_content_listbox.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        if idx >= len(self._event_ids):
+            return
+        event_id = self._event_ids[idx]
+        if event_id is None:
+            return  # Header row
+
+        ev = get_event_by_id(self.db_conn, event_id)
+        if ev is None:
+            self.write("Eintrag nicht gefunden.", error=True)
+            return
+
+        win = Toplevel(self.master)
+        win.title("Eintrag bearbeiten")
+        win.configure(bg='#C0C0C0')
+        win.geometry("420x220")
+        win.transient(self.master)
+        win.wait_visibility()
+        win.grab_set()
+
+        lbl_cfg = {'bg': '#C0C0C0', 'fg': 'black', 'font': ('MS Sans Serif', 10)}
+        entry_cfg = {'font': ('MS Sans Serif', 10), 'bg': '#FFFFFF', 'fg': 'black',
+                     'relief': 'sunken', 'borderwidth': 2}
+
+        # Row 0: Event type (read-only)
+        Label(win, text="Typ:", **lbl_cfg).grid(row=0, column=0, padx=8, pady=4, sticky='w')
+        Label(win, text=ev["event_type"].upper(), bg='#C0C0C0', fg='black',
+              font=('MS Sans Serif', 10, 'bold')).grid(row=0, column=1, padx=8, pady=4, sticky='w')
+
+        # Row 1: Project
+        Label(win, text="Projekt:", **lbl_cfg).grid(row=1, column=0, padx=8, pady=4, sticky='w')
+        proj_combo = Combobox(win, font=('MS Sans Serif', 10), width=28)
+        proj_combo['values'] = self.project_entry['values']
+        proj_combo.set(ev["project"])
+        proj_combo.grid(row=1, column=1, padx=8, pady=4, sticky='ew')
+
+        # Row 2: Date
+        Label(win, text="Datum (TT-MM-JJJJ):", **lbl_cfg).grid(row=2, column=0, padx=8, pady=4, sticky='w')
+        date_entry = Entry(win, **entry_cfg, width=30)
+        date_entry.insert(0, ev["date"])
+        date_entry.grid(row=2, column=1, padx=8, pady=4, sticky='ew')
+
+        # Row 3: Timestamp
+        Label(win, text="Zeitstempel:", **lbl_cfg).grid(row=3, column=0, padx=8, pady=4, sticky='w')
+        ts_entry = Entry(win, **entry_cfg, width=30)
+        ts_entry.insert(0, ev["timestamp"])
+        ts_entry.grid(row=3, column=1, padx=8, pady=4, sticky='ew')
+
+        win.grid_columnconfigure(1, weight=1)
+
+        # Buttons
+        btn_cfg = {'bg': '#D4D0C8', 'fg': 'black', 'font': ('MS Sans Serif', 10),
+                   'relief': 'raised', 'borderwidth': 2}
+        btn_frame = Frame(win, bg='#C0C0C0')
+        btn_frame.grid(row=4, column=0, columnspan=2, pady=10)
+
+        def _save():
+            new_project = proj_combo.get().strip()
+            new_date = date_entry.get().strip()
+            new_ts = ts_entry.get().strip()
+            if not new_project:
+                messagebox.showwarning("Fehler", "Projekt darf nicht leer sein.", parent=win)
+                return
+            if not new_date:
+                messagebox.showwarning("Fehler", "Datum darf nicht leer sein.", parent=win)
+                return
+            try:
+                datetime.strptime(new_date, '%d-%m-%Y')
+            except ValueError:
+                messagebox.showwarning("Fehler", f"Ungültiges Datum: '{new_date}'.\nErwartet: TT-MM-JJJJ", parent=win)
+                return
+            try:
+                datetime.strptime(new_ts, TIMESTAMP_FORMAT)
+            except ValueError:
+                messagebox.showwarning("Fehler", f"Ungültiger Zeitstempel: '{new_ts}'.\nErwartet: JJJJ-MM-TT HH:MM:SS", parent=win)
+                return
+            if update_event(self.db_conn, event_id, new_project, new_ts, new_date):
+                logger.info("Event %s bearbeitet.", event_id)
+                self.write(f"Eintrag {event_id} aktualisiert.")
+                self._combobox_dirty = True
+                self._refresh_comboboxes()
+                self.update_db_content()
+                win.destroy()
+            else:
+                messagebox.showerror("Fehler", "Eintrag konnte nicht gespeichert werden.", parent=win)
+
+        def _delete():
+            if not messagebox.askyesno("Eintrag löschen",
+                                       f"Eintrag #{event_id} wirklich löschen?\n\n"
+                                       f"Typ: {ev['event_type'].upper()}\n"
+                                       f"Projekt: {ev['project']}\n"
+                                       f"Zeitstempel: {ev['timestamp']}",
+                                       parent=win):
+                return
+            if delete_event(self.db_conn, event_id):
+                logger.info("Event %s gelöscht.", event_id)
+                self.write(f"Eintrag {event_id} gelöscht.")
+                self._combobox_dirty = True
+                self._refresh_comboboxes()
+                self.update_db_content()
+                win.destroy()
+            else:
+                messagebox.showerror("Fehler", "Eintrag konnte nicht gelöscht werden.", parent=win)
+
+        Button(btn_frame, text="Speichern", command=_save, **btn_cfg).pack(side='left', padx=5)
+        Button(btn_frame, text="Löschen", command=_delete, bg='#D4D0C8', fg='red',
+               font=('MS Sans Serif', 10), relief='raised', borderwidth=2).pack(side='left', padx=5)
+        Button(btn_frame, text="Abbrechen", command=win.destroy, **btn_cfg).pack(side='left', padx=5)
 
     def update_timer_realtime(self):
         """Update the timer label with the elapsed time."""
