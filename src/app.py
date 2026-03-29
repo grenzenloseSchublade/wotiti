@@ -63,9 +63,10 @@ class App:
         # Set window size based on screen resolution
         screen_width = master.winfo_screenwidth()
         screen_height = master.winfo_screenheight()
-        window_width = int(screen_width * 0.5)
-        window_height = int(screen_height * 0.5)
+        window_width = int(screen_width * 0.4)
+        window_height = int(screen_height * 0.45)
         master.geometry(f"{window_width}x{window_height}")
+        master.minsize(650, 400)
 
         # Make the window resizable
         master.grid_rowconfigure(0, weight=1)
@@ -197,7 +198,7 @@ class App:
 
         self.timer_time_label = Label(
             self.timer_frame, text="00:00:00", bg='#C0C0C0', fg='red',
-            font=('MS Sans Serif', 20, 'bold')
+            font=('MS Sans Serif', 28, 'bold')
         )
         self.timer_time_label.grid(row=0, column=0, pady=5, padx=10, sticky="w")
 
@@ -296,23 +297,28 @@ class App:
             font=('MS Sans Serif', 11, 'bold'), relief='raised', borderwidth=2)
         self._mini_stop_btn.grid(row=0, column=1, padx=2, pady=2, sticky='ew')
 
+        self._mini_refresh_btn = Button(
+            self._mini_frame, text="\u21BB", command=self.update_duration, **mini_btn)
+        self._mini_refresh_btn.grid(row=0, column=2, padx=2, pady=2, sticky='ew')
+
         self._mini_restore_btn = Button(
-            self._mini_frame, text="\u25B3 Voll", command=self._toggle_mini_mode, **mini_btn)
-        self._mini_restore_btn.grid(row=0, column=2, padx=2, pady=2, sticky='ew')
+            self._mini_frame, text="\u25B3", command=self._toggle_mini_mode, **mini_btn)
+        self._mini_restore_btn.grid(row=0, column=3, padx=2, pady=2, sticky='ew')
 
         # Row 1: Timer + Projekt
         self._mini_timer_label = Label(
             self._mini_frame, text="00:00:00", bg='#C0C0C0', fg='red',
-            font=('MS Sans Serif', 16, 'bold'))
+            font=('MS Sans Serif', 18, 'bold'))
         self._mini_timer_label.grid(row=1, column=0, padx=4, pady=2, sticky='w')
 
         self._mini_project_combo = Combobox(
             self._mini_frame, font=('MS Sans Serif', 9), width=14)
-        self._mini_project_combo.grid(row=1, column=1, columnspan=2, padx=4, pady=2, sticky='ew')
+        self._mini_project_combo.grid(row=1, column=1, columnspan=3, padx=4, pady=2, sticky='ew')
 
         self._mini_frame.grid_columnconfigure(0, weight=1)
         self._mini_frame.grid_columnconfigure(1, weight=1)
         self._mini_frame.grid_columnconfigure(2, weight=1)
+        self._mini_frame.grid_columnconfigure(3, weight=1)
 
         # Reflect dashboard status on the button
         self.update_stats_button_state()
