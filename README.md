@@ -18,7 +18,8 @@ WoTiTi ist ein umfassendes Zeiterfassungssystem, bestehend aus zwei Hauptkompone
 > - Benutzerverwaltung (Dropdown-Auswahl, eigenes Verwaltungsfenster)
 > - Projektverwaltung (Combobox mit bestehenden Projekten, intelligentes Caching)
 > - ⚙ Einstellungen (Datenbank, Defaults, Theme, Entwickler-Konsole)
-> - Mini-Modus (kompakte Always-on-top Ansicht)
+> - Mini-Modus (kompakte Always-on-top Ansicht mit ↻ Refresh)
+> - Einträge bearbeiten per Doppelklick (Projekt, Datum, Zeitstempel)
 > - Tastenkürzel: `Ctrl+S` Start, `Ctrl+E` Stop, `Ctrl+M` Mini
 > - Integriertes Analytics-Dashboard mit Cluster-Analyse, Regression, ANOVA
 > - Theme-System: Modern (Cyan/Pink/Gelb) & Synthwave
@@ -127,9 +128,10 @@ uv run python src/stats_generator.py
   - Dashboard-Port konfigurieren
   - Theme-Auswahl (Modern / Synthwave)
   - Entwickler-Konsole: Log-Viewer mit Aktualisieren, Löschen und Copy-Button
-- **Datum-Setter**: Schnelle Datumseinstellung mit Validierung (DD-MM-YYYY)
+- **Datum-Setter**: Schnelle Datumseinstellung mit Validierung und Format-Hinweis (TT-MM-JJJJ)
+- **Einträge bearbeiten**: Doppelklick auf Event in der Listbox öffnet Edit-Dialog (Projekt, Datum, Zeitstempel ändern oder Eintrag löschen)
 - **Konsole**: Statusmeldungen und Fehler mit Copy-Button (📋)
-- **Session-Schutz**: Warnung bei App-Schließen mit aktiver Session
+- **Session-Schutz**: Warnung bei App-Schließen mit aktiver Session, sauberes Herunterfahren (DB-Close, Timer-Stop, Dashboard-Cleanup)
 
 ### Tastenkürzel
 
@@ -169,17 +171,56 @@ uv run python src/stats_generator.py
 - **ANOVA**: Gruppenvergleiche
 - **Zeitreihen**: Trendanalysen
 
-## 🛠️ Build-Optionen
+## 🛠️ Build & Release
 
-### Linux / macOS
+### Entwicklung (Linux / macOS)
 ```bash
 ./build.sh
 ```
 
-### Windows (PowerShell)
+### Windows-EXE erstellen
+Die Windows-EXE **muss auf einem Windows-System** gebaut werden (PyInstaller erzeugt plattformspezifische Binaries):
+
 ```powershell
+# Auf einem Windows 10/11 System mit Python 3.10+ und uv:
 .\build_windows.ps1
 ```
+
+### Release-Workflow
+
+1. **Windows-EXE bauen** (auf Windows-Rechner):
+   ```powershell
+   .\build_windows.ps1
+   ```
+2. **dist-Ordner zippen**:
+   ```powershell
+   Compress-Archive -Path dist\wotiti -DestinationPath dist\wotiti-win-x64.zip
+   ```
+3. **ZIP ins Repo kopieren** (z.B. nach `releases/`):
+   ```powershell
+   # ZIP auf den Dev-Rechner übertragen (USB, Cloud, SCP, etc.)
+   ```
+4. **Release erstellen und pushen**:
+   ```bash
+   # Auf dem Dev-Rechner / im Repo:
+   git tag v0.x.0
+   git push origin v0.x.0
+
+   # GitHub Release mit ZIP als Asset:
+   gh release create v0.x.0 releases/wotiti-win-x64.zip \
+     --title "WoTiTi v0.x.0" \
+     --notes "Windows Standalone-EXE (--onedir)"
+   ```
+
+> **Hinweis:** Die EXE-Binaries werden **nicht** ins Git-Repository eingecheckt (zu groß).
+> Stattdessen werden sie als **GitHub Release Assets** angehängt.
+> Der `dist/`-Ordner ist in `.gitignore` eingetragen.
+
+### Build-Details
+- PyInstaller `--onedir` + `--noconsole`
+- Hidden Imports: `tkinter.filedialog`, `sklearn`, `scipy`
+- Assets (`src/assets/`) werden eingebettet
+- `data/`-Ordner wird neben die EXE kopiert
 
 Beide Skripte erzeugen ein ausführbares Verzeichnis unter `dist/wotiti/` via PyInstaller (`--onedir`).
 
@@ -262,10 +303,10 @@ Alle Optionen sind über das Zahnrad-Menü (⚙) in der GUI erreichbar.
 
 ## 🔜 Geplante Features
 - [ ] Export-Funktionen für Analysen
-- [ ] Nachträgliche Zeitkorrekturen
 - [ ] API-Schnittstelle
 - [ ] Docker-Container
 - [ ] Automatische Backups
+- [ ] GitHub Actions CI/CD (automatische Builds bei Tag-Push)
 
 ## 🤝 Beitragen
 1. Fork des Repositories

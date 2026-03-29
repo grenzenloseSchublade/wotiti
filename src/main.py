@@ -104,8 +104,13 @@ def main():
                 root.destroy()
             except Exception as e:
                 logger.error("Fehler beim Beenden: %s", e)
+
+    except Exception as e:
+        messagebox.showerror("Error", f"An unexpected error occurred: {e}")
+        logger.error("Unerwarteter Fehler: %s", e)
+    finally:
         if stats_process:
-            logger.info("Dashboard wird beendet...")
+            logger.info("Dashboard-Subprocess wird beendet...")
             try:
                 stats_process.terminate()
                 stats_process.wait(timeout=5)
@@ -115,12 +120,6 @@ def main():
             except Exception as e:
                 logger.error("Fehler beim Beenden des Dashboards: %s", e)
         logger.info("Shutdown abgeschlossen.")
-
-    except Exception as e:
-        messagebox.showerror("Error", f"An unexpected error occurred: {e}")
-        logger.error("Unerwarteter Fehler: %s", e)
-    finally:
-        logger.info("main() beendet.")
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()

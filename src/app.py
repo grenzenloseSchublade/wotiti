@@ -57,6 +57,7 @@ class App:
         self.config = load_config()
         self._db_path = self.config.get("database_path", DATABASE_PATH)
         self._mini_mode = False
+        self._closing = False
         self._drag_data = {"x": 0, "y": 0}
         self._combobox_dirty = True
         self._cached_users = []
@@ -377,10 +378,16 @@ class App:
                 for (n, p) in active:
                     date = self.get_date() or datetime.today().strftime('%d-%m-%Y')
                     log_stop(project=p, name=n, date=date, conn=self.db_conn)
-                self.master.destroy()
-            # else: do nothing, keep app open
-        else:
-            self.master.destroy()
+            else:
+                return  # User cancelled — keep app open
+        self._closing = True
+        if self.db_conn:
+            try:
+                self.db_conn.close()
+                logger.info("Datenbankverbindung geschlossen.")
+            except Exception as e:
+                logger.error("Fehler beim Schlie\u00dfen der DB: %s", e)
+        self.master.destroy()
 
     # ----- Mini Mode -----
     def _toggle_mini_mode(self):
@@ -407,6 +414,7 @@ class App:
         # Compact window
         self.master.withdraw()
         self.master.overrideredirect(True)
+        self.master.minsize(0, 0)
         self.master.geometry("300x90")
         self.master.resizable(False, False)
         self.master.attributes('-topmost', True)
@@ -441,6 +449,7 @@ class App:
         self.master.attributes('-topmost', False)
         self.master.resizable(True, True)
         self.master.geometry(self._full_geometry)
+        self.master.minsize(650, 400)
         self.master.deiconify()
 
     def _drag_start(self, event):
@@ -1120,7 +1129,8 @@ class App:
             self.timer_project_label.config(text=f"Projekt: {project}")
             # Sync to mini mode timer
             self._mini_timer_label.config(text=time_text)
-        self.master.after(1000, self.update_timer_realtime)
+        if not self._closing:
+            self.master.after(1000, self.update_timer_realtime)
 
     def update_timer(self, duration):
         """Update the timer label with the elapsed time."""
@@ -1182,4 +1192,5 @@ class App:
             self.stats_button.config(bg="#D4D0C8", fg="black")
         else:
             self.stats_button.config(bg="#B00020", fg="white")
-        self.master.after(2000, self.update_stats_button_state)
+        if not self._closing:
+            self.master.after(2000, self.update_stats_button_state)
