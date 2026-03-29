@@ -407,7 +407,7 @@ class App:
         # Compact window
         self.master.withdraw()
         self.master.overrideredirect(True)
-        self.master.geometry("300x80")
+        self.master.geometry("300x90")
         self.master.resizable(False, False)
         self.master.attributes('-topmost', True)
         self.master.deiconify()
@@ -477,7 +477,10 @@ class App:
         win = Toplevel(self.master)
         win.title("Benutzerverwaltung")
         win.configure(bg='#C0C0C0')
-        win.geometry("400x350")
+        w, h = 400, 350
+        x = self.master.winfo_x() + (self.master.winfo_width() - w) // 2
+        y = self.master.winfo_y() + (self.master.winfo_height() - h) // 2
+        win.geometry(f"{w}x{h}+{x}+{y}")
         win.transient(self.master)
         win.wait_visibility()
         win.grab_set()
@@ -556,7 +559,10 @@ class App:
         win = Toplevel(self.master)
         win.title("Einstellungen")
         win.configure(bg='#C0C0C0')
-        win.geometry("520x680")
+        w, h = 520, 680
+        x = self.master.winfo_x() + (self.master.winfo_width() - w) // 2
+        y = self.master.winfo_y() + (self.master.winfo_height() - h) // 2
+        win.geometry(f"{w}x{h}+{x}+{y}")
         win.transient(self.master)
         win.wait_visibility()
         win.grab_set()
@@ -998,7 +1004,10 @@ class App:
         win = Toplevel(self.master)
         win.title("Eintrag bearbeiten")
         win.configure(bg='#C0C0C0')
-        win.geometry("420x220")
+        w, h = 420, 220
+        x = self.master.winfo_x() + (self.master.winfo_width() - w) // 2
+        y = self.master.winfo_y() + (self.master.winfo_height() - h) // 2
+        win.geometry(f"{w}x{h}+{x}+{y}")
         win.transient(self.master)
         win.wait_visibility()
         win.grab_set()
