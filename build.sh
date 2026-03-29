@@ -12,6 +12,7 @@ uv run pyinstaller \
     --noconsole \
     --onedir \
     --name wotiti \
+    --icon "src/assets/wotiti.ico" \
     --hidden-import=tkinter.filedialog \
     --collect-submodules sklearn \
     --collect-submodules scipy \
