@@ -128,7 +128,7 @@ class App:
         self.calculate_button.grid(row=0, column=3, pady=5, padx=3, sticky=W+E)
 
         self.stats_button = Button(
-            self.button_frame, text="Dashboard", command=self.open_stats_dashboard, **button_config
+            self.button_frame, text="Auswertung", command=self.open_stats_dashboard, **button_config
         )
         self.stats_button.grid(row=0, column=4, pady=5, padx=3, sticky=W+E)
 
@@ -680,7 +680,7 @@ class App:
         user_frame.grid_columnconfigure(1, weight=1)
 
         # ── Dashboard ──
-        dash_frame = LabelFrame(win, text="Dashboard", bg='#C0C0C0', fg='black',
+        dash_frame = LabelFrame(win, text="Auswertung (Dashboard)", bg='#C0C0C0', fg='black',
                                 font=('MS Sans Serif', 10, 'bold'), padx=8, pady=8)
         dash_frame.pack(fill='x', padx=10, pady=5)
 
