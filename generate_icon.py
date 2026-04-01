@@ -69,16 +69,16 @@ def draw_stopwatch(size: int) -> Image.Image:
     angle_m = math.radians(300 - 90)
     mx = cx + (r - 8) * math.cos(angle_m)
     my = cy + (r - 8) * math.sin(angle_m)
-    d.line([(cx, cy), (mx, my)], fill=hand_color, width=2)
+    d.line([(cx, cy), (mx, my)], fill=hand_color, width=5)
 
     # Second hand in cyan (pointing ~2 o'clock — synthwave accent)
     angle_s = math.radians(60 - 90)
     sx = cx + (r - 6) * math.cos(angle_s)
     sy = cy + (r - 6) * math.sin(angle_s)
-    d.line([(cx, cy), (sx, sy)], fill=cyan_accent, width=1)
+    d.line([(cx, cy), (sx, sy)], fill=cyan_accent, width=4)
 
     # Center dot
-    d.ellipse([cx - 2, cy - 2, cx + 2, cy + 2], fill=hand_color)
+    d.ellipse([cx - 3, cy - 3, cx + 3, cy + 3], fill=hand_color)
 
     # --- Side buttons (left and right, typical stopwatch) ---
     # Right button (start/stop)
@@ -90,8 +90,8 @@ def draw_stopwatch(size: int) -> Image.Image:
 
     # Scale to target size with nearest-neighbor for pixel-art look at small sizes
     if size <= 32:
-        return img.resize((size, size), Image.NEAREST)
-    return img.resize((size, size), Image.LANCZOS)
+        return img.resize((size, size), Image.Resampling.NEAREST)
+    return img.resize((size, size), Image.Resampling.LANCZOS)
 
 
 def main():
