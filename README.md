@@ -1,8 +1,20 @@
 # WoTiTi - Work Time Tracker & Insights 🕒
 
-WoTiTi ist ein umfassendes Zeiterfassungssystem, bestehend aus zwei Hauptkomponenten:
+WoTiTi ist ein Zeiterfassungssystem, bestehend aus zwei Hauptkomponenten:
 1. **Work Time Timer**: Eine benutzerfreundliche GUI-Anwendung zur Zeiterfassung
 2. **Work Time Insights**: Ein fortgeschrittenes Analyse-Dashboard für Zeitdaten
+
+## 💡 Motivation
+
+Ein minimalistisches Tool zur Zeiterfassung, das sich auf das Wesentliche konzentriert - das Erfassen von Arbeitszeit! 
+
+Es wurde bewusst eine klare Trennung zwischen Zeiterfassung und Auswertung gewählt, um den Fokus nicht vom Eigentlichen abzulenken und gleichzeitig eine leistungsstarke, aber optionale Analyseplattform bereitzustellen, die auf den gesammelten Daten aufbaut.
+**Alle** Daten bleiben vollständig lokal, keine Abhängigkeiten von Drittanbietern, und eine intuitive Benutzeroberfläche sorgen dafür, dass die Kontrolle über die eigenen Arbeitszeitdaten vollständig beim Nutzer bleibt.
+
+Im Unterschied zu vielen kommerziellen Zeiterfassungstools, bei denen Funktionsumfang häufig an Lizenzen, Zusatzpakete oder Cloud-Modelle gebunden ist, wird hier ein kostenloser Open-Source-Ansatz bereitgestellt: 
+
+**keine Cloud - keine Accounts - keine unnötige Komplexität!**
+
 
 ## ⚡ TL;DR
 
@@ -27,14 +39,6 @@ WoTiTi ist ein umfassendes Zeiterfassungssystem, bestehend aus zwei Hauptkompone
 > - Konfiguration wird in `data/config.json` persistiert
 > - Standalone-EXE via PyInstaller (`bash build.sh` / `build_windows.ps1`)
 
-## 💡 Motivation
-
-Ein minimalistisches Tool zur Zeiterfassung, das sich auf das Wesentliche konzentriert - das Erfassen von Arbeitszeit! 
-
-Es wurde bewusst eine klare Trennung zwischen Zeiterfassung und Auswertung gewählt, um den Fokus nicht vom Eigentlichen abzulenken und gleichzeitig eine leistungsstarke, aber optionale Analyseplattform bereitzustellen, die auf den gesammelten Daten aufbaut.
-**Alle** Daten bleiben vollständig lokal, keine Abhängigkeiten von Drittanbietern, und eine intuitive Benutzeroberfläche sorgen dafür, dass die Kontrolle über die eigenen Arbeitszeitdaten vollständig beim Nutzer bleibt.
-
-Im Unterschied zu vielen kommerziellen Zeiterfassungstools, bei denen Funktionsumfang häufig an Lizenzen, Zusatzpakete oder Cloud-Modelle gebunden ist, wird hier ein kostenloser Open-Source-Ansatz bereitgestellt: **keine Cloud - keine Accounts - keine unnötige Komplexität!**
 
 ## 🎯 Systemübersicht
 
