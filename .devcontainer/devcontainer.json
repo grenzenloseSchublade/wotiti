@@ -13,10 +13,12 @@
     "--network=host"
   ],
   "mounts": [
-    "source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind,consistency=cached"
+    "source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind,consistency=cached",
+    "source=/mnt/wslg/PulseServer,target=/mnt/wslg/PulseServer,type=bind,consistency=cached"
   ],
   "remoteEnv": {
-    "GH_TOKEN": "${localEnv:GH_TOKEN}"
+    "GH_TOKEN": "${localEnv:GH_TOKEN}",
+    "PULSE_SERVER": "unix:/mnt/wslg/PulseServer"
   },
   "customizations": {
     "vscode": {
@@ -31,5 +33,6 @@
       ]
     }
   },
-  "updateContentCommand": "python -m uv sync --extra stats --extra dev"
+  "updateContentCommand": "python -m uv sync --extra stats --extra dev",
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends pulseaudio-utils && sudo rm -rf /var/lib/apt/lists/*"
 }

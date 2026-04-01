@@ -64,6 +64,7 @@ def create_main_table(conn: sqlite3.Connection) -> bool:
     if success:
         logger.debug("Main table created successfully.")
         create_events_table(conn)
+        create_break_events_table(conn)
         create_projects_table(conn)
     return success
 
@@ -86,6 +87,51 @@ def create_events_table(conn: sqlite3.Connection) -> bool:
         execute_sql(conn, "CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);")
         execute_sql(conn, "CREATE INDEX IF NOT EXISTS idx_events_project_user ON events(project, user_id);")
     return success
+
+
+def create_break_events_table(conn: sqlite3.Connection) -> bool:
+    """Create the break events table in the SQLite database."""
+    sql_create_break_events_table = '''
+        CREATE TABLE IF NOT EXISTS break_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            project TEXT NOT NULL,
+            break_kind TEXT NOT NULL CHECK(break_kind IN ('short', 'long', 'manual')),
+            started_at DATETIME NOT NULL,
+            ended_at DATETIME,
+            duration_seconds INTEGER CHECK(duration_seconds IS NULL OR duration_seconds >= 0),
+            is_auto INTEGER NOT NULL DEFAULT 1 CHECK(is_auto IN (0, 1)),
+            source TEXT NOT NULL DEFAULT 'pomodoro_break',
+            pomodoro_cycle INTEGER,
+            work_interval_minutes INTEGER,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+    '''
+    success = execute_sql(conn, sql_create_break_events_table)
+    if success:
+        execute_sql(conn, "CREATE INDEX IF NOT EXISTS idx_break_events_user_started ON break_events(user_id, started_at);")
+        execute_sql(conn, "CREATE INDEX IF NOT EXISTS idx_break_events_project ON break_events(project);")
+        execute_sql(conn, "CREATE INDEX IF NOT EXISTS idx_break_events_open ON break_events(user_id, ended_at);")
+        # Migrate existing tables that lack the new columns.
+        _migrate_break_events_columns(conn)
+    return success
+
+
+def _migrate_break_events_columns(conn: sqlite3.Connection) -> None:
+    """Add pomodoro_cycle and work_interval_minutes if missing (existing DBs)."""
+    try:
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(break_events)")
+        existing = {row[1] for row in cursor.fetchall()}
+        if "pomodoro_cycle" not in existing:
+            cursor.execute("ALTER TABLE break_events ADD COLUMN pomodoro_cycle INTEGER")
+        if "work_interval_minutes" not in existing:
+            cursor.execute("ALTER TABLE break_events ADD COLUMN work_interval_minutes INTEGER")
+        conn.commit()
+        cursor.close()
+    except Error as e:
+        logger.warning("break_events column migration: %s", e)
 
 def create_projects_table(conn: sqlite3.Connection) -> bool:
     """Create the projects table in the SQLite database."""
@@ -294,6 +340,196 @@ def log_start(project: str = "1", name: str = "Hans", timestamp: datetime | None
 def log_stop(project: str = "1", name: str = "Hans", timestamp: datetime | None = None, date: str | None = None, conn: sqlite3.Connection | None = None) -> bool:
     """Log the stop time of a session."""
     return log_event(conn, project, name, 'stop', timestamp, date)
+
+
+def log_break_start(
+    project: str,
+    name: str,
+    break_kind: str,
+    is_auto: bool = True,
+    source: str = "pomodoro_break",
+    started_at: datetime | None = None,
+    pomodoro_cycle: int | None = None,
+    work_interval_minutes: int | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> bool:
+    """Log the start of a break. Avoids duplicate open breaks for same user/project."""
+    if not conn or not project or not name or break_kind not in {"short", "long", "manual"}:
+        return False
+
+    cursor = None
+    try:
+        cursor = conn.cursor()
+        user_id = check_user(conn, name)
+        if user_id is None:
+            return False
+
+        check_project(conn, project)
+
+        cursor.execute(
+            """
+            SELECT id FROM break_events
+            WHERE user_id = ? AND project = ? AND ended_at IS NULL
+            ORDER BY started_at DESC
+            LIMIT 1
+            """,
+            (user_id, project),
+        )
+        if cursor.fetchone() is not None:
+            return True
+
+        start_str = (started_at or datetime.now()).strftime(TIMESTAMP_FORMAT)
+        cursor.execute(
+            """
+            INSERT INTO break_events
+                (user_id, project, break_kind, started_at, is_auto, source,
+                 pomodoro_cycle, work_interval_minutes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (user_id, project, break_kind, start_str, 1 if is_auto else 0, source,
+             pomodoro_cycle, work_interval_minutes),
+        )
+        conn.commit()
+        return True
+    except Error as e:
+        logger.error("Error logging break start: %s", e)
+        return False
+    finally:
+        if cursor:
+            cursor.close()
+
+
+def log_break_stop(
+    project: str,
+    name: str,
+    ended_at: datetime | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> bool:
+    """Close the latest open break for user/project and store duration."""
+    if not conn or not project or not name:
+        return False
+
+    cursor = None
+    try:
+        cursor = conn.cursor()
+        cursor.execute('SELECT id FROM users WHERE name = ?', (name,))
+        row = cursor.fetchone()
+        if row is None:
+            return False
+        user_id = row[0]
+
+        cursor.execute(
+            """
+            SELECT id, started_at
+            FROM break_events
+            WHERE user_id = ? AND project = ? AND ended_at IS NULL
+            ORDER BY started_at DESC
+            LIMIT 1
+            """,
+            (user_id, project),
+        )
+        open_break = cursor.fetchone()
+        if open_break is None:
+            return True
+
+        break_id, started_at_str = open_break
+        stop_dt = ended_at or datetime.now()
+        stop_str = stop_dt.strftime(TIMESTAMP_FORMAT)
+        start_dt = datetime.strptime(started_at_str, TIMESTAMP_FORMAT)
+        duration = max(0, int((stop_dt - start_dt).total_seconds()))
+
+        cursor.execute(
+            """
+            UPDATE break_events
+            SET ended_at = ?, duration_seconds = ?
+            WHERE id = ?
+            """,
+            (stop_str, duration, break_id),
+        )
+        conn.commit()
+        return True
+    except Error as e:
+        logger.error("Error logging break stop: %s", e)
+        return False
+    finally:
+        if cursor:
+            cursor.close()
+
+
+def get_open_break(project: str, name: str, conn: sqlite3.Connection | None = None) -> dict | None:
+    """Return the currently open break for user/project if present."""
+    if not conn or not project or not name:
+        return None
+    cursor = None
+    try:
+        cursor = conn.cursor()
+        cursor.execute('SELECT id FROM users WHERE name = ?', (name,))
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        user_id = row[0]
+        cursor.execute(
+            """
+            SELECT id, break_kind, started_at, is_auto, source
+            FROM break_events
+            WHERE user_id = ? AND project = ? AND ended_at IS NULL
+            ORDER BY started_at DESC
+            LIMIT 1
+            """,
+            (user_id, project),
+        )
+        r = cursor.fetchone()
+        if r is None:
+            return None
+        return {
+            "id": r[0],
+            "break_kind": r[1],
+            "started_at": r[2],
+            "is_auto": bool(r[3]),
+            "source": r[4],
+        }
+    except Error as e:
+        logger.error("Error reading open break: %s", e)
+        return None
+    finally:
+        if cursor:
+            cursor.close()
+
+
+def close_stale_breaks(conn: sqlite3.Connection | None = None) -> int:
+    """Close all open breaks left over from a previous session (e.g. after crash)."""
+    if not conn:
+        return 0
+    cursor = None
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, started_at FROM break_events WHERE ended_at IS NULL"
+        )
+        stale = cursor.fetchall()
+        if not stale:
+            return 0
+        now_str = datetime.now().strftime(TIMESTAMP_FORMAT)
+        for break_id, started_at_str in stale:
+            try:
+                start_dt = datetime.strptime(started_at_str, TIMESTAMP_FORMAT)
+                duration = max(0, int((datetime.now() - start_dt).total_seconds()))
+            except (ValueError, TypeError):
+                duration = 0
+            cursor.execute(
+                "UPDATE break_events SET ended_at = ?, duration_seconds = ? WHERE id = ?",
+                (now_str, duration, break_id),
+            )
+        conn.commit()
+        logger.info("Closed %d stale open break(s) from previous session.", len(stale))
+        return len(stale)
+    except Error as e:
+        logger.warning("Error closing stale breaks: %s", e)
+        return 0
+    finally:
+        if cursor:
+            cursor.close()
+
 
 def calculate_duration(project: str = "1", name: str = "Hans", conn: sqlite3.Connection | None = None) -> float:
     """Calculate the total duration of a session."""

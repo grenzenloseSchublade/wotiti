@@ -84,8 +84,9 @@ def main():
                         cwd=project_root,
                         env=env
                     )
+                    logger.info("Dashboard-Subprocess gestartet (PID %d).", stats_process.pid)
                     stats_process.wait()
-                logger.info("Dashboard erfolgreich gestartet.")
+                    logger.debug("Dashboard-Subprocess beendet.")
             except Exception as e:
                 logger.error("Fehler im Dashboard: %s", e)
             finally:

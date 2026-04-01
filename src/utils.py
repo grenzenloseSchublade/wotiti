@@ -53,6 +53,7 @@ if getattr(sys, 'frozen', False):
 else:
     BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 PATH_TO_DATA = os.path.join(BASE_DIR, "data")
+PATH_TO_SOUNDS = os.path.join(PATH_TO_DATA, "sounds")
 PATH_TO_DASHBOARD_DATA = PATH_TO_DATA
 DATABASE_PATH = os.path.join(PATH_TO_DATA, "app_database.db")
 GENERATE_DATABASE_PATH = os.path.join(PATH_TO_DATA, "beispieldaten.db")
@@ -64,12 +65,22 @@ DEFAULT_CONFIG = {
     "default_project": "1",
     "dashboard_port": 8052,
     "theme": "Modern",
+    "window_geometry": "",
+    "pomodoro_enabled": False,
+    "pomodoro_work_minutes": 25,
+    "pomodoro_break_minutes": 5,
+    "pomodoro_long_break_minutes": 15,
+    "pomodoro_long_break_every": 4,
+    "pomodoro_auto_break": True,
+    "pomodoro_sound_enabled": True,
+    "pomodoro_sound_local_path": "sounds/StartupSound.wav",
 }
 
 
 def load_config() -> dict:
     """Lädt die Konfiguration aus config.json oder gibt Defaults zurück."""
     os.makedirs(PATH_TO_DATA, exist_ok=True)
+    os.makedirs(PATH_TO_SOUNDS, exist_ok=True)
     if os.path.isfile(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, encoding="utf-8") as f:
@@ -77,6 +88,7 @@ def load_config() -> dict:
             # Fehlende Schlüssel mit Defaults auffüllen
             for key, value in DEFAULT_CONFIG.items():
                 cfg.setdefault(key, value)
+
             return cfg
         except (json.JSONDecodeError, OSError):
             pass
@@ -104,7 +116,6 @@ def save_to_csv(data: pl.DataFrame, csv_path: str) -> None:
         logger.info("Daten gespeichert: %s", csv_path)
     except (OSError, ValueError, TypeError) as e:
         logger.error("CSV-Export fehlgeschlagen: %s", e)
-
 
 def convert_timestamp_format(timestamp_str: str | None) -> datetime | None:
     """

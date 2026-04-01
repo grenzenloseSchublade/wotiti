@@ -1,17 +1,22 @@
+import contextlib
 import glob
 import logging
 import os
 import re
 import socket
+import subprocess
 import sys
 import threading
 import time
 import webbrowser
 from datetime import datetime
+from shutil import which
 from tkinter import (
     END,
     VERTICAL,
+    BooleanVar,
     Button,
+    Checkbutton,
     E,
     Entry,
     Frame,
@@ -31,6 +36,8 @@ from db_helper import (
     TIMESTAMP_FORMAT,
     calculate_duration,
     check_user,
+    close_stale_breaks,
+    create_break_events_table,
     create_connection,
     create_events_table,
     create_main_table,
@@ -38,13 +45,22 @@ from db_helper import (
     get_all_projects,
     get_all_users,
     get_event_by_id,
+    get_open_break,
+    log_break_start,
+    log_break_stop,
     log_start,
     log_stop,
     migrate_legacy_user_tables,
     migrate_projects_to_table,
     update_event,
 )
-from utils import DATABASE_PATH, PATH_TO_DATA, load_config, save_config
+from utils import (
+    DATABASE_PATH,
+    PATH_TO_DATA,
+    PATH_TO_SOUNDS,
+    load_config,
+    save_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,16 +78,42 @@ class App:
         self._combobox_dirty = True
         self._cached_users = []
         self._cached_projects = []
+        self._full_geometry = ""
+        self._break_active = False
+        self._break_end_ts = 0.0
+        self._break_started_ts = 0.0
+        self._current_break_kind = "short"
+        self._current_break_source = "pomodoro_break"
+        self._pomodoro_cycles = 0
+        self._session_started_ts = 0.0
+        self._pomodoro_work_deadline_ts = 0.0
+        self._paused_pomodoro_remaining_seconds = 0
+        self._last_break_project = None
+        self._last_break_user = None
+        os.makedirs(PATH_TO_SOUNDS, exist_ok=True)
+
+        # Pomodoro settings (persisted in config)
+        self.pomodoro_enabled = bool(self.config.get("pomodoro_enabled", False))
+        self.pomodoro_work_minutes = int(self.config.get("pomodoro_work_minutes", 25))
+        self.pomodoro_break_minutes = int(self.config.get("pomodoro_break_minutes", 5))
+        self.pomodoro_long_break_minutes = int(self.config.get("pomodoro_long_break_minutes", 15))
+        self.pomodoro_long_break_every = int(self.config.get("pomodoro_long_break_every", 4))
+        self.pomodoro_auto_break = bool(self.config.get("pomodoro_auto_break", True))
+        self.pomodoro_sound_enabled = bool(self.config.get("pomodoro_sound_enabled", True))
+        self.pomodoro_sound_local_path = str(self.config.get("pomodoro_sound_local_path", "sounds/StartupSound.wav")).strip()
+        self._cached_sound_path = ""
+        self._cached_sound_player = ""
+
         master.title("WoTITI - Work Time Timer")
         master.configure(bg='#C0C0C0')
 
-        # Set window size based on screen resolution
-        screen_width = master.winfo_screenwidth()
-        screen_height = master.winfo_screenheight()
-        window_width = int(screen_width * 0.4)
-        window_height = int(screen_height * 0.45)
-        master.geometry(f"{window_width}x{window_height}")
-        master.minsize(650, 400)
+        # Restore last window geometry when available, fallback to sensible size.
+        saved_geometry = str(self.config.get("window_geometry", "")).strip()
+        if re.match(r"^\d+x\d+\+\d+\+\d+$", saved_geometry):
+            master.geometry(saved_geometry)
+        else:
+            master.geometry("720x540")
+        master.minsize(640, 440)
 
         # Make the window resizable
         master.grid_rowconfigure(0, weight=1)
@@ -108,7 +150,17 @@ class App:
         )
         self.start_button.grid(row=0, column=0, pady=5, padx=3, sticky=W+E)
 
-        # Stop button - prominent, red tint when active
+        # Pause button - toggle pause/resume
+        self.pause_button = Button(
+            self.button_frame, text="\u25AE\u25AE Pause", height=2, width=8,
+            command=self.pause_session,
+            bg='#A9A9A9', fg='black', font=('MS Sans Serif', 10, 'bold'),
+            activebackground='#FFD700', relief='raised', borderwidth=2,
+            state="disabled"
+        )
+        self.pause_button.grid(row=0, column=1, pady=5, padx=3, sticky=W+E)
+
+        # Stop button - ends session completely
         self.stop_button = Button(
             self.button_frame, text="\u25A0 Stop", height=2, width=8,
             command=self.stop_session,
@@ -116,46 +168,47 @@ class App:
             activebackground='#FF6B6B', relief='raised', borderwidth=2,
             state="disabled"
         )
-        self.stop_button.grid(row=0, column=1, pady=5, padx=3, sticky=W+E)
+        self.stop_button.grid(row=0, column=2, pady=5, padx=3, sticky=W+E)
 
         # Separator
         self.button_separator = Frame(self.button_frame, width=10, bg='#C0C0C0')
-        self.button_separator.grid(row=0, column=2, padx=2)
+        self.button_separator.grid(row=0, column=3, padx=2)
 
         self.calculate_button = Button(
             self.button_frame, text="Aktualisieren", command=self.update_duration, **button_config
         )
-        self.calculate_button.grid(row=0, column=3, pady=5, padx=3, sticky=W+E)
+        self.calculate_button.grid(row=0, column=4, pady=5, padx=3, sticky=W+E)
 
         self.stats_button = Button(
             self.button_frame, text="Auswertung", command=self.open_stats_dashboard, **button_config
         )
-        self.stats_button.grid(row=0, column=4, pady=5, padx=3, sticky=W+E)
+        self.stats_button.grid(row=0, column=5, pady=5, padx=3, sticky=W+E)
 
         self.user_mgmt_button = Button(
             self.button_frame, text="Benutzer", command=self.open_user_management, **button_config
         )
-        self.user_mgmt_button.grid(row=0, column=5, pady=5, padx=3, sticky=W+E)
+        self.user_mgmt_button.grid(row=0, column=6, pady=5, padx=3, sticky=W+E)
 
         self.settings_button = Button(
             self.button_frame, text="\u2699 Einst.", command=self.open_settings, **button_config
         )
-        self.settings_button.grid(row=0, column=6, pady=5, padx=3, sticky=W+E)
+        self.settings_button.grid(row=0, column=7, pady=5, padx=3, sticky=W+E)
 
         self.mini_button = Button(
             self.button_frame, text="\u25BD Mini", command=self._toggle_mini_mode, **button_config
         )
-        self.mini_button.grid(row=0, column=7, pady=5, padx=3, sticky=W+E)
+        self.mini_button.grid(row=0, column=8, pady=5, padx=3, sticky=W+E)
 
         # Configure button frame columns
         self.button_frame.grid_columnconfigure(0, weight=2)
         self.button_frame.grid_columnconfigure(1, weight=2)
-        self.button_frame.grid_columnconfigure(2, weight=0)
-        self.button_frame.grid_columnconfigure(3, weight=1)
+        self.button_frame.grid_columnconfigure(2, weight=2)
+        self.button_frame.grid_columnconfigure(3, weight=0)
         self.button_frame.grid_columnconfigure(4, weight=1)
         self.button_frame.grid_columnconfigure(5, weight=1)
         self.button_frame.grid_columnconfigure(6, weight=1)
         self.button_frame.grid_columnconfigure(7, weight=1)
+        self.button_frame.grid_columnconfigure(8, weight=1)
 
         # =====================================================
         # ROW 1: Entry frame (Name, Datum, Projekt)
@@ -221,9 +274,16 @@ class App:
         )
         self.timer_project_label.grid(row=0, column=2, pady=5, padx=10, sticky="w")
 
+        self.break_time_label = Label(
+            self.timer_frame, text="--:--", bg='#C0C0C0', fg='#0000FF',
+            font=('MS Sans Serif', 12, 'bold')
+        )
+        self.break_time_label.grid(row=0, column=3, pady=5, padx=10, sticky="e")
+
         self.timer_frame.grid_columnconfigure(0, weight=0)
         self.timer_frame.grid_columnconfigure(1, weight=1)
         self.timer_frame.grid_columnconfigure(2, weight=1)
+        self.timer_frame.grid_columnconfigure(3, weight=0)
 
         # Keep legacy reference for tests
         self.timer_label = self.timer_time_label
@@ -287,47 +347,76 @@ class App:
         sys.stderr = self
 
         # =====================================================
-        # MINI MODE: Dedicated compact frame (hidden by default)
+        # MINI MODE: Dedicated Toplevel window (hidden by default)
         # =====================================================
-        self._mini_frame = Frame(master, bg='#C0C0C0')
+        self._mini_toplevel = Toplevel(master)
+        self._mini_toplevel.title("WoTITI Mini")
+        self._mini_toplevel.overrideredirect(True)
+        self._mini_toplevel.attributes('-topmost', True)
+        self._mini_toplevel.geometry("400x90")
+        self._mini_toplevel.configure(bg='#C0C0C0')
+        self._mini_toplevel.resizable(False, False)
+        self._mini_toplevel.protocol("WM_DELETE_WINDOW", self._exit_mini_mode)
+        self._mini_toplevel.withdraw()
+
+        self._mini_toplevel.grid_rowconfigure(0, weight=1)
+        self._mini_toplevel.grid_columnconfigure(0, weight=1)
+
+        self._mini_frame = Frame(self._mini_toplevel, bg='#C0C0C0')
+        self._mini_frame.grid(padx=4, pady=4, sticky='nsew')
         mini_btn = {'bg': '#D4D0C8', 'fg': 'black', 'font': ('MS Sans Serif', 9),
                     'relief': 'raised', 'borderwidth': 2}
 
         # Row 0: Buttons
         self._mini_start_btn = Button(
             self._mini_frame, text="\u25B6", command=self.start_session,
-            width=4, height=1, bg='#D4D0C8', fg='green',
+            width=3, height=1, bg='#D4D0C8', fg='green',
             font=('MS Sans Serif', 11, 'bold'), relief='raised', borderwidth=2)
         self._mini_start_btn.grid(row=0, column=0, padx=2, pady=2, sticky='ew')
 
+        self._mini_pause_btn = Button(
+            self._mini_frame, text="\u25AE\u25AE", command=self.pause_session,
+            width=3, height=1, bg='#A9A9A9', fg='#B8860B',
+            font=('MS Sans Serif', 11, 'bold'), relief='raised', borderwidth=2,
+            state="disabled")
+        self._mini_pause_btn.grid(row=0, column=1, padx=2, pady=2, sticky='ew')
+
         self._mini_stop_btn = Button(
             self._mini_frame, text="\u25A0", command=self.stop_session,
-            width=4, height=1, bg='#D4D0C8', fg='red',
-            font=('MS Sans Serif', 11, 'bold'), relief='raised', borderwidth=2)
-        self._mini_stop_btn.grid(row=0, column=1, padx=2, pady=2, sticky='ew')
-
-        self._mini_refresh_btn = Button(
-            self._mini_frame, text="\u21BB", command=self.update_duration, **mini_btn)
-        self._mini_refresh_btn.grid(row=0, column=2, padx=2, pady=2, sticky='ew')
+            width=3, height=1, bg='#A9A9A9', fg='red',
+            font=('MS Sans Serif', 11, 'bold'), relief='raised', borderwidth=2,
+            state="disabled")
+        self._mini_stop_btn.grid(row=0, column=2, padx=2, pady=2, sticky='ew')
 
         self._mini_restore_btn = Button(
             self._mini_frame, text="\u25B3", command=self._toggle_mini_mode, **mini_btn)
         self._mini_restore_btn.grid(row=0, column=3, padx=2, pady=2, sticky='ew')
 
-        # Row 1: Timer + Projekt
+        # Row 1: Timer + Break + Projekt
         self._mini_timer_label = Label(
             self._mini_frame, text="00:00:00", bg='#C0C0C0', fg='red',
             font=('MS Sans Serif', 18, 'bold'))
         self._mini_timer_label.grid(row=1, column=0, padx=4, pady=2, sticky='w')
 
+        self._mini_break_label = Label(
+            self._mini_frame, text="", bg='#C0C0C0', fg='#0000FF',
+            font=('MS Sans Serif', 10, 'bold'))
+        self._mini_break_label.grid(row=1, column=1, padx=2, pady=2, sticky='w')
+
         self._mini_project_combo = Combobox(
-            self._mini_frame, font=('MS Sans Serif', 9), width=14)
-        self._mini_project_combo.grid(row=1, column=1, columnspan=3, padx=4, pady=2, sticky='ew')
+            self._mini_frame, font=('MS Sans Serif', 9), width=10)
+        self._mini_project_combo.grid(row=1, column=2, columnspan=2, padx=4, pady=2, sticky='ew')
 
         self._mini_frame.grid_columnconfigure(0, weight=1)
-        self._mini_frame.grid_columnconfigure(1, weight=1)
+        self._mini_frame.grid_columnconfigure(1, weight=0)
         self._mini_frame.grid_columnconfigure(2, weight=1)
         self._mini_frame.grid_columnconfigure(3, weight=1)
+
+        # Enable dragging on mini mode (always bound, Toplevel handles visibility)
+        self._mini_frame.bind("<Button-1>", self._drag_start)
+        self._mini_frame.bind("<B1-Motion>", self._drag_move)
+        self._mini_timer_label.bind("<Button-1>", self._drag_start)
+        self._mini_timer_label.bind("<B1-Motion>", self._drag_move)
 
         # Reflect dashboard status on the button
         self.update_stats_button_state()
@@ -339,6 +428,8 @@ class App:
                 logger.info("Datenbankverbindung hergestellt: %s", self._db_path)
                 create_main_table(self.db_conn)
                 create_events_table(self.db_conn)
+                create_break_events_table(self.db_conn)
+                close_stale_breaks(self.db_conn)
                 default_user = self.config.get("default_user", "Hans")
                 check_user(self.db_conn, default_user)
                 migrate_legacy_user_tables(self.db_conn)
@@ -362,24 +453,47 @@ class App:
         master.bind("<Control-s>", lambda e: self.start_session())
         master.bind("<Control-e>", lambda e: self.stop_session())
         master.bind("<Control-m>", lambda e: self._toggle_mini_mode())
+        master.bind("<Control-p>", lambda e: self.pause_session())
 
         # Session protection: ask before closing with active session
         master.protocol("WM_DELETE_WINDOW", self._on_closing)
 
+        # Pre-resolve sound path and player executable for instant playback.
+        self._preload_sound()
+
     def _on_closing(self):
-        """Handle window close — stop active sessions first."""
+        """Handle window close — stop active sessions and breaks first."""
+        active = [k for k, v in self.session_active.items() if v]
+
+        if self._break_active or active:
+            msg_parts = []
+            if self._break_active:
+                msg_parts.append("Eine Pause ist aktiv.")
+            if active:
+                name, project = active[0]
+                msg_parts.append(f"Session f\u00fcr '{name}' (Projekt {project}) l\u00e4uft noch.")
+            msg_parts.append("Alles beenden und App schlie\u00dfen?")
+            if not messagebox.askyesno("Aktive Arbeit", "\n".join(msg_parts)):
+                return  # User cancelled
+
+        if self._break_active:
+            self._finish_break(play_sound=False, bring_to_front=False, auto_resume=False)
+
+        try:
+            geometry = self._full_geometry if self._mini_mode and self._full_geometry else self.master.geometry()
+            if geometry:
+                self.config["window_geometry"] = geometry
+                save_config(self.config)
+        except OSError as e:
+            logger.warning("Fenstergröße konnte nicht gespeichert werden: %s", e)
+
+        # Re-check: manual break may have closed the session already.
         active = [k for k, v in self.session_active.items() if v]
         if active:
-            name, project = active[0]
-            if messagebox.askyesno(
-                "Session aktiv",
-                f"Session f\u00fcr '{name}' (Projekt {project}) l\u00e4uft noch.\nSession beenden und App schlie\u00dfen?"
-            ):
-                for (n, p) in active:
-                    date = self.get_date() or datetime.today().strftime('%d-%m-%Y')
-                    log_stop(project=p, name=n, date=date, conn=self.db_conn)
-            else:
-                return  # User cancelled — keep app open
+            for (n, p) in active:
+                date = datetime.today().strftime('%d-%m-%Y')
+                log_stop(project=p, name=n, date=date, conn=self.db_conn)
+
         self._closing = True
         if self.db_conn:
             try:
@@ -387,9 +501,10 @@ class App:
                 logger.info("Datenbankverbindung geschlossen.")
             except Exception as e:
                 logger.error("Fehler beim Schlie\u00dfen der DB: %s", e)
+        with contextlib.suppress(Exception):
+            self._mini_toplevel.destroy()
         self.master.destroy()
 
-    # ----- Mini Mode -----
     def _toggle_mini_mode(self):
         """Toggle between full and compact mini mode."""
         if self._mini_mode:
@@ -398,7 +513,7 @@ class App:
             self._enter_mini_mode()
 
     def _enter_mini_mode(self):
-        """Switch to compact always-on-top view with dedicated mini frame."""
+        """Switch to compact always-on-top Toplevel; hide main window."""
         self._mini_mode = True
         self._full_geometry = self.master.geometry()
 
@@ -406,62 +521,43 @@ class App:
         self._mini_project_combo['values'] = self.project_entry['values']
         self._mini_project_combo.set(self.project_entry.get().strip())
         self._mini_timer_label.configure(text=self.timer_time_label.cget('text'))
+        self._mini_break_label.configure(text=self.break_time_label.cget('text'))
 
-        # Swap frames: hide main, show mini
-        self.frame.grid_remove()
-        self._mini_frame.grid(padx=4, pady=4, sticky='nsew')
+        # Lock project combo during active session or break to prevent orphaned sessions.
+        if any(self.session_active.values()) or self._break_active:
+            self._mini_project_combo.config(state='disabled')
+        else:
+            self._mini_project_combo.config(state='readonly')
 
-        # Compact window
+        # Hide main window, show mini Toplevel
         self.master.withdraw()
-        self.master.overrideredirect(True)
-        self.master.minsize(0, 0)
-        self.master.geometry("300x90")
-        self.master.resizable(False, False)
-        self.master.attributes('-topmost', True)
-        self.master.deiconify()
-
-        # Enable dragging
-        self._mini_frame.bind("<Button-1>", self._drag_start)
-        self._mini_frame.bind("<B1-Motion>", self._drag_move)
-        self._mini_timer_label.bind("<Button-1>", self._drag_start)
-        self._mini_timer_label.bind("<B1-Motion>", self._drag_move)
+        self._mini_toplevel.deiconify()
+        self._mini_toplevel.lift()
+        self._mini_toplevel.focus_force()
 
     def _exit_mini_mode(self):
-        """Restore full window from mini mode."""
+        """Hide mini Toplevel, restore main window."""
         self._mini_mode = False
-
-        # Unbind drag
-        self._mini_frame.unbind("<Button-1>")
-        self._mini_frame.unbind("<B1-Motion>")
-        self._mini_timer_label.unbind("<Button-1>")
-        self._mini_timer_label.unbind("<B1-Motion>")
 
         # Sync project selection back from mini to main
         self.project_entry.set(self._mini_project_combo.get().strip())
 
-        # Swap frames: hide mini, show main
-        self._mini_frame.grid_remove()
-        self.frame.grid(padx=10, pady=10, sticky='nsew')
-
-        # Restore window
-        self.master.withdraw()
-        self.master.overrideredirect(False)
-        self.master.attributes('-topmost', False)
-        self.master.resizable(True, True)
+        # Hide mini Toplevel, restore main window
+        self._mini_toplevel.withdraw()
         self.master.geometry(self._full_geometry)
-        self.master.minsize(650, 400)
         self.master.deiconify()
+        self.master.lift()
 
     def _drag_start(self, event):
         """Record starting position for window drag."""
-        self._drag_data["x"] = event.x_root - self.master.winfo_x()
-        self._drag_data["y"] = event.y_root - self.master.winfo_y()
+        self._drag_data["x"] = event.x_root - self._mini_toplevel.winfo_x()
+        self._drag_data["y"] = event.y_root - self._mini_toplevel.winfo_y()
 
     def _drag_move(self, event):
         """Move window as mouse drags."""
         x = event.x_root - self._drag_data["x"]
         y = event.y_root - self._drag_data["y"]
-        self.master.geometry(f"+{x}+{y}")
+        self._mini_toplevel.geometry(f"+{x}+{y}")
 
     def _refresh_comboboxes(self, force=False):
         """Refresh user and project comboboxes from database (cached)."""
@@ -568,7 +664,7 @@ class App:
         win = Toplevel(self.master)
         win.title("Einstellungen")
         win.configure(bg='#C0C0C0')
-        w, h = 520, 680
+        w, h = 560, 780
         x = self.master.winfo_x() + (self.master.winfo_width() - w) // 2
         y = self.master.winfo_y() + (self.master.winfo_height() - h) // 2
         win.geometry(f"{w}x{h}+{x}+{y}")
@@ -625,6 +721,7 @@ class App:
                     if conn:
                         create_main_table(conn)
                         create_events_table(conn)
+                        create_break_events_table(conn)
                         conn.close()
                         _refresh_db_list()
                         db_var.set(path)
@@ -697,6 +794,151 @@ class App:
         theme_var.grid(row=1, column=1, padx=5, pady=2, sticky='w')
         theme_var.set(self.config.get("theme", "Modern"))
 
+        # ── Pomodoro ──
+        pomodoro_frame = LabelFrame(win, text="Pomodoro & Pause", bg='#C0C0C0', fg='black',
+                        font=('MS Sans Serif', 10, 'bold'), padx=8, pady=8)
+        pomodoro_frame.pack(fill='x', padx=10, pady=5)
+
+        pomodoro_enabled_var = BooleanVar(value=self.pomodoro_enabled)
+        pomodoro_auto_var = BooleanVar(value=self.pomodoro_auto_break)
+        pomodoro_sound_enabled_var = BooleanVar(value=self.pomodoro_sound_enabled)
+
+        Checkbutton(
+            pomodoro_frame,
+            text="Pomodoro aktiv",
+            variable=pomodoro_enabled_var,
+            bg='#C0C0C0',
+            fg='black',
+            selectcolor='#C0C0C0',
+            activebackground='#C0C0C0',
+            font=('MS Sans Serif', 10),
+        ).grid(row=0, column=0, columnspan=2, sticky='w', pady=2)
+
+        Label(pomodoro_frame, text="Arbeitszeit (min):", **lbl).grid(row=1, column=0, sticky='w', pady=2)
+        pomodoro_work_var = Spinbox(pomodoro_frame, from_=1, to=120, width=8,
+                        font=('MS Sans Serif', 10), bg='#FFFFFF', fg='black')
+        pomodoro_work_var.grid(row=1, column=1, padx=5, pady=2, sticky='w')
+        pomodoro_work_var.delete(0, END)
+        pomodoro_work_var.insert(0, str(self.pomodoro_work_minutes))
+
+        Label(pomodoro_frame, text="Kurze Pause (min):", **lbl).grid(row=2, column=0, sticky='w', pady=2)
+        pomodoro_break_var = Spinbox(pomodoro_frame, from_=1, to=60, width=8,
+                         font=('MS Sans Serif', 10), bg='#FFFFFF', fg='black')
+        pomodoro_break_var.grid(row=2, column=1, padx=5, pady=2, sticky='w')
+        pomodoro_break_var.delete(0, END)
+        pomodoro_break_var.insert(0, str(self.pomodoro_break_minutes))
+
+        Label(pomodoro_frame, text="Lange Pause (min):", **lbl).grid(row=3, column=0, sticky='w', pady=2)
+        pomodoro_long_break_var = Spinbox(pomodoro_frame, from_=1, to=120, width=8,
+                          font=('MS Sans Serif', 10), bg='#FFFFFF', fg='black')
+        pomodoro_long_break_var.grid(row=3, column=1, padx=5, pady=2, sticky='w')
+        pomodoro_long_break_var.delete(0, END)
+        pomodoro_long_break_var.insert(0, str(self.pomodoro_long_break_minutes))
+
+        Label(pomodoro_frame, text="Lange Pause alle N:", **lbl).grid(row=4, column=0, sticky='w', pady=2)
+        pomodoro_every_var = Spinbox(pomodoro_frame, from_=2, to=12, width=8,
+                         font=('MS Sans Serif', 10), bg='#FFFFFF', fg='black')
+        pomodoro_every_var.grid(row=4, column=1, padx=5, pady=2, sticky='w')
+        pomodoro_every_var.delete(0, END)
+        pomodoro_every_var.insert(0, str(self.pomodoro_long_break_every))
+
+        Checkbutton(
+            pomodoro_frame,
+            text="Auto-Pause",
+            variable=pomodoro_auto_var,
+            bg='#C0C0C0',
+            fg='black',
+            selectcolor='#C0C0C0',
+            activebackground='#C0C0C0',
+            font=('MS Sans Serif', 10),
+        ).grid(row=0, column=2, columnspan=2, sticky='w', pady=2)
+
+        Checkbutton(
+            pomodoro_frame,
+            text="Sound aktiv",
+            variable=pomodoro_sound_enabled_var,
+            bg='#C0C0C0',
+            fg='black',
+            selectcolor='#C0C0C0',
+            activebackground='#C0C0C0',
+            font=('MS Sans Serif', 10),
+        ).grid(row=1, column=2, columnspan=2, sticky='w', pady=2)
+
+        Label(pomodoro_frame, text="Sound Datei:", **lbl).grid(row=3, column=2, sticky='w', pady=2)
+        sound_file_entry = Entry(pomodoro_frame, bg='#FFFFFF', fg='black', font=('MS Sans Serif', 10), width=28)
+        sound_file_entry.grid(row=3, column=3, padx=5, pady=2, sticky='ew')
+        sound_file_entry.insert(0, self.pomodoro_sound_local_path)
+
+        def _browse_sound():
+            from tkinter import filedialog
+            path = filedialog.askopenfilename(
+                initialdir=PATH_TO_SOUNDS,
+                filetypes=[("Audio", "*.wav *.opus *.ogg *.mp3 *.m4a"), ("Alle Dateien", "*.*")],
+                parent=win,
+            )
+            if path:
+                try:
+                    rel = os.path.relpath(path, PATH_TO_DATA).replace('\\', '/')
+                except ValueError:
+                    rel = path
+                sound_file_entry.delete(0, END)
+                sound_file_entry.insert(0, rel)
+
+        Button(pomodoro_frame, text="...", command=_browse_sound, width=2,
+               bg='#D4D0C8', fg='black', font=('MS Sans Serif', 8),
+               relief='raised', borderwidth=1, pady=0).grid(row=3, column=4, padx=(2, 0), pady=2)
+
+        def _preview_sound():
+            """Play first 7 seconds of the selected sound file."""
+            path = self._resolve_sound_path(sound_file_entry.get().strip())
+            if not path or not os.path.isfile(path):
+                messagebox.showwarning("Sound", f"Datei nicht gefunden:\n{path}", parent=win)
+                return
+
+            def _worker():
+                try:
+                    is_wav = path.lower().endswith(".wav")
+                    if sys.platform.startswith("win"):
+                        if is_wav:
+                            winsound = __import__("winsound")
+                            winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                            return
+                        exe = which("ffplay") or which("mpv")
+                        if exe:
+                            cmd = ([exe, "-nodisp", "-autoexit", "-t", "7", path]
+                                   if "ffplay" in exe
+                                   else [exe, "--no-video", "--end=7", path])
+                            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            return
+                    elif sys.platform == "darwin" and which("afplay"):
+                        subprocess.Popen(["afplay", "-t", "7", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        return
+                    else:
+                        for cmd_name in ("paplay", "ffplay", "mpv", "play", "aplay"):
+                            exe = which(cmd_name)
+                            if not exe:
+                                continue
+                            if cmd_name == "aplay" and not is_wav:
+                                continue
+                            if cmd_name == "ffplay":
+                                subprocess.Popen([exe, "-nodisp", "-autoexit", "-t", "7", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            elif cmd_name == "mpv":
+                                subprocess.Popen([exe, "--no-video", "--end=7", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            else:
+                                subprocess.Popen([exe, path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            return
+                    self.master.after(0, self.master.bell)
+                except Exception as e:
+                    logger.warning("Sound preview failed: %s", e)
+
+            threading.Thread(target=_worker, daemon=True).start()
+
+        Button(pomodoro_frame, text="\u25B6", command=_preview_sound, width=2,
+               bg='#D4D0C8', fg='black', font=('MS Sans Serif', 8),
+               relief='raised', borderwidth=1, pady=0).grid(row=3, column=5, padx=(2, 0), pady=2)
+
+        pomodoro_frame.grid_columnconfigure(3, weight=1)
+
         # ── Entwickler ──
         dev_frame = LabelFrame(win, text="Entwickler", bg='#C0C0C0', fg='black',
                                font=('MS Sans Serif', 10, 'bold'), padx=8, pady=8)
@@ -731,11 +973,15 @@ class App:
 
         log_btn_frame = Frame(dev_frame, bg='#C0C0C0')
         log_btn_frame.grid(row=1, column=0, columnspan=2, sticky='ew', pady=(4, 0))
-        Button(log_btn_frame, text="Aktualisieren", command=_load_log, **btn).pack(side='left')
-        Button(log_btn_frame, text="Log löschen", command=lambda: (
-            open(log_path, 'w').close() if os.path.isfile(log_path) else None,
+
+        def _clear_log():
+            if os.path.isfile(log_path):
+                with open(log_path, 'w', encoding='utf-8'):
+                    pass
             _load_log()
-        ), **btn).pack(side='left', padx=(8, 0))
+
+        Button(log_btn_frame, text="Aktualisieren", command=_load_log, **btn).pack(side='left')
+        Button(log_btn_frame, text="Log löschen", command=_clear_log, **btn).pack(side='left', padx=(8, 0))
         Button(log_btn_frame, text="Copy", command=lambda: self._copy_text_widget(log_text),
                **btn).pack(side='left', padx=(8, 0))
 
@@ -752,18 +998,60 @@ class App:
                 messagebox.showwarning("Ungültiger Port", "Port muss zwischen 1024 und 65535 liegen.", parent=win)
                 return
 
+            numeric_fields = [
+                (pomodoro_work_var.get().strip(), "Arbeitszeit"),
+                (pomodoro_break_var.get().strip(), "Kurze Pause"),
+                (pomodoro_long_break_var.get().strip(), "Lange Pause"),
+                (pomodoro_every_var.get().strip(), "Lange Pause alle N"),
+            ]
+            for value, label in numeric_fields:
+                if not value.isdigit() or int(value) <= 0:
+                    messagebox.showwarning("Ungültiger Wert", f"{label} muss eine positive Zahl sein.", parent=win)
+                    return
+
+            raw_sound_path = sound_file_entry.get().strip() or "sounds/StartupSound.wav"
+            sound_path = raw_sound_path.replace('\\', '/')
+            if os.path.isabs(sound_path):
+                try:
+                    sound_path = os.path.relpath(sound_path, PATH_TO_DATA).replace('\\', '/')
+                except ValueError:
+                    messagebox.showwarning(
+                        "Ungültiger Sound-Pfad",
+                        "Bitte einen relativen Pfad unterhalb von data/ verwenden (z. B. sounds/StartupSound.wav).",
+                        parent=win,
+                    )
+                    return
+
             new_config = {
+                **self.config,
                 "database_path": new_db if new_db else self._db_path,
                 "default_user": default_user_var.get().strip() or "Hans",
                 "default_project": default_proj_var.get().strip() or "1",
                 "dashboard_port": int(new_port),
                 "theme": theme_var.get(),
+                "pomodoro_enabled": bool(pomodoro_enabled_var.get()),
+                "pomodoro_work_minutes": int(pomodoro_work_var.get().strip()),
+                "pomodoro_break_minutes": int(pomodoro_break_var.get().strip()),
+                "pomodoro_long_break_minutes": int(pomodoro_long_break_var.get().strip()),
+                "pomodoro_long_break_every": int(pomodoro_every_var.get().strip()),
+                "pomodoro_auto_break": bool(pomodoro_auto_var.get()),
+                "pomodoro_sound_enabled": bool(pomodoro_sound_enabled_var.get()),
+                "pomodoro_sound_local_path": sound_path,
             }
             save_config(new_config)
             logger.info("Einstellungen gespeichert: theme=%s, port=%s, db=%s",
                         new_config["theme"], new_config["dashboard_port"],
                         new_config["database_path"])
             self.config = new_config
+            self.pomodoro_enabled = bool(new_config.get("pomodoro_enabled", False))
+            self.pomodoro_work_minutes = int(new_config.get("pomodoro_work_minutes", 25))
+            self.pomodoro_break_minutes = int(new_config.get("pomodoro_break_minutes", 5))
+            self.pomodoro_long_break_minutes = int(new_config.get("pomodoro_long_break_minutes", 15))
+            self.pomodoro_long_break_every = int(new_config.get("pomodoro_long_break_every", 4))
+            self.pomodoro_auto_break = bool(new_config.get("pomodoro_auto_break", True))
+            self.pomodoro_sound_enabled = bool(new_config.get("pomodoro_sound_enabled", True))
+            self.pomodoro_sound_local_path = str(new_config.get("pomodoro_sound_local_path", "sounds/StartupSound.wav")).strip()
+            self._preload_sound()
 
             # Switch database if changed
             old_path = self._db_path
@@ -776,6 +1064,7 @@ class App:
                     if self.db_conn:
                         create_main_table(self.db_conn)
                         create_events_table(self.db_conn)
+                        create_break_events_table(self.db_conn)
                         migrate_legacy_user_tables(self.db_conn)
                         migrate_projects_to_table(self.db_conn)
                     self.write(f"Datenbank gewechselt: {self._db_path}")
@@ -798,8 +1087,45 @@ class App:
         Button(action_frame, text="Speichern", command=_save, **btn).pack(side='left', padx=(0, 10))
         Button(action_frame, text="Abbrechen", command=win.destroy, **btn).pack(side='left')
     # ----- Session management -----
+    def _set_button_state_idle(self):
+        """Set buttons to idle state: Start enabled, Pause+Stop disabled."""
+        self.start_button.config(state="normal", bg='#D4D0C8', text="\u25B6 Start")
+        self.pause_button.config(state="disabled", bg='#A9A9A9', text="\u25AE\u25AE Pause")
+        self.stop_button.config(state="disabled", bg='#A9A9A9')
+        self._mini_start_btn.config(state="normal", bg='#D4D0C8', text="\u25B6")
+        self._mini_pause_btn.config(state="disabled", bg='#A9A9A9', text="\u25AE\u25AE")
+        self._mini_stop_btn.config(state="disabled", bg='#A9A9A9')
+        self._mini_project_combo.config(state='readonly')
+        self.project_entry.config(state='normal')
+
+    def _set_button_state_running(self):
+        """Set buttons to running state: Start disabled, Pause+Stop enabled."""
+        self.start_button.config(state="disabled", bg='#A9A9A9', text="\u25B6 Start")
+        self.pause_button.config(state="normal", bg='#D4D0C8', text="\u25AE\u25AE Pause")
+        self.stop_button.config(state="normal", bg='#D4D0C8')
+        self._mini_start_btn.config(state="disabled", bg='#A9A9A9', text="\u25B6")
+        self._mini_pause_btn.config(state="normal", bg='#D4D0C8', text="\u25AE\u25AE")
+        self._mini_stop_btn.config(state="normal", bg='#D4D0C8')
+        self._mini_project_combo.config(state='disabled')
+        self.project_entry.config(state='disabled')
+
+    def _set_button_state_break(self):
+        """Set buttons to break state: Start='Resume', Pause disabled, Stop enabled."""
+        self.start_button.config(state="normal", bg='#D4D0C8', text="\u25B6 Weiter")
+        self.pause_button.config(state="disabled", bg='#A9A9A9', text="\u25AE\u25AE Pause")
+        self.stop_button.config(state="normal", bg='#D4D0C8')
+        self._mini_start_btn.config(state="normal", bg='#D4D0C8', text="\u25B6")
+        self._mini_pause_btn.config(state="disabled", bg='#A9A9A9', text="\u25AE\u25AE")
+        self._mini_stop_btn.config(state="normal", bg='#D4D0C8')
+        self._mini_project_combo.config(state='disabled')
+        self.project_entry.config(state='disabled')
+
     def start_session(self):
         if self.db_conn:
+            if self._break_active:
+                # Start button acts as Resume during a break — always resume.
+                self._finish_break(play_sound=True, bring_to_front=True, force_resume=True)
+                return
             project = self.get_project()
             name = self.get_name()
             date = self.get_date()
@@ -812,32 +1138,286 @@ class App:
                     self.session_active[(name, project)] = True
                     self.timer_running = True
                     self.timer_start_time = time.time()
+                    self._session_started_ts = time.time()
+                    self._pomodoro_cycles = 0
+                    if self.pomodoro_enabled and self._pomodoro_work_deadline_ts <= 0:
+                        self._pomodoro_work_deadline_ts = time.time() + (self.pomodoro_work_minutes * 60)
                     self._combobox_dirty = True
                     self._refresh_comboboxes()
                     self.update_db_content()
-                    self.start_button.config(state="disabled", bg='#A9A9A9')
-                    self.stop_button.config(state="normal", bg='#D4D0C8')
-                    self._mini_start_btn.config(state="disabled", bg='#A9A9A9')
-                    self._mini_stop_btn.config(state="normal", bg='#D4D0C8')
+                    self._set_button_state_running()
 
     def stop_session(self):
-        if self.db_conn:
-            project = self.get_project()
-            name = self.get_name()
-            date = self.get_date()
-            if project is not None and name:
-                if not self.session_active.get((name, project), False):
-                    self.write("Keine aktive Session. Bitte zuerst starten.", error=True)
-                else:
-                    logger.info("Session gestoppt: user=%s, project=%s", name, project)
-                    log_stop(project=project, name=name, date=date, conn=self.db_conn)
-                    self.session_active[(name, project)] = False
-                    self.timer_running = False
-                    self.update_db_content()
-                    self.start_button.config(state="normal", bg='#D4D0C8')
-                    self.stop_button.config(state="disabled", bg='#A9A9A9')
-                    self._mini_start_btn.config(state="normal", bg='#D4D0C8')
-                    self._mini_stop_btn.config(state="disabled", bg='#A9A9A9')
+        """End the session completely. If a break is active, close it first without auto-resume."""
+        if self._break_active:
+            self._finish_break(play_sound=False, bring_to_front=False, auto_resume=False)
+
+        if not self.db_conn:
+            return
+        project = self.get_project()
+        name = self.get_name()
+        date = self.get_date()
+        if project is not None and name:
+            if not self.session_active.get((name, project), False):
+                # Session may already be closed (e.g. manual break closed it).
+                self._set_button_state_idle()
+                return
+            logger.info("Session gestoppt: user=%s, project=%s", name, project)
+            log_stop(project=project, name=name, date=date, conn=self.db_conn)
+            self.session_active[(name, project)] = False
+            self.timer_running = False
+            self._session_started_ts = 0.0
+            self._pomodoro_work_deadline_ts = 0.0
+            self._paused_pomodoro_remaining_seconds = 0
+            self._pomodoro_cycles = 0
+            self.update_db_content()
+            self._set_button_state_idle()
+
+    def pause_session(self):
+        """Start a manual break. Does not resume — use Start for that."""
+        if self._break_active:
+            return
+
+        if not self.timer_running:
+            self.write("Keine laufende Session für Pause vorhanden.", error=True)
+            return
+        self._start_break(
+            break_kind="manual",
+            break_minutes=0,
+            is_auto=False,
+            source_label="custom_break",
+            timed_break=False,
+        )
+
+    def _start_break(
+        self,
+        break_kind: str,
+        break_minutes: int,
+        is_auto: bool,
+        source_label: str,
+        timed_break: bool = True,
+    ):
+        """Start a break phase and persist it in break_events."""
+        if self._break_active or not self.db_conn:
+            logger.debug("_start_break aborted: break_active=%s, db=%s",
+                         self._break_active, bool(self.db_conn))
+            return
+
+        project = self._get_project_silent()
+        name = self._get_name_silent()
+        date = self.get_date()
+        if not project or not name or not date:
+            logger.warning("_start_break aborted: project=%s, name=%s, date=%s",
+                           project, name, date)
+            return
+
+        # Close stale breaks that may linger from a crashed session.
+        stale = get_open_break(project=project, name=name, conn=self.db_conn)
+        if stale is not None:
+            logger.info("Closing stale open break #%s before starting new break.", stale["id"])
+            log_break_stop(project=project, name=name, conn=self.db_conn)
+
+        if self.session_active.get((name, project), False):
+            if source_label == "custom_break":
+                # Manual break: stop the session so pause time is NOT work time.
+                log_stop(project=project, name=name, date=date, conn=self.db_conn)
+                self.session_active[(name, project)] = False
+                self._session_started_ts = 0.0
+            # For pomodoro_break: session stays open in DB (break = work time).
+            self.timer_running = False
+
+        self._break_active = True
+        self._current_break_kind = break_kind
+        self._current_break_source = source_label
+        self._break_started_ts = time.time()
+        self._break_end_ts = self._break_started_ts + max(1, int(break_minutes) * 60) if timed_break else 0.0
+        self._last_break_project = project
+        self._last_break_user = name
+
+        if self.pomodoro_enabled and break_kind == "manual":
+            remaining = max(1, int(self._pomodoro_work_deadline_ts - time.time())) if self._pomodoro_work_deadline_ts else max(1, self.pomodoro_work_minutes * 60)
+            self._paused_pomodoro_remaining_seconds = remaining
+            self._pomodoro_work_deadline_ts = 0.0
+
+        log_break_start(
+            project=project,
+            name=name,
+            break_kind=break_kind,
+            is_auto=is_auto,
+            source=source_label,
+            pomodoro_cycle=self._pomodoro_cycles if self.pomodoro_enabled else None,
+            work_interval_minutes=self.pomodoro_work_minutes if self.pomodoro_enabled else None,
+            conn=self.db_conn,
+        )
+
+        self._set_button_state_break()
+
+        self._play_pause_sound()
+        self._bring_main_window_to_front()
+        if timed_break:
+            self.write(f"Pause gestartet ({break_minutes} min).")
+        else:
+            self.write("Manuelle Pause gestartet.")
+
+    def _finish_break(self, play_sound: bool = True, bring_to_front: bool = True,
+                       auto_resume: bool = True, force_resume: bool = False):
+        """Finish an active break. Resume if auto_resume or force_resume."""
+        if not self._break_active or not self.db_conn:
+            return
+
+        project = self._last_break_project or self._get_project_silent()
+        name = self._last_break_user or self._get_name_silent()
+        date = self.get_date() or datetime.today().strftime('%d-%m-%Y')
+        if not project or not name:
+            return
+
+        log_break_stop(project=project, name=name, conn=self.db_conn)
+        ended_kind = self._current_break_kind
+        self._break_active = False
+        self._break_end_ts = 0.0
+        self._break_started_ts = 0.0
+        self.break_time_label.config(text="--:--")
+        self._mini_break_label.config(text="")
+
+        if play_sound:
+            self._play_pause_sound()
+        if bring_to_front:
+            self._bring_main_window_to_front()
+
+        # Decide whether to resume the work session.
+        ended_source = self._current_break_source
+        self._current_break_source = ""
+        should_resume = force_resume or (
+            auto_resume and (
+                ended_kind == "manual"
+                or (self.pomodoro_auto_break and self.pomodoro_enabled)
+            )
+        )
+
+        if should_resume:
+            if ended_source == "custom_break":
+                # Manual break: session was stopped, so re-open it.
+                log_start(project=project, name=name, date=date, conn=self.db_conn)
+                self.session_active[(name, project)] = True
+                self._session_started_ts = time.time()
+            # For pomodoro_break: session was never stopped, no DB write needed.
+            self.timer_running = True
+            self.timer_start_time = time.time()
+            if ended_kind == "manual" and self._paused_pomodoro_remaining_seconds > 0:
+                self._pomodoro_work_deadline_ts = time.time() + self._paused_pomodoro_remaining_seconds
+            else:
+                self._pomodoro_work_deadline_ts = time.time() + (self.pomodoro_work_minutes * 60)
+            self._paused_pomodoro_remaining_seconds = 0
+            self._set_button_state_running()
+            self.write("Pause beendet. Session fortgesetzt.")
+        else:
+            # Not resuming. If session is still active (pomodoro break didn't
+            # stop it), close it now to avoid a stuck state.
+            if self.session_active.get((name, project), False):
+                log_stop(project=project, name=name, date=date, conn=self.db_conn)
+                self.session_active[(name, project)] = False
+                self.timer_running = False
+                self._session_started_ts = 0.0
+                self._pomodoro_work_deadline_ts = 0.0
+                self._paused_pomodoro_remaining_seconds = 0
+            self._set_button_state_idle()
+            self.write("Pause beendet.")
+
+        self.update_db_content()
+
+    def _bring_main_window_to_front(self):
+        """Bring the visible window to front when break starts/ends."""
+        try:
+            if self._mini_mode:
+                self._mini_toplevel.lift()
+                self._mini_toplevel.focus_force()
+            else:
+                self.master.deiconify()
+                self.master.lift()
+                self.master.attributes('-topmost', True)
+                self.master.after(250, lambda: self.master.attributes('-topmost', False))
+                self.master.focus_force()
+        except Exception as e:
+            logger.warning("Window focus failed: %s", e)
+
+    def _preload_sound(self):
+        """Cache sound path and player executable for instant playback."""
+        path = self._resolve_sound_path(self.pomodoro_sound_local_path)
+        if path and os.path.isfile(path):
+            self._cached_sound_path = path
+        else:
+            self._cached_sound_path = ""
+            self._cached_sound_player = ""
+            return
+
+        if sys.platform.startswith("win"):
+            self._cached_sound_player = (
+                "winsound" if path.lower().endswith(".wav")
+                else (which("ffplay") or which("mpv") or "")
+            )
+        elif sys.platform == "darwin":
+            self._cached_sound_player = which("afplay") or ""
+        else:
+            for name in ("paplay", "ffplay", "mpv", "play", "aplay"):
+                exe = which(name)
+                if exe:
+                    if name == "aplay" and not path.lower().endswith(".wav"):
+                        continue
+                    self._cached_sound_player = exe
+                    return
+            self._cached_sound_player = ""
+
+    def _play_pause_sound(self):
+        """Play pause sound asynchronously using cached player."""
+        if not self.pomodoro_sound_enabled:
+            return
+
+        sound_path = self._cached_sound_path
+        player = self._cached_sound_player
+        if not sound_path or not os.path.isfile(sound_path):
+            self._preload_sound()
+            sound_path = self._cached_sound_path
+            player = self._cached_sound_player
+        if not sound_path:
+            return
+
+        def _worker():
+            try:
+                if sys.platform.startswith("win"):
+                    if player == "winsound":
+                        winsound = __import__("winsound")
+                        winsound.PlaySound(sound_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                        return
+                    if player:
+                        cmd = ([player, "-nodisp", "-autoexit", sound_path]
+                               if "ffplay" in player
+                               else [player, "--no-video", sound_path])
+                        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        return
+                elif sys.platform == "darwin" and player:
+                    subprocess.Popen([player, sound_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return
+                elif player:
+                    player_name = os.path.basename(player)
+                    if player_name == "ffplay":
+                        subprocess.Popen([player, "-nodisp", "-autoexit", sound_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    elif player_name == "mpv":
+                        subprocess.Popen([player, "--no-video", sound_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    else:
+                        subprocess.Popen([player, sound_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return
+                self.master.after(0, self.master.bell)
+            except Exception as e:
+                logger.warning("Sound playback failed: %s", e)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _resolve_sound_path(self, configured_path: str) -> str:
+        """Resolve relative sound paths against data directory for source and EXE mode."""
+        candidate = (configured_path or "sounds/StartupSound.wav").strip().replace('\\', '/')
+        if os.path.isabs(candidate):
+            return candidate
+        return os.path.join(PATH_TO_DATA, candidate)
 
     def update_duration(self):
         if self.db_conn:
@@ -964,25 +1544,27 @@ class App:
             if cursor.fetchone() is None:
                 return
 
-            # Filter by currently selected user
+            # Filter by currently selected user, show only today
+            today_str = datetime.today().strftime('%d-%m-%Y')
             current_name = self.name_entry.get().strip()
             if current_name:
                 cursor.execute("""
                     SELECT e.id, u.name, e.project, e.event_type, e.timestamp
                     FROM events e
                     JOIN users u ON u.id = e.user_id
-                    WHERE u.name = ?
+                    WHERE u.name = ? AND e.date = ?
                     ORDER BY e.timestamp
                     LIMIT 500
-                """, (current_name,))
+                """, (current_name, today_str))
             else:
                 cursor.execute("""
                     SELECT e.id, u.name, e.project, e.event_type, e.timestamp
                     FROM events e
                     JOIN users u ON u.id = e.user_id
+                    WHERE e.date = ?
                     ORDER BY u.name, e.timestamp
                     LIMIT 500
-                """)
+                """, (today_str,))
             events = cursor.fetchall()
             current_user = None
             for event_id, user_name, project, event_type, timestamp in events:
@@ -1115,10 +1697,28 @@ class App:
         project = self._get_project_silent()
         name = self._get_name_silent()
 
+        if self._break_active:
+            if self._current_break_kind == "manual":
+                elapsed = max(0, int(time.time() - self._break_started_ts))
+                bmin, bsec = divmod(elapsed, 60)
+                break_text = f"{bmin:02}:{bsec:02}"
+            else:
+                remaining = max(0, int(self._break_end_ts - time.time()))
+                bmin, bsec = divmod(remaining, 60)
+                break_text = f"{bmin:02}:{bsec:02}"
+                if remaining == 0:
+                    self._finish_break(play_sound=True, bring_to_front=True)
+            self.break_time_label.config(text=break_text)
+            self._mini_break_label.config(text=break_text)
+        else:
+            self.break_time_label.config(text="--:--")
+            self._mini_break_label.config(text="")
+
         if project is not None and name and self.session_active.get((name, project)):
             duration = calculate_duration(project=project, name=name, conn=self.db_conn) if self.db_conn else 0
             if self.timer_running:
-                elapsed_time = time.time() - self.timer_start_time + duration
+                start_ts = self.timer_start_time or time.time()
+                elapsed_time = time.time() - start_ts + duration
             else:
                 elapsed_time = duration
             minutes, seconds = divmod(elapsed_time, 60)
@@ -1129,6 +1729,23 @@ class App:
             self.timer_project_label.config(text=f"Projekt: {project}")
             # Sync to mini mode timer
             self._mini_timer_label.config(text=time_text)
+
+            if self.pomodoro_enabled and not self._break_active and self.timer_running:
+                if self._pomodoro_work_deadline_ts <= 0:
+                    self._pomodoro_work_deadline_ts = time.time() + (self.pomodoro_work_minutes * 60)
+                if time.time() >= self._pomodoro_work_deadline_ts:
+                    self._pomodoro_cycles += 1
+                    long_break_due = (self._pomodoro_cycles % max(1, self.pomodoro_long_break_every)) == 0
+                    break_minutes = self.pomodoro_long_break_minutes if long_break_due else self.pomodoro_break_minutes
+                    break_kind = "long" if long_break_due else "short"
+                    self._pomodoro_work_deadline_ts = 0.0
+                    self._start_break(
+                        break_kind=break_kind,
+                        break_minutes=break_minutes,
+                        is_auto=True,
+                        source_label="pomodoro_break",
+                        timed_break=True,
+                    )
         if not self._closing:
             self.master.after(1000, self.update_timer_realtime)
 
@@ -1139,7 +1756,8 @@ class App:
 
         if project is not None and name:
             if self.timer_running:
-                elapsed_time = time.time() - self.timer_start_time + duration
+                start_ts = self.timer_start_time or time.time()
+                elapsed_time = time.time() - start_ts + duration
             else:
                 elapsed_time = duration
             minutes, seconds = divmod(elapsed_time, 60)

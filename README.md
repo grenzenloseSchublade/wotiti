@@ -32,7 +32,8 @@ Im Unterschied zu vielen kommerziellen Zeiterfassungstools, bei denen Funktionsu
 > - ⚙ Einstellungen (Datenbank, Defaults, Theme, Entwickler-Konsole)
 > - Mini-Modus (kompakte Always-on-top Ansicht mit ↻ Refresh)
 > - Einträge bearbeiten per Doppelklick (Projekt, Datum, Zeitstempel)
-> - Tastenkürzel: `Ctrl+S` Start, `Ctrl+E` Stop, `Ctrl+M` Mini
+> - Tastenkürzel: `Ctrl+S` Start, `Ctrl+E` Stop, `Ctrl+M` Mini, `Ctrl+P` Pause/Fortsetzen
+> - Pomodoro-Pausenmodus mit automatischen Pausen, blauem Pausen-Countdown und Sound bei Pausenstart/-ende
 > - Integriertes Analytics-Dashboard mit Cluster-Analyse, Regression, ANOVA
 > - Theme-System: Modern (Cyan/Pink/Gelb) & Synthwave
 > - SQLite-Datenbank, keine externe Infrastruktur nötig
@@ -48,10 +49,10 @@ Im Unterschied zu vielen kommerziellen Zeiterfassungstools, bei denen Funktionsu
 - Projektbasierte Zeiterfassung mit Combobox (intelligentes Caching)
 - Benutzerverwaltung (eigenes Fenster zum Anlegen/Auswählen)
 - **Mini-Modus** (▽/△): Kompakte Always-on-top Ansicht mit Drag-Support
-- **Tastenkürzel**: `Ctrl+S` Start, `Ctrl+E` Stop, `Ctrl+M` Mini-Modus
-- **Einstellungen (⚙ Einst.)**: Datenbank, Defaults, Port, Theme, Entwickler-Konsole
+- **Tastenkürzel**: `Ctrl+S` Start, `Ctrl+E` Stop, `Ctrl+M` Mini-Modus, `Ctrl+P` Pause/Fortsetzen
+- **Einstellungen (⚙ Einst.)**: Datenbank, Defaults, Port, Theme, Entwickler-Konsole, Pomodoro-Optionen
 - Persistente Konfiguration (`data/config.json`)
-- SQLite-Datenbankintegration (users, projects, events)
+- SQLite-Datenbankintegration (users, projects, events, break_events)
 - Echtzeit-Timer-Anzeige
 - Session-Schutz bei App-Schließen
 - Eingabevalidierung (Datumsformat DD-MM-YYYY)
@@ -140,6 +141,8 @@ uv run python src/stats_generator.py
   - Standard-Benutzer und Standard-Projekt festlegen
   - Dashboard-Port konfigurieren
   - Theme-Auswahl (Modern / Synthwave)
+  - Pomodoro-Konfiguration (Arbeitszeit, kurze/lange Pause, Intervall, Auto-Pause)
+  - Pausen-Sound (Aktivierung, URL-Download, lokaler Dateipfad)
   - Entwickler-Konsole: Log-Viewer mit Aktualisieren, Löschen und Copy-Button
 - **Datum-Setter**: Schnelle Datumseinstellung mit Validierung und Format-Hinweis (TT-MM-JJJJ)
 - **Einträge bearbeiten**: Doppelklick auf Event in der Listbox öffnet Edit-Dialog (Projekt, Datum, Zeitstempel ändern oder Eintrag löschen)
@@ -153,6 +156,7 @@ uv run python src/stats_generator.py
 | `Ctrl+S` | Session starten |
 | `Ctrl+E` | Session stoppen |
 | `Ctrl+M` | Mini-Modus umschalten |
+| `Ctrl+P` | Pause starten/beenden |
 
 ### Analytics-Dashboard Features
 - **Durchgehend deutschsprachig**: Alle Plot-Titel, Achsenbeschriftungen und UI-Elemente
@@ -282,8 +286,21 @@ Einstellungen werden in `data/config.json` persistiert und beim App-Start automa
 | `default_project` | Vorausgewähltes Projekt beim Start | `1` |
 | `dashboard_port` | Startport für das Analytics-Dashboard | `8052` |
 | `theme` | Farbschema für das Dashboard | `Modern` |
+| `pomodoro_enabled` | Pomodoro-Modus aktivieren/deaktivieren | `false` |
+| `pomodoro_work_minutes` | Länge der Arbeitsphase in Minuten | `25` |
+| `pomodoro_break_minutes` | Länge der kurzen Pause in Minuten | `5` |
+| `pomodoro_long_break_minutes` | Länge der langen Pause in Minuten | `15` |
+| `pomodoro_long_break_every` | Lange Pause nach N Arbeitsphasen | `4` |
+| `pomodoro_auto_break` | Automatische Pause/Fortsetzung nutzen | `true` |
+| `pomodoro_sound_enabled` | Ton bei Pause-Start und Pause-Ende | `true` |
+| `pomodoro_sound_url` | Download-URL der ICQ-Horn-Sounddatei | `archive.org ...` |
+| `pomodoro_sound_local_path` | Lokaler Speicherpfad für Sound-Cache | `data/sounds/icq_boat_horn.wav` |
 
 Alle Optionen sind über das Zahnrad-Menü (⚙) in der GUI erreichbar.
+
+Hinweis zur Auswertung: Das Dashboard nutzt weiterhin ausschließlich `events` (Start/Stop-Arbeitszeiten). Pausen werden separat in `break_events` gespeichert, damit bestehende Kennzahlen unverändert korrekt bleiben.
+
+Empfohlene Ablage für den von dir manuell bereitgestellten Boat-Horn-Sound: `data/sounds/`.
 
 ## 🐛 Bekannte Probleme
 - Timestamp-Konvertierung bei ungewöhnlichen Formaten
