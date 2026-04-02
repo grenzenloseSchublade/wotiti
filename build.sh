@@ -34,5 +34,10 @@ if [ -d "$DATA_DST" ]; then
 fi
 cp -r "$REPO_ROOT/data" "$DATA_DST"
 mkdir -p "$DATA_DST/sounds"
+# Do not ship developer-local config with absolute paths.
+rm -f "$DATA_DST/config.json"
+# Ship an empty runtime database (app creates schema on first start).
+rm -f "$DATA_DST/app_database.db"
+: > "$DATA_DST/app_database.db"
 
 echo "Build complete: $DIST_DIR/wotiti"

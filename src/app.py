@@ -901,7 +901,7 @@ class App:
                     if sys.platform.startswith("win"):
                         if is_wav:
                             winsound = __import__("winsound")
-                            winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                            winsound.PlaySound(path, winsound.SND_FILENAME)
                             return
                         exe = which("ffplay") or which("mpv")
                         if exe:
@@ -1343,13 +1343,20 @@ class App:
     def _preload_sound(self):
         """Cache sound path and player executable for instant playback."""
         path = self._resolve_sound_path(self.pomodoro_sound_local_path)
-        if path and os.path.isfile(path):
-            self._cached_sound_path = path
-        else:
-            logger.debug("Sound file not found: %s", path)
-            self._cached_sound_path = ""
-            self._cached_sound_player = ""
-            return
+        if not path or not os.path.isfile(path):
+            logger.warning("Configured sound file not found: %s", path)
+            # Fallback to packaged default sound for standalone builds.
+            fallback_path = self._resolve_sound_path("sounds/StartupSound.wav")
+            if fallback_path and os.path.isfile(fallback_path):
+                path = fallback_path
+                logger.info("Using fallback sound file: %s", fallback_path)
+            else:
+                logger.warning("Fallback sound file not found: %s", fallback_path)
+                self._cached_sound_path = ""
+                self._cached_sound_player = ""
+                return
+
+        self._cached_sound_path = path
 
         if sys.platform.startswith("win"):
             self._cached_sound_player = (
@@ -1380,6 +1387,7 @@ class App:
             sound_path = self._cached_sound_path
             player = self._cached_sound_player
         if not sound_path:
+            logger.warning("Sound playback skipped: no valid sound file available")
             return
 
         def _worker():

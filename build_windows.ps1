@@ -33,4 +33,17 @@ if (!(Test-Path $soundsDst)) {
     New-Item -ItemType Directory -Path $soundsDst | Out-Null
 }
 
+# Do not ship developer-local config with absolute paths.
+$configDst = Join-Path $dataDst "config.json"
+if (Test-Path $configDst) {
+    Remove-Item -Force $configDst
+}
+
+# Ship an empty runtime database (app creates schema on first start).
+$dbDst = Join-Path $dataDst "app_database.db"
+if (Test-Path $dbDst) {
+    Remove-Item -Force $dbDst
+}
+New-Item -ItemType File -Path $dbDst | Out-Null
+
 Write-Host "Build complete: $distDir\wotiti.exe"
