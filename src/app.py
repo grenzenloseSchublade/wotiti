@@ -84,7 +84,7 @@ class App:
         self._cached_users = []
         self._cached_projects = []
         self._full_geometry = ""
-        self._mini_width = 340
+        self._mini_width = 300
         self._mini_height = 75
         self._mini_last_position = str(self.config.get("mini_window_position", "")).strip()
         self._break_active = False
