@@ -32,6 +32,11 @@ from tkinter import (
 )
 from tkinter.ttk import Combobox
 
+if sys.platform.startswith("win"):
+    import winsound
+else:
+    winsound = None
+
 from db_helper import (
     TIMESTAMP_FORMAT,
     calculate_duration,
@@ -900,7 +905,8 @@ class App:
                     is_wav = path.lower().endswith(".wav")
                     if sys.platform.startswith("win"):
                         if is_wav:
-                            winsound = __import__("winsound")
+                            if winsound is None:
+                                raise RuntimeError("winsound module not available")
                             winsound.PlaySound(path, winsound.SND_FILENAME)
                             return
                         exe = which("ffplay") or which("mpv")
@@ -1359,10 +1365,10 @@ class App:
         self._cached_sound_path = path
 
         if sys.platform.startswith("win"):
-            self._cached_sound_player = (
-                "winsound" if path.lower().endswith(".wav")
-                else (which("ffplay") or which("mpv") or "")
-            )
+            if path.lower().endswith(".wav") and winsound is not None:
+                self._cached_sound_player = "winsound"
+            else:
+                self._cached_sound_player = which("ffplay") or which("mpv") or ""
         elif sys.platform == "darwin":
             self._cached_sound_player = which("afplay") or ""
         else:
@@ -1394,7 +1400,8 @@ class App:
             try:
                 if sys.platform.startswith("win"):
                     if player == "winsound":
-                        winsound = __import__("winsound")
+                        if winsound is None:
+                            raise RuntimeError("winsound module not available")
                         winsound.PlaySound(sound_path, winsound.SND_FILENAME)
                         return
                     if player:
