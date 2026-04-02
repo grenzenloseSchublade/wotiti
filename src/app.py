@@ -84,6 +84,8 @@ class App:
         self._cached_users = []
         self._cached_projects = []
         self._full_geometry = ""
+        self._mini_width = 340
+        self._mini_height = 90
         self._break_active = False
         self._break_end_ts = 0.0
         self._break_started_ts = 0.0
@@ -358,7 +360,7 @@ class App:
         self._mini_toplevel.title("WoTITI Mini")
         self._mini_toplevel.overrideredirect(True)
         self._mini_toplevel.attributes('-topmost', True)
-        self._mini_toplevel.geometry("380x90")
+        self._mini_toplevel.geometry(f"{self._mini_width}x{self._mini_height}")
         self._mini_toplevel.configure(bg='#C0C0C0')
         self._mini_toplevel.resizable(False, False)
         self._mini_toplevel.protocol("WM_DELETE_WINDOW", self._exit_mini_mode)
@@ -409,7 +411,7 @@ class App:
         self._mini_break_label.grid(row=1, column=1, padx=2, pady=2, sticky='w')
 
         self._mini_project_combo = Combobox(
-            self._mini_frame, font=('MS Sans Serif', 9), width=10)
+            self._mini_frame, font=('MS Sans Serif', 9), width=7)
         self._mini_project_combo.grid(row=1, column=2, columnspan=2, padx=4, pady=2, sticky='ew')
 
         self._mini_frame.grid_columnconfigure(0, weight=1)
@@ -539,7 +541,7 @@ class App:
         self.master.update_idletasks()
         x = self.master.winfo_x()
         y = self.master.winfo_y()
-        self._mini_toplevel.geometry(f"380x90+{x}+{y}")
+        self._mini_toplevel.geometry(f"{self._mini_width}x{self._mini_height}+{x}+{y}")
         self._mini_toplevel.deiconify()
         self._mini_toplevel.lift()
         with contextlib.suppress(Exception):
