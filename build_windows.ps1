@@ -27,4 +27,10 @@ if (Test-Path $dataDst) {
 
 Copy-Item -Recurse -Force $dataSrc $dataDst
 
+# Ensure sounds directory exists
+$soundsDst = Join-Path $dataDst "sounds"
+if (!(Test-Path $soundsDst)) {
+    New-Item -ItemType Directory -Path $soundsDst | Out-Null
+}
+
 Write-Host "Build complete: $distDir\wotiti.exe"

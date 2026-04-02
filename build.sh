@@ -33,5 +33,6 @@ if [ -d "$DATA_DST" ]; then
     rm -rf "$DATA_DST"
 fi
 cp -r "$REPO_ROOT/data" "$DATA_DST"
+mkdir -p "$DATA_DST/sounds"
 
 echo "Build complete: $DIST_DIR/wotiti"
