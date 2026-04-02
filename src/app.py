@@ -1346,6 +1346,7 @@ class App:
         if path and os.path.isfile(path):
             self._cached_sound_path = path
         else:
+            logger.debug("Sound file not found: %s", path)
             self._cached_sound_path = ""
             self._cached_sound_player = ""
             return
@@ -1386,7 +1387,7 @@ class App:
                 if sys.platform.startswith("win"):
                     if player == "winsound":
                         winsound = __import__("winsound")
-                        winsound.PlaySound(sound_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                        winsound.PlaySound(sound_path, winsound.SND_FILENAME)
                         return
                     if player:
                         cmd = ([player, "-nodisp", "-autoexit", sound_path]
