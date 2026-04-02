@@ -1,67 +1,94 @@
-# WoTiTi - Work Time Tracker & Insights 🕒
+# WoTiTi - Work Time Tracker and Insights
 
-WoTiTi ist ein Zeiterfassungssystem, bestehend aus zwei Hauptkomponenten:
-1. **Work Time Timer**: Eine benutzerfreundliche GUI-Anwendung zur Zeiterfassung
-2. **Work Time Insights**: Ein fortgeschrittenes Analyse-Dashboard für Zeitdaten
+WoTiTi ist ein lokal ausführbares System zur Zeiterfassung und Arbeitszeitanalyse. Die Anwendung besteht aus zwei funktional getrennten Komponenten:
 
-## 💡 Motivation
+1. **Work Time Timer**: Erfassungskomponente auf Basis von tkinter
+2. **Work Time Insights**: Analysekomponente auf Basis von Dash und Plotly
 
-Ein minimalistisches Tool zur Zeiterfassung, das sich auf das Wesentliche konzentriert - das Erfassen von Arbeitszeit! 
+## Kurzüberblick
 
-Es wurde bewusst eine klare Trennung zwischen Zeiterfassung und Auswertung gewählt, um den Fokus nicht vom Eigentlichen abzulenken und gleichzeitig eine leistungsstarke, aber optionale Analyseplattform bereitzustellen, die auf den gesammelten Daten aufbaut.
-**Alle** Daten bleiben vollständig lokal, keine Abhängigkeiten von Drittanbietern, und eine intuitive Benutzeroberfläche sorgen dafür, dass die Kontrolle über die eigenen Arbeitszeitdaten vollständig beim Nutzer bleibt.
+WoTiTi ist eine lokal ausführbare Desktop-Anwendung zur Erfassung von Arbeitszeiten mit zugehörigem Analyse-Dashboard.
 
-Im Unterschied zu vielen kommerziellen Zeiterfassungstools, bei denen Funktionsumfang häufig an Lizenzen, Zusatzpakete oder Cloud-Modelle gebunden ist, wird hier ein kostenloser Open-Source-Ansatz bereitgestellt: 
+**Zielsetzung**
+- operative Erfassung von Arbeits- und Pausenphasen mit geringer Interaktionslast
+- lokale, reproduzierbare Speicherung ohne externe Infrastruktur
+- getrennte analytische Auswertung derselben Datenbasis
 
-**keine Cloud - keine Accounts - keine unnötige Komplexität!**
+**Kernmerkmale**
+- Start-, Pause- und Stop-Logik pro Benutzer und Projekt
+- separate Persistierung von Arbeitsphasen (`events`) und Pausenphasen (`break_events`)
+- Pomodoro-Unterstützung mit konfigurierbaren Arbeits- und Pausenintervallen
+- Mini-Modus als separates Always-on-top Fenster mit persistenter Position
+- Dashboard für deskriptive, visuelle und statistische Auswertungen
+- Standalone-Builds für Linux und Windows via PyInstaller
 
+**Schnellstart**
 
-## ⚡ TL;DR
+Ausführung aus dem Quellcode:
+```bash
+pip install uv
+uv sync
+uv run python src/main.py
+```
 
-> **Was?** Desktop-App (tkinter) zum Tracken von Arbeitszeiten pro Benutzer und Projekt, mit integriertem Analytics-Dashboard (Dash/Plotly).
->
-> **Schnellstart:**
-> ```bash
-> pip install uv && uv sync && uv run python src/main.py
-> ```
->
-> **Kernfunktionen:**
-> - ▶ Start / ■ Stop pro Benutzer & Projekt mit Echtzeit-Timer
-> - Benutzerverwaltung (Dropdown-Auswahl, eigenes Verwaltungsfenster)
-> - Projektverwaltung (Combobox mit bestehenden Projekten, intelligentes Caching)
-> - ⚙ Einstellungen (Datenbank, Defaults, Theme, Entwickler-Konsole)
-> - Mini-Modus (kompakte Always-on-top Ansicht mit ↻ Refresh)
-> - Einträge bearbeiten per Doppelklick (Projekt, Datum, Zeitstempel)
-> - Tastenkürzel: `Ctrl+S` Start, `Ctrl+E` Stop, `Ctrl+M` Mini, `Ctrl+P` Pause/Fortsetzen
-> - Pomodoro-Pausenmodus mit automatischen Pausen, blauem Pausen-Countdown und Sound bei Pausenstart/-ende
-> - Integriertes Analytics-Dashboard mit Cluster-Analyse, Regression, ANOVA
-> - Theme-System: Modern (Cyan/Pink/Gelb) & Synthwave
-> - SQLite-Datenbank, keine externe Infrastruktur nötig
-> - Konfiguration wird in `data/config.json` persistiert
-> - Standalone-EXE via PyInstaller (`bash build.sh` / `build_windows.ps1`)
+Build unter Linux:
+```bash
+./build.sh
+```
 
+Build unter Windows:
+```powershell
+.\build_windows.ps1
+```
 
-## 🎯 Systemübersicht
+Herunterladbare Builds:
+- Aktuelle Releases: [GitHub Releases](https://github.com/grenzenloseSchublade/wotiti/releases)
+- Version `v1.1.0` Linux x64: [wotiti_1_1-linux-x64.zip](https://github.com/grenzenloseSchublade/wotiti/releases/download/v1.1.0/wotiti_1_1-linux-x64.zip)
+- Version `v1.1.0` Windows x64: [wotiti_1_1-win-x64.zip](https://github.com/grenzenloseSchublade/wotiti/releases/download/v1.1.0/wotiti_1_1-win-x64.zip)
 
-### Work Time Timer (GUI)
-- Start/Stop-Funktionalität für Arbeitssitzungen
+## Motivation und Designprinzipien
+
+WoTiTi wurde als lokal ausführbares System für Zeiterfassung und explorative Arbeitszeitanalyse entwickelt. Das Projekt verfolgt zwei Ziele: eine operativ einfache Erfassung von Arbeitsphasen im Alltag und eine methodisch nachvollziehbare Auswertung derselben Daten ohne externe Infrastruktur.
+
+Der Ansatz ist bewusst datenlokal und modular. Die Erfassungskomponente ist als kleine tkinter-Anwendung realisiert, die Analysekomponente als separates Dash/Plotly-Dashboard. Diese Trennung reduziert die Komplexität der Interaktionen im täglichen Tracking und schafft gleichzeitig eine belastbare Grundlage für statistische und visuelle Auswertungen.
+
+Ein zentrales Gestaltungsprinzip der Erfassungskomponente ist funktionale Schlichtheit im Primärworkflow: Start, Pause, Stop, Benutzerwahl und Projektauswahl sind in der Hauptansicht direkt zugänglich, ohne verschachtelte Dialogführung. Die Oberfläche ist dabei nicht minimalistisch im engeren Sinn, sondern bewusst kompakt und werkzeugartig aufgebaut. Erweiterte Funktionen wie Konfiguration, Auswertung oder Detailbearbeitung bleiben vorhanden, dominieren jedoch nicht den eigentlichen Erfassungsvorgang.
+
+Im Unterschied zu vielen kommerziellen Zeiterfassungslösungen, bei denen erweiterte Funktionen oft an Lizenzstufen, Zusatzmodule oder cloudgebundene Betriebsmodelle gekoppelt sind, verfolgt WoTiTi bewusst einen kostenlosen, quelloffenen und lokal betreibbaren Ansatz.
+
+Zusätzlich erweitert WoTiTi die reine Zeiterfassung um eine strukturierte Pomodoro- und Pausenlogik: Arbeitsphasen werden zeitlich segmentiert, Pausen explizit erfasst und Unterbrechungen von Arbeitsblöcken datenbasiert nachvollziehbar gemacht. Dadurch entsteht neben der reinen Arbeitszeitmessung ein zweiter analytischer Blick auf Arbeitsrhythmus, Pausendisziplin und die Stabilität fokussierter Arbeitsintervalle.
+
+Aus technischer Sicht ist das Projekt insbesondere durch folgende Eigenschaften charakterisiert:
+
+- vollständig lokale Datenspeicherung
+- reproduzierbare SQLite-basierte Datenhaltung
+- explizite Trennung von operativer Eingabe und analytischer Auswertung
+- Build- und Distributionspfade für Windows und Linux ohne Cloud-Abhängigkeit
+
+WoTiTi ist damit als kompaktes, lokal betriebenes System zur Erfassung und Analyse von Arbeitszeitdaten konzipiert.
+
+## Systemarchitektur
+
+### Erfassungskomponente (Work Time Timer)
+- Drei-Zustands-Logik für Arbeitssitzungen: Start, Pause, Stop
 - Mehrbenutzer-Unterstützung mit Dropdown-Auswahl
 - Projektbasierte Zeiterfassung mit Combobox (intelligentes Caching)
 - Benutzerverwaltung (eigenes Fenster zum Anlegen/Auswählen)
-- **Mini-Modus** (▽/△): Kompakte Always-on-top Ansicht mit Drag-Support
-- **Tastenkürzel**: `Ctrl+S` Start, `Ctrl+E` Stop, `Ctrl+M` Mini-Modus, `Ctrl+P` Pause/Fortsetzen
-- **Einstellungen (⚙ Einst.)**: Datenbank, Defaults, Port, Theme, Entwickler-Konsole, Pomodoro-Optionen
+- **Mini-Modus** (▽/△): Kompakte Always-on-top Ansicht als separates Fenster mit Drag-Support und persistenter letzter Position
+- **Tastenkürzel**: `Ctrl+S` Start, `Ctrl+E` Stop, `Ctrl+M` Mini-Modus, `Ctrl+P` Pause
+- **Einstellungen**: Datenbank, Defaults, Port, Theme, Entwickler-Konsole, Pomodoro-Optionen
 - Persistente Konfiguration (`data/config.json`)
 - SQLite-Datenbankintegration (users, projects, events, break_events)
+- Separate Break-Tabellenlogik für manuelle und Pomodoro-Pausen
 - Echtzeit-Timer-Anzeige
 - Session-Schutz bei App-Schließen
 - Eingabevalidierung (Datumsformat DD-MM-YYYY)
 - Log-Rotation (`data/wotiti.log`, 1 MB, 3 Backups)
 
-### Work Time Insights (Dashboard)
+### Analysekomponente (Work Time Insights)
 - Durchgehend **deutschsprachige** Oberfläche (Titel, Achsen, UI-Elemente)
 - **Theme-System**: Modern (Cyan/Pink/Gelb) & Synthwave — umschaltbar in den Einstellungen
-- Eigenes Plotly-Template „wotiti" (Dark Theme, 8-Farben-Palette, automargin, Inter-Font)
+- Eigenes Plotly-Template `wotiti` mit definierter Farbpalette und Layoutvorgaben
 - 4 Tab-Bereiche: Grundlagen, Projekte & Muster, Zeitreihen & Trends, Erweiterte Analysen
 - Interaktive Datenvisualisierung
 - Fortgeschrittene statistische Analysen
@@ -69,7 +96,7 @@ Im Unterschied zu vielen kommerziellen Zeiterfassungstools, bei denen Funktionsu
 - Vorhersagemodelle
 - Vergleichsanalysen
 
-## 📁 Projektstruktur
+## Projektstruktur
 
 ```
 wotiti/
@@ -84,21 +111,21 @@ wotiti/
 │   ├── utils.py             # Hilfsfunktionen, Pfade & Konfiguration
 │   └── assets/
 │       └── style.css        # Dashboard-Styles
-├── data/                    # Datenspeicherung (SQLite DBs, config.json, gitignored)
+├── data/                    # Laufzeitdaten (DBs, config.json, sounds)
 ├── tests/
 │   ├── test_app.py         # GUI-Tests
 │   └── test_db_helper.py   # Datenbank-Tests
-├── build.sh                # Linux/macOS Build-Skript
+├── build.sh                # Linux Build-Skript
 ├── build_windows.ps1       # Windows Build-Skript
 ├── pyproject.toml          # uv/pyproject-Konfiguration
 └── README.md
 ```
 
-## 🚀 Installation & Setup
+## Installation
 
 ```bash
 # Repository klonen
-git clone https://github.com/yourusername/wotiti.git
+git clone https://github.com/grenzenloseSchublade/wotiti.git
 
 # uv installieren
 pip install uv
@@ -110,7 +137,7 @@ uv sync
 uv sync --extra stats --extra dev
 ```
 
-## 📊 Verwendung
+## Ausführung
 
 ### Timer-Anwendung
 ```bash
@@ -127,27 +154,47 @@ uv run python src/stats_dashboard.py
 uv run python src/stats_generator.py
 ```
 
-## 🔧 Funktionen im Detail
+## Funktionale Beschreibung
 
-### Timer-GUI Komponenten
-- **Start/Stop-Buttons**: Prominente Sitzungssteuerung (▶/■)
+### Erfassungskomponente
+- **Start/Pause/Stop-Logik**: Klare Zustandswechsel zwischen laufender Session, aktiver Pause und vollständigem Stop
 - **Benutzer-Auswahl**: Combobox mit Dropdown aller bestehenden Benutzer
 - **Projekt-Auswahl**: Combobox mit bestehenden Projekten (intelligentes Caching)
 - **Benutzerverwaltung**: Eigenes Fenster zum Anlegen/Auswählen von Benutzern
 - **Aktualisieren**: Zeigt die kumulierte Arbeitszeit pro Benutzer/Projekt
-- **Mini-Modus** (▽ Mini / △ Voll): Kompakte Always-on-top Ansicht mit Drag-Support
-- **Einstellungen (⚙ Einst.)**: Konfigurationsfenster mit:
+- **Mini-Modus**: Kompakte Always-on-top Ansicht als separates Fenster mit Drag-Support und Wiederherstellung an der zuletzt verwendeten Position
+- **Einstellungen**: Konfigurationsfenster mit:
   - Datenbank auswählen, erstellen oder löschen (mit Bestätigung)
   - Standard-Benutzer und Standard-Projekt festlegen
   - Dashboard-Port konfigurieren
   - Theme-Auswahl (Modern / Synthwave)
   - Pomodoro-Konfiguration (Arbeitszeit, kurze/lange Pause, Intervall, Auto-Pause)
-  - Pausen-Sound (Aktivierung, URL-Download, lokaler Dateipfad)
+  - Pausen-Sound (Aktivierung, lokaler Dateipfad)
   - Entwickler-Konsole: Log-Viewer mit Aktualisieren, Löschen und Copy-Button
 - **Datum-Setter**: Schnelle Datumseinstellung mit Validierung und Format-Hinweis (TT-MM-JJJJ)
 - **Einträge bearbeiten**: Doppelklick auf Event in der Listbox öffnet Edit-Dialog (Projekt, Datum, Zeitstempel ändern oder Eintrag löschen)
-- **Konsole**: Statusmeldungen und Fehler mit Copy-Button (📋)
+- **Konsole**: Statusmeldungen und Fehler mit Copy-Funktion
 - **Session-Schutz**: Warnung bei App-Schließen mit aktiver Session, sauberes Herunterfahren (DB-Close, Timer-Stop, Dashboard-Cleanup)
+- **Break-Tracking**: Pausen werden in `break_events` separat protokolliert, um Auswertung und operative Logik zu entkoppeln
+
+### Datenmodell der Zeiterfassung
+
+Die operative Zeiterfassung ist in zwei logisch getrennte Datentypen aufgeteilt:
+
+- `events`: Arbeitsphasen (Start/Stop)
+- `break_events`: Pausenphasen und Pomodoro-bezogene Unterbrechungen
+
+Für `break_events` werden neben Benutzer-, Projekt- und Zeitinformationen zusätzliche Key-Value-artige Fachattribute persistiert:
+
+| Feld | Bedeutung |
+|---|---|
+| `break_kind` | Typ der Pause, z. B. `manual`, `short`, `long` |
+| `is_auto` | Kennzeichnet, ob die Pause automatisch ausgelöst wurde |
+| `source` | Fachliche Quelle der Pause, z. B. `custom_break` oder `pomodoro_break` |
+| `pomodoro_cycle` | Nummer des aktuellen Pomodoro-Zyklus zum Zeitpunkt der Pause |
+| `work_interval_minutes` | Konfiguriertes Arbeitsintervall in Minuten |
+
+Diese zusätzlichen Attribute erlauben nicht nur eine operative Steuerung der GUI, sondern auch eine spätere Untersuchung von Arbeitsrhythmen, automatischen Pausenmustern und der Wirkung konfigurierter Arbeitsintervalle auf das individuelle Arbeitsverhalten.
 
 ### Tastenkürzel
 
@@ -156,11 +203,11 @@ uv run python src/stats_generator.py
 | `Ctrl+S` | Session starten |
 | `Ctrl+E` | Session stoppen |
 | `Ctrl+M` | Mini-Modus umschalten |
-| `Ctrl+P` | Pause starten/beenden |
+| `Ctrl+P` | Pause starten |
 
-### Analytics-Dashboard Features
+### Analyse-Dashboard
 - **Durchgehend deutschsprachig**: Alle Plot-Titel, Achsenbeschriftungen und UI-Elemente
-- **Eigenes Plotly-Template** „wotiti": Dark Theme, 8-Farben-Palette, automargin, Inter-Font
+- **Eigenes Plotly-Template** `wotiti` mit definierter Farbpalette und Layoutvorgaben
 - **4 Tab-Bereiche**: Grundlagen, Projekte & Muster, Zeitreihen & Trends, Erweiterte Analysen
 - **Echtzeit-Visualisierungen** der Arbeitszeiten
 - **Interaktive Grafiken** mit Drill-Down
@@ -173,7 +220,7 @@ uv run python src/stats_generator.py
   - ANOVA-Tests
   - Regressionsmodelle
 
-## 📈 Datenanalyse
+## Analytische Verfahren
 
 ### Timestamp-Verarbeitung
 - **Unterstützte Formate**:
@@ -188,9 +235,9 @@ uv run python src/stats_generator.py
 - **ANOVA**: Gruppenvergleiche
 - **Zeitreihen**: Trendanalysen
 
-## 🛠️ Build
+## Build und Distribution
 
-### Entwicklung (Linux / macOS)
+### Build unter Linux
 ```bash
 ./build.sh
 ```
@@ -203,22 +250,25 @@ Die Windows-EXE **muss auf einem Windows-System** gebaut werden (PyInstaller erz
 .\build_windows.ps1
 ```
 
-### Release-Dokumentation
+### Dokumentation des Release-Prozesses
 Der vollständige Release-Workflow (inkl. GitHub-Veröffentlichung von Dateien/Assets) wurde in eine eigene Datei ausgelagert:
 
 - [README_RELEASE.md](README_RELEASE.md)
 
 > **Hinweis:** Die EXE-Binaries werden **nicht** ins Git-Repository eingecheckt (zu groß). Sie werden als **GitHub Release Assets** veröffentlicht.
 
-### Build-Details
+### Technische Build-Details
 - PyInstaller `--onedir` + `--noconsole`
-- Hidden Imports: `tkinter.filedialog`, `sklearn`, `scipy`
+- Hidden Imports: `tkinter.filedialog`, `sklearn`, `scipy`, unter Windows zusätzlich `winsound`
 - Assets (`src/assets/`) werden eingebettet
-- `data/`-Ordner wird neben die EXE kopiert
+- `data/`-Ordner wird neben die Anwendung kopiert
+- `config.json` wird im Release-Build bewusst nicht mit ausgeliefert, damit keine entwicklerspezifischen Pfade verteilt werden
+- `app_database.db` wird als leere Laufzeitdatenbank erzeugt
+- Build-Skripte erzeugen Hilfsskripte für Autostart unter Windows und Linux
 
 Beide Skripte erzeugen ein ausführbares Verzeichnis unter `dist/wotiti/` via PyInstaller (`--onedir`).
 
-## 📚 Dependencies
+## Abhängigkeiten
 - **GUI**: tkinter (Standardbibliothek)
 - **Datenverarbeitung**: polars
 - **Dashboard** (optional): dash, plotly, dash-bootstrap-components
@@ -228,7 +278,7 @@ Beide Skripte erzeugen ein ausführbares Verzeichnis unter `dist/wotiti/` via Py
 - **Linting/Formatierung** (dev): ruff
 - **Tests** (dev): pytest, pytest-cov
 
-## 🧹 Code-Qualität
+## Qualitätssicherung und Code-Qualität
 
 - **Linting**: [ruff](https://docs.astral.sh/ruff/) (ersetzt flake8 + black), konfiguriert in `pyproject.toml`
 - **Type Hints**: Alle öffentlichen Funktionen in `utils.py`, `db_helper.py` und `stats_plotting.py` sind typisiert (`from __future__ import annotations`)
@@ -241,12 +291,12 @@ Beide Skripte erzeugen ein ausführbares Verzeichnis unter `dist/wotiti/` via Py
 ruff check src/ tests/
 
 # Tests
-cd src && python -m pytest ../tests/ -v
+python -m pytest tests/ -v
 ```
 
-## 🔍 Testdatengenerierung
+## Testdatengenerierung
 
-Der Generator erzeugt statistisch aussagekräftige Beispieldaten mit einem **Archetypen-System**:
+Der Generator erzeugt statistisch aussagekräftige Beispieldaten auf Basis eines **Archetypenmodells**:
 
 ### Benutzer-Archetypen
 | Archetyp | Arbeitszeit | Verhalten |
@@ -257,7 +307,7 @@ Der Generator erzeugt statistisch aussagekräftige Beispieldaten mit einem **Arc
 | **Teilzeit** | 08:00–13:00 | Kurzer Tag, keine Mittagspause |
 | **Flexibler Arbeiter** | 07:00–18:00 | ±90 Min Startzeit-Variation, Context-Switcher |
 
-### Realismus-Features
+### Eigenschaften des synthetischen Datensatzes
 - **Wochenenden** werden übersprungen (nur Mo–Fr)
 - **Kranktage** (~3 % der Arbeitstage)
 - **Ausreißer-Tage** (~7 %: Überstunden oder halber Tag)
@@ -268,14 +318,14 @@ Der Generator erzeugt statistisch aussagekräftige Beispieldaten mit einem **Arc
 - **Projekt-Spezialisierung** (Primärprojekt erhält 55–70 %)
 - 10 Benutzer (2 pro Archetyp), 90 Tage → ~8.000 Events
 
-### Beispieldaten
+### Beispielstruktur
 ```
 user    project     event_type  timestamp           date
 user_1  projekt_2   start      01-01-2025 06:12:00 2025-01-01
 user_1  projekt_2   stop       01-01-2025 08:45:00 2025-01-01
 ```
 
-## ⚙ Konfiguration
+## Konfiguration
 
 Einstellungen werden in `data/config.json` persistiert und beim App-Start automatisch geladen.
 
@@ -284,8 +334,10 @@ Einstellungen werden in `data/config.json` persistiert und beim App-Start automa
 | `database_path` | Pfad zur aktiven SQLite-Datenbank | `data/app_database.db` |
 | `default_user` | Vorausgewählter Benutzer beim Start | `Hans` |
 | `default_project` | Vorausgewähltes Projekt beim Start | `1` |
-| `dashboard_port` | Startport für das Analytics-Dashboard | `8052` |
+| `dashboard_port` | Startport für das Analyse-Dashboard | `8052` |
 | `theme` | Farbschema für das Dashboard | `Modern` |
+| `window_geometry` | Letzte Geometrie des Hauptfensters | `""` |
+| `mini_window_position` | Letzte Position des Mini-Fensters (`+x+y`) | `""` |
 | `pomodoro_enabled` | Pomodoro-Modus aktivieren/deaktivieren | `false` |
 | `pomodoro_work_minutes` | Länge der Arbeitsphase in Minuten | `25` |
 | `pomodoro_break_minutes` | Länge der kurzen Pause in Minuten | `5` |
@@ -293,33 +345,34 @@ Einstellungen werden in `data/config.json` persistiert und beim App-Start automa
 | `pomodoro_long_break_every` | Lange Pause nach N Arbeitsphasen | `4` |
 | `pomodoro_auto_break` | Automatische Pause/Fortsetzung nutzen | `true` |
 | `pomodoro_sound_enabled` | Ton bei Pause-Start und Pause-Ende | `true` |
-| `pomodoro_sound_url` | Download-URL der ICQ-Horn-Sounddatei | `archive.org ...` |
-| `pomodoro_sound_local_path` | Lokaler Speicherpfad für Sound-Cache | `data/sounds/icq_boat_horn.wav` |
+| `pomodoro_sound_local_path` | Relativer oder absoluter Pfad zur Sounddatei | `sounds/StartupSound.wav` |
 
-Alle Optionen sind über das Zahnrad-Menü (⚙) in der GUI erreichbar.
+Alle Optionen sind über das Einstellungsfenster der GUI erreichbar.
 
-Hinweis zur Auswertung: Das Dashboard nutzt weiterhin ausschließlich `events` (Start/Stop-Arbeitszeiten). Pausen werden separat in `break_events` gespeichert, damit bestehende Kennzahlen unverändert korrekt bleiben.
+Hinweis zur Auswertung: Das Dashboard nutzt weiterhin primär `events` für Arbeitsphasen. Pausen werden separat in `break_events` gespeichert, damit Arbeitszeit- und Pausenlogik analytisch getrennt bleiben.
 
-Empfohlene Ablage für den von dir manuell bereitgestellten Boat-Horn-Sound: `data/sounds/`.
+Für analytische Fragestellungen zum Arbeitsrhythmus sind die in `break_events` abgelegten Pomodoro-Metadaten relevant, da sie die Arbeitszeitdaten um strukturelle Informationen zu Pausenursprung, Intervalllänge und Zyklusfortschritt ergänzen.
 
-## 🐛 Bekannte Probleme
+Empfohlene Ablage für manuell bereitgestellte Sounddateien: `data/sounds/`.
+
+## Bekannte Einschränkungen
 - Timestamp-Konvertierung bei ungewöhnlichen Formaten
 - CPU-Last bei komplexen Dashboard-Analysen
 - Port-Änderung in den Einstellungen wird erst beim nächsten App-Start wirksam
 - Theme-Umschaltung erfordert Dashboard-Neustart
 
-## 🔜 Geplante Features
+## Geplante Erweiterungen
 - [ ] Export-Funktionen für Analysen
 - [ ] API-Schnittstelle
 - [ ] Docker-Container
 - [ ] Automatische Backups
-- [ ] GitHub Actions CI/CD (automatische Builds bei Tag-Push)
+- [ ] GitHub Actions CI/CD (automatisierte Builds bei Tag-Push)
 
-## 🤝 Beitragen
+## Mitwirkung
 1. Fork des Repositories
 2. Feature-Branch erstellen
 3. Änderungen committen
 4. Pull Request erstellen
 
-## 📝 Lizenz
+## Lizenz
 Dieses Projekt ist unter der MIT-Lizenz lizenziert.
