@@ -85,7 +85,8 @@ class App:
         self._cached_projects = []
         self._full_geometry = ""
         self._mini_width = 340
-        self._mini_height = 90
+        self._mini_height = 75
+        self._mini_last_position = str(self.config.get("mini_window_position", "")).strip()
         self._break_active = False
         self._break_end_ts = 0.0
         self._break_started_ts = 0.0
@@ -539,9 +540,12 @@ class App:
         # Show mini Toplevel first, then hide main window. This avoids a
         # transient "no window visible" state on some window managers.
         self.master.update_idletasks()
-        x = self.master.winfo_x()
-        y = self.master.winfo_y()
-        self._mini_toplevel.geometry(f"{self._mini_width}x{self._mini_height}+{x}+{y}")
+        if re.match(r"^\+\d+\+\d+$", self._mini_last_position):
+            self._mini_toplevel.geometry(f"{self._mini_width}x{self._mini_height}{self._mini_last_position}")
+        else:
+            x = self.master.winfo_x()
+            y = self.master.winfo_y()
+            self._mini_toplevel.geometry(f"{self._mini_width}x{self._mini_height}+{x}+{y}")
         self._mini_toplevel.deiconify()
         self._mini_toplevel.lift()
         with contextlib.suppress(Exception):
@@ -551,6 +555,12 @@ class App:
     def _exit_mini_mode(self):
         """Hide mini Toplevel, restore main window."""
         self._mini_mode = False
+
+        # Persist mini position for the next open.
+        with contextlib.suppress(Exception):
+            self._mini_last_position = f"+{self._mini_toplevel.winfo_x()}+{self._mini_toplevel.winfo_y()}"
+            self.config["mini_window_position"] = self._mini_last_position
+            save_config(self.config)
 
         # Sync project selection back from mini to main
         self.project_entry.set(self._mini_project_combo.get().strip())
@@ -571,6 +581,7 @@ class App:
         x = event.x_root - self._drag_data["x"]
         y = event.y_root - self._drag_data["y"]
         self._mini_toplevel.geometry(f"+{x}+{y}")
+        self._mini_last_position = f"+{x}+{y}"
 
     def _refresh_comboboxes(self, force=False):
         """Refresh user and project comboboxes from database (cached)."""

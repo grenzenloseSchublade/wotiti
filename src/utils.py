@@ -66,6 +66,7 @@ DEFAULT_CONFIG = {
     "dashboard_port": 8052,
     "theme": "Modern",
     "window_geometry": "",
+    "mini_window_position": "",
     "pomodoro_enabled": False,
     "pomodoro_work_minutes": 25,
     "pomodoro_break_minutes": 5,
