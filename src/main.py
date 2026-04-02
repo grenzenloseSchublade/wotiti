@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import logging.handlers
 import multiprocessing
@@ -52,6 +53,32 @@ def _find_available_port(start_port):
                 return port
     return start_port
 
+
+def _resolve_app_icon_path() -> str:
+    """Return path to the ICO used for runtime window/taskbar icon."""
+    if getattr(sys, 'frozen', False):
+        base_dir = os.path.dirname(sys.executable)
+        return os.path.join(base_dir, "assets", "wotiti.ico")
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(project_root, "assets", "wotiti.ico")
+
+
+def _configure_windows_taskbar_icon(root: tk.Tk) -> None:
+    """Ensure Windows taskbar icon uses app icon, not stale/default icon."""
+    if not sys.platform.startswith("win"):
+        return
+
+    # Stable app id helps Windows map taskbar icon consistently.
+    app_id = "WoTiTi.WorkTimeTracker"
+    with contextlib.suppress(Exception):
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
+
+    icon_path = _resolve_app_icon_path()
+    if os.path.isfile(icon_path):
+        with contextlib.suppress(Exception):
+            root.iconbitmap(default=icon_path)
+
 def main():
     """Main function to start both the Tkinter app and the statistics dashboard."""
     multiprocessing.freeze_support()
@@ -63,6 +90,7 @@ def main():
     try:
         # Start the Tkinter app in the main thread
         root = tk.Tk()
+        _configure_windows_taskbar_icon(root)
         app = App(root, stats_port=stats_port)  # noqa: F841
 
         # Start the statistics dashboard in a separate thread/process
