@@ -46,4 +46,50 @@ if (Test-Path $dbDst) {
 }
 New-Item -ItemType File -Path $dbDst | Out-Null
 
+# Create helper scripts for per-user autostart (Task-Manager visible).
+$toolsDir = Join-Path $distDir "tools"
+if (!(Test-Path $toolsDir)) {
+    New-Item -ItemType Directory -Path $toolsDir | Out-Null
+}
+
+$enableAutostart = @'
+$ErrorActionPreference = "Stop"
+
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$distDir = Split-Path -Parent $scriptDir
+$exePath = Join-Path $distDir "wotiti.exe"
+
+if (!(Test-Path $exePath)) {
+    throw "wotiti.exe nicht gefunden: $exePath"
+}
+
+$runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+$valueName = "WoTiTi"
+$valueData = '"' + $exePath + '"'
+
+New-Item -Path $runKey -Force | Out-Null
+Set-ItemProperty -Path $runKey -Name $valueName -Value $valueData -Type String
+
+Write-Host "Autostart aktiviert (HKCU Run): $valueName"
+Write-Host "Pfad: $exePath"
+'@
+
+$disableAutostart = @'
+$ErrorActionPreference = "Stop"
+
+$runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+$valueName = "WoTiTi"
+
+if (Get-ItemProperty -Path $runKey -Name $valueName -ErrorAction SilentlyContinue) {
+    Remove-ItemProperty -Path $runKey -Name $valueName
+    Write-Host "Autostart deaktiviert: $valueName"
+}
+else {
+    Write-Host "Kein Autostart-Eintrag gefunden: $valueName"
+}
+'@
+
+Set-Content -Path (Join-Path $toolsDir "enable_autostart.ps1") -Value $enableAutostart -Encoding UTF8
+Set-Content -Path (Join-Path $toolsDir "disable_autostart.ps1") -Value $disableAutostart -Encoding UTF8
+
 Write-Host "Build complete: $distDir\wotiti.exe"
