@@ -358,7 +358,7 @@ class App:
         self._mini_toplevel.title("WoTITI Mini")
         self._mini_toplevel.overrideredirect(True)
         self._mini_toplevel.attributes('-topmost', True)
-        self._mini_toplevel.geometry("400x90")
+        self._mini_toplevel.geometry("380x90")
         self._mini_toplevel.configure(bg='#C0C0C0')
         self._mini_toplevel.resizable(False, False)
         self._mini_toplevel.protocol("WM_DELETE_WINDOW", self._exit_mini_mode)
@@ -388,13 +388,13 @@ class App:
 
         self._mini_stop_btn = Button(
             self._mini_frame, text="\u25A0", command=self.stop_session,
-            width=3, height=1, bg='#A9A9A9', fg='red',
+            width=2, height=1, bg='#A9A9A9', fg='red',
             font=('MS Sans Serif', 11, 'bold'), relief='raised', borderwidth=2,
             state="disabled")
         self._mini_stop_btn.grid(row=0, column=2, padx=2, pady=2, sticky='ew')
 
         self._mini_restore_btn = Button(
-            self._mini_frame, text="\u25B3", command=self._toggle_mini_mode, **mini_btn)
+            self._mini_frame, text="\u25B3", command=self._toggle_mini_mode, width=2, **mini_btn)
         self._mini_restore_btn.grid(row=0, column=3, padx=2, pady=2, sticky='ew')
 
         # Row 1: Timer + Break + Projekt
@@ -534,11 +534,17 @@ class App:
         else:
             self._mini_project_combo.config(state='readonly')
 
-        # Hide main window, show mini Toplevel
-        self.master.withdraw()
+        # Show mini Toplevel first, then hide main window. This avoids a
+        # transient "no window visible" state on some window managers.
+        self.master.update_idletasks()
+        x = self.master.winfo_x()
+        y = self.master.winfo_y()
+        self._mini_toplevel.geometry(f"380x90+{x}+{y}")
         self._mini_toplevel.deiconify()
         self._mini_toplevel.lift()
-        self._mini_toplevel.focus_force()
+        with contextlib.suppress(Exception):
+            self._mini_toplevel.focus_force()
+        self.master.withdraw()
 
     def _exit_mini_mode(self):
         """Hide mini Toplevel, restore main window."""
@@ -547,11 +553,11 @@ class App:
         # Sync project selection back from mini to main
         self.project_entry.set(self._mini_project_combo.get().strip())
 
-        # Hide mini Toplevel, restore main window
-        self._mini_toplevel.withdraw()
+        # Restore main window first, then hide mini Toplevel.
         self.master.geometry(self._full_geometry)
         self.master.deiconify()
         self.master.lift()
+        self._mini_toplevel.withdraw()
 
     def _drag_start(self, event):
         """Record starting position for window drag."""
