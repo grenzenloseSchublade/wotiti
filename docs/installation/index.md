@@ -2,7 +2,7 @@
 description: "WoTiTi Installationsanleitung – Download, Quellcode-Setup, und Build-Anleitung für Linux und Windows."
 ---
 
-# 📥 Installation & Quickstart
+# Installation und Quickstart
 
 WoTiTi kann auf **3 verschiedene Wege** installiert werden:
 
@@ -12,7 +12,7 @@ WoTiTi kann auf **3 verschiedene Wege** installiert werden:
 
 ---
 
-## 💻 Systemanforderungen
+## Systemanforderungen
 
 | Anforderung | Minimum |
 |-------------|---------|
@@ -23,7 +23,7 @@ WoTiTi kann auf **3 verschiedene Wege** installiert werden:
 
 ---
 
-## 📦 Option 1: Vorgebaute Binärdatei (empfohlen) { #vorgebaute-binaerdatei }
+## Option 1: Vorgebaute Binärdatei (empfohlen) { #vorgebaute-binaerdatei }
 
 Die **einfachste und schnellste** Variante – keine Installation nötig.
 
@@ -40,7 +40,8 @@ Die **einfachste und schnellste** Variante – keine Installation nötig.
    ./wotiti
    ```
 
-?> **Tipp**: Falls die Anwendung nicht startet, stelle sicher, dass die Datei ausführbar ist: `chmod +x wotiti`
+!!! tip "Tipp"
+    Falls die Anwendung nicht startet, stelle sicher, dass die Datei ausführbar ist: `chmod +x wotiti`
 
 ### Windows (x64)
 
@@ -49,11 +50,12 @@ Die **einfachste und schnellste** Variante – keine Installation nötig.
 3. Navigiere in den Ordner und doppelklicke auf `wotiti.exe`
 4. Windows Smartscreen Warnung? → Klick auf "Weitere Informationen" → "Trotzdem ausführen"
 
-?> **Hinweis**: Auf manchen Windows-Systemen kann die erste Ausführung länger dauern (Caching).
+!!! info "Hinweis"
+    Auf manchen Windows-Systemen kann die erste Ausführung länger dauern (Caching).
 
 ---
 
-## 🔧 Option 2: Aus Quellcode { #aus-quellcode }
+## Option 2: Aus Quellcode { #aus-quellcode }
 
 Ideal für **Entwickler** und wenn Du die neueste **Development-Version** testen möchtest.
 
@@ -107,7 +109,7 @@ Dies erstellt eine isolierte Python-Umgebung im `.venv` Ordner.
 uv run python src/main.py
 ```
 
-Die **Erfassungs­komponente (Timer)** startet sofort. 🎉
+Die **Erfassungs­komponente (Timer)** startet sofort.
 
 !!! info "Dashboard öffnen"
     Das **Analytics-Dashboard** ist separat erreichbar unter `http://localhost:8050` (Browser).
@@ -115,7 +117,7 @@ Die **Erfassungs­komponente (Timer)** startet sofort. 🎉
 
 ---
 
-## 🏗️ Option 3: Selbst bauen (Build) { #selbst-bauen }
+## Option 3: Selbst bauen (Build) { #selbst-bauen }
 
 Falls Du eine **custom-angepasste Version** bauen oder für ein anderes OS kompilieren möchtest.
 
@@ -151,11 +153,12 @@ uv sync --group dev
 
 Ausgabe: `build\wotiti\wotiti.exe`
 
-?> **Tipp**: Der Build-Prozess dauert 2-5 Minuten, je nach System.
+!!! tip "Tipp"
+    Der Build-Prozess dauert 2-5 Minuten, je nach System.
 
 ---
 
-## ✅ Verifizierung: Installation erfolgreich?
+## Verifizierung: Installation erfolgreich?
 
 Nach der Installation solltest Du folgende Punkte prüfen:
 
@@ -168,11 +171,11 @@ Nach der Installation solltest Du folgende Punkte prüfen:
 - [ ] **Dashboard** erreichbar unter `http://localhost:8050` (falls aktiviert)
 
 !!! success "Alles funktioniert?"
-    Glückwunsch! 🎉 Deine WoTiTi Installation ist bereit. Siehe [📖 Benutzer-Guide](../guide/user-guide.md) für nächste Schritte.
+    Die Installation ist abgeschlossen. Siehe [Dokumentation](../guide/dokumentation.md) für nächste Schritte.
 
 ---
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### Problem: "Permission denied" (Linux)
 
@@ -206,7 +209,7 @@ http://localhost:8050 antwortet nicht
 ```
 
 **Lösungen:**
-1. Port in Timer-App Einstellungen ⚙️ ändern (z.B. zu 8051)
+1. Port in Timer-App Einstellungen ändern (z.B. zu 8051)
 2. Prüfen, ob Port bereits von anderer Anwendung benutzt wird: `lsof -i :8050` (Linux/Mac)
 3. Firewall ggf. konfigurieren
 
@@ -237,11 +240,10 @@ sqlite3.OperationalError: database is locked
 
 ---
 
-## 📚 Nächste Schritte
+## Nächste Schritte
 
-- **[✨ Alle Features](../features/index.md)** – Detaillierte Feature-Erklärung
-- **[📖 Benutzer-Guide](../guide/user-guide.md)** – Erste Schritte & Workflows
-- **[❓ FAQ](../faq.md)** – Häufig gestellte Fragen
+- **[Dokumentation](../guide/dokumentation.md)** – Funktionsreferenz und Arbeitsabläufe
+- **[GitHub Repository](https://github.com/grenzenloseSchublade/wotiti)**
 - **[GitHub Issues](https://github.com/grenzenloseSchublade/wotiti/issues)** – Bug berichten
 
 ---

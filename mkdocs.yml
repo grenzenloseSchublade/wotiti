@@ -58,14 +58,11 @@ markdown_extensions:
 
 # Navigation Structure
 nav:
-  - 🏠 Startseite: index.md
-  - 📥 Installation: installation/index.md
-  - ✨ Features: features/index.md
-  - 🤝 Code of Conduct: code-of-conduct.md
-  - 📖 Benutzer-Guide: guide/user-guide.md
-  - ❓ FAQ: faq.md
-  - 👥 Contributing: contributing-guide.md
-  - ⚙️ GitHub Setup: GITHUB_SETUP.md
+  - Startseite: index.md
+  - Installation: installation/index.md
+  - Dokumentation: guide/dokumentation.md
+  - Contributing: contributing-guide.md
+  - Code of Conduct: code-of-conduct.md
 
 # SEO & Analytics
 extra:

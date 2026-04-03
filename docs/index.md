@@ -1,11 +1,10 @@
 ---
-description: "WoTiTi – Lokale Zeiterfassung mit Pomodoro & Analysen. Kostenlos, Open-Source, 100% datenschutzfreundlich. Desktop-App für fokussiertes Arbeiten."
+description: "WoTiTi – Lokale Zeiterfassung mit Pomodoro und Analysen. Kostenlos, Open-Source, 100% datenschutzfreundlich. Desktop-App für fokussiertes Arbeiten."
 keywords: ["Zeiterfassung", "Pomodoro Timer", "Arbeitszeit Tracker", "Open-Source", "lokal", "Python"]
-image: assets/screenshot-main.png
 ---
 
-# WoTiTi 📊
-## Lokale Zeiterfassung mit Pomodoro & Analysen
+# WoTiTi
+## Lokale Zeiterfassung mit Pomodoro und Analysen
 
 > **Fokussiertes Arbeiten, ohne Cloud. Kostenlos. Open-Source.**
 
@@ -18,7 +17,7 @@ WoTiTi ist eine **lokal ausführbare Desktop-Anwendung** zur intelligenten Erfas
 
 ---
 
-## 🎯 Das Problem
+## Das Problem
 
 Kommerzielle Zeiterfassungs-Tools sind:
 - **Cloud-abhängig** → Datenschutz-Unsicherheit
@@ -28,41 +27,33 @@ Kommerzielle Zeiterfassungs-Tools sind:
 
 ---
 
-## 💡 Die Lösung: WoTiTi
+## Die Lösung: WoTiTi
 
 | Merkmal | Beschreibung |
 |---------|------------|
-| **⚡ Schnelles Tracking** | Start, Pause, Stop – in 2 Sekunden |
-| **🍅 Pomodoro-Built-in** | Fokussierte Arbeitsintervalle, automatische Pausenverwaltung |
-| **📊 Intelligente Analysen** | 4 Analyse-Tabs: Übersicht, Projekte, Trends, Deep-Dive |
-| **🛡️ Vollständig Lokal** | SQLite-Datenbasis, keine Internetverbindung nötig |
-| **🎨 Themes** | Modern (Cyan/Pink) & Synthwave – deutschsprachige UI |
-| **🖥️ Plattform-übergreifend** | Linux & Windows, native Builds verfügbar |
+| **Schnelles Tracking** | Start, Pause, Stop – in 2 Sekunden |
+| **Pomodoro-Built-in** | Fokussierte Arbeitsintervalle, automatische Pausenverwaltung |
+| **Intelligente Analysen** | 4 Analyse-Tabs: Übersicht, Projekte, Trends, Deep-Dive |
+| **Vollständig Lokal** | SQLite-Datenbasis, keine Internetverbindung nötig |
+| **Themes** | Modern (Cyan/Pink) und Synthwave – deutschsprachige UI |
+| **Plattform-übergreifend** | Linux und Windows, native Builds verfügbar |
 
 ---
 
-## ⚙️ Kernfunktionen
+## Kernfunktionen
 
-### Erfassungs­komponente (Work Time Timer)
-- **Start/Pause/Stop** für Arbeitsblöcke
-- **Mehrbenutzer-Support** – Team-Modus
-- **Projektbasierte Kategorisierung**
-- **Mini-Modus** – Always-on-top, nicht-obstrusive Verfolgung
-- **Tastenkürzel**: `Ctrl+S` (Start), `Ctrl+E` (Stop), `Ctrl+M` (Mini-Modus)
-- **Pomodoro-Konfig** – anpassbare Arbeits- und Pausenintervalle
+- **Zeiterfassung**: Start, Pause, Stop mit Benutzer- und Projektzuordnung
+- **Pomodoro**: Konfigurierbare Arbeits- und Pausenintervalle (Standard: 25/5 min)
+- **Mini-Modus**: Kompakte Always-on-Top-Ansicht (`Ctrl+M`)
+- **Analytics-Dashboard**: 4 Tabs – Übersicht, Projektmuster, Zeitreihen, ML-Analysen
+- **Themes**: Modern und Synthwave
+- **Tastenkürzel**: `Ctrl+S` (Start), `Ctrl+E` (Stop), `Ctrl+P` (Pause), `Ctrl+M` (Mini)
 
-### Analyse­komponente (Work Time Insights)
-- **4 Analyse-Tabs**:
-  1. **Grundlagen** – Überblick, Tagessummen, Trendpfeile
-  2. **Projekte & Muster** – Projekt-Breakdown, Häufigkeits-Analysen
-  3. **Zeitreihen & Trends** – Produktivitäts-Kurven, Tages-/Wochenmuster
-  4. **Erweiterte Analysen** – Statistiken, Machine-Learning-Vorhersagen
-- **Interaktive Visualisierung** mit Plotly
-- **Deutschsprachige** Oberfläche
+Siehe [Dokumentation](guide/dokumentation.md) für die vollständige Funktionsreferenz.
 
 ---
 
-## 🚀 Schnellstart
+## Schnellstart
 
 ### Option 1: Download (einfachste Variante)
 
@@ -70,7 +61,7 @@ Lade die neueste **vorgebaute Version** herunter:
 - **Linux x64**: [wotiti_1_1-linux-x64.zip](https://github.com/grenzenloseSchublade/wotiti/releases/download/v1.1.0/wotiti_1_1-linux-x64.zip)
 - **Windows x64**: [wotiti_1_1-win-x64.zip](https://github.com/grenzenloseSchublade/wotiti/releases/download/v1.1.0/wotiti_1_1-win-x64.zip)
 
-Entpacken → Ausführen. Fertig! 🎉
+Entpacken → Ausführen. Fertig.
 
 ### Option 2: Aus Quellcode
 
@@ -97,31 +88,35 @@ uv run python src/main.py
 .\build_windows.ps1
 ```
 
-**Mehr Details?** Siehe [📥 Installations-Guide](installation/index.md)
+**Mehr Details?** Siehe [Installations-Guide](installation/index.md)
 
 ---
 
-## 🎬 Erste Schritte
+## Erste Schritte
 
 1. **Benutzer + Projekt anlegen** (einmalig)
 2. **Timer starten** (`Ctrl+S`) → Arbeit beginnen
-3. **Pause einlegen** (`Ctrl+E`) → automatische Erfassung
-4. **Am Ende des Tages**: Dashboard öffnen → Analysen anschauen
-5. **[Ausführlicher Guide →](guide/user-guide.md)**
+3. **Dashboard öffnen** → `http://localhost:8050` → Analysen anschauen
+
+Siehe [Dokumentation](guide/dokumentation.md) für detaillierte Arbeitsabläufe.
 
 ---
 
-## 📦 Was ist enthalten?
+## Vergleich mit Alternativen
 
-- **Work Time Timer** – Tkinter-basierte Desktop-UI für Zeiterfassung
-- **Work Time Insights** – Dash-basiertes Analytics-Dashboard
-- **SQLite-Datenbank** – Strukturierte lokale Speicherung
-- **Konfigurierbare Einstellungen** – Theme, Port, Pomodoro-Intervalle
-- **Standalone-Builds** – Keine Python-Installation nötig für End-User
+| Feature | WoTiTi | Toggl | Clockify | Timesheet |
+|---------|--------|-------|----------|-----------|
+| **Lokal** | ✅ | ❌ | ❌ | ✅/❌ |
+| **Kostenlos** | ✅ | ⚠️ | ⚠️ | ✅ |
+| **Open-Source** | ✅ | ❌ | ❌ | ✅ |
+| **Pomodoro** | ✅ | ❌ | ⚠️ | ⚠️ |
+| **Desktop-App** | ✅ | ⚠️ | ⚠️ | ✅ |
+| **Analyseplots** | ✅ | ⚠️ | ❌ | ❌ |
+| **ML-Vorhersagen** | ✅ | ❌ | ❌ | ❌ |
 
 ---
 
-## 🔒 Datenschutz & Sicherheit
+## Datenschutz und Sicherheit
 
 - ✅ **100% Offline** – Keine Cloud-Anbindung
 - ✅ **Keine Telemetrie** – Keine Nachverfolgung Ihrer Daten
@@ -130,7 +125,7 @@ uv run python src/main.py
 
 ---
 
-## 💻 Systemanforderungen
+## Systemanforderungen
 
 - **OS**: Linux oder Windows
 - **Speicher**: ~50 MB (für Standalone-Build)
@@ -138,7 +133,7 @@ uv run python src/main.py
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 WoTiTi ist Open-Source und freut sich über Beiträge!
 
@@ -146,17 +141,17 @@ WoTiTi ist Open-Source und freut sich über Beiträge!
 - **Bug gefunden?** [Report hier](https://github.com/grenzenloseSchublade/wotiti/issues/new?template=bug_report.md)
 - **Code-Beitrag?** [Fork & Pull Request](contributing-guide.md)
 
-Siehe [👥 Contributing Guide](contributing-guide.md) für Details.
+Siehe [Contributing Guide](contributing-guide.md) für Details.
 
 ---
 
-## 📄 Lizenz
+## Lizenz
 
 WoTiTi ist unter der **MIT-Lizenz** lizenziert. Siehe [LICENSE](https://github.com/grenzenloseSchublade/wotiti/blob/main/LICENSE) für Details.
 
 ---
 
-## 🔗 Links
+## Links
 
 - **GitHub Repository**: [grenzenloseSchublade/wotiti](https://github.com/grenzenloseSchublade/wotiti)
 - **Releases & Downloads**: [GitHub Releases](https://github.com/grenzenloseSchublade/wotiti/releases)
@@ -165,7 +160,7 @@ WoTiTi ist unter der **MIT-Lizenz** lizenziert. Siehe [LICENSE](https://github.c
 ---
 
 <div style="margin-top: 3rem; padding: 2rem; background: linear-gradient(135deg, #00BCD4 0%, #E91E63 100%); color: white; border-radius: 8px; text-align: center;">
-  <h3>🚀 Bereit loszulegen?</h3>
+  <h3>Bereit loszulegen?</h3>
   <p>WoTiTi ist kostenlos und kann sofort heruntergeladen werden.</p>
   <a href="https://github.com/grenzenloseSchublade/wotiti/releases" style="
     display: inline-block;
@@ -176,12 +171,12 @@ WoTiTi ist unter der **MIT-Lizenz** lizenziert. Siehe [LICENSE](https://github.c
     text-decoration: none;
     font-weight: bold;
     margin-top: 1rem;
-  ">📥 Jetzt herunterladen</a>
+  ">Jetzt herunterladen</a>
 </div>
 
 ---
 
-**Fragen?** Siehe [❓ FAQ](faq.md) oder öffne ein [Issue auf GitHub](https://github.com/grenzenloseSchublade/wotiti/issues).
+**Fragen?** Siehe [Dokumentation](guide/dokumentation.md) oder öffne ein [Issue auf GitHub](https://github.com/grenzenloseSchublade/wotiti/issues).
 
 ---
 
@@ -193,7 +188,6 @@ WoTiTi ist unter der **MIT-Lizenz** lizenziert. Siehe [LICENSE](https://github.c
   "name": "WoTiTi – Work Time Tracker & Insights",
   "description": "Lokale Open-Source Zeiterfassung mit Pomodoro-Funktion und Analyse-Dashboard für fokussiertes Arbeiten. Kostenlos, Desktop-App für Linux und Windows.",
   "url": "https://grenzenloseSchublade.github.io/wotiti/",
-  "image": "https://github.com/grenzenloseSchublade/wotiti/raw/main/docs/assets/screenshot-main.png",
   "applicationCategory": "BusinessApplication",
   "applicationSubCategory": "Time Tracking",
   "offers": {
@@ -201,19 +195,8 @@ WoTiTi ist unter der **MIT-Lizenz** lizenziert. Siehe [LICENSE](https://github.c
     "price": "0",
     "priceCurrency": "EUR"
   },
-  "aggregateRating": {
-    "@type": "AggregateRating",
-    "ratingValue": "4.5",
-    "ratingCount": "10"
-  },
-  "creator": {
-    "@type": "Person",
-    "name": "grenzenloseSchublade",
-    "email": "hans.mueller@rub.de"
-  },
   "operatingSystem": ["Linux", "Windows"],
   "downloadUrl": "https://github.com/grenzenloseSchublade/wotiti/releases",
-  "fileFormat": "exe, zip",
   "license": "https://opensource.org/licenses/MIT",
   "runtimePlatform": "Python 3.10+",
   "keywords": ["Zeiterfassung", "Pomodoro", "Time Tracking", "Desktop App", "Open Source", "Produktivität"],

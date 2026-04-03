@@ -1,6 +1,6 @@
 # GitHub Repository Optimierung - SEO & Sichtbarkeit
 
-## 📋 Manuelle GitHub Repo-Einstellungen
+## Manuelle GitHub Repo-Einstellungen
 
 Die folgende Konfiguration sollte manuell in der GitHub Web-UI eingegeben werden:
 
@@ -49,16 +49,15 @@ time-tracker (en)
 - ✅ "Discussions" Tab sichtbar
 - ✅ "Wiki" deaktivieren (nicht nötig, haben Docs)
 
-### 4. Branches & Deploy
+### 4. Pages Deployment
 
 **Ort**: Settings → Pages
 
 **Source:**
-- Quelle: Deploy from a branch
-- Branch: `gh-pages`
-- Folder: `/ (root)`
+- Build and deployment: **GitHub Actions**
+- Die Dokumentation wird automatisch per GitHub Actions Workflow deployt (`.github/workflows/deploy-docs.yml`)
 
-**Enforce HTTPS**: ✅ Aktivieren (für SEO)
+**Enforce HTTPS**: Aktivieren (für SEO)
 
 ### 5. Zusätzliche Sichtbarkeit (Optional)
 
@@ -68,7 +67,7 @@ time-tracker (en)
 
 ---
 
-## 🤖 Automatisierte CLI-Befehle (optional)
+## Automatisierte CLI-Befehle (optional)
 
 Falls Du `gh` CLI nutzen möchtest:
 
@@ -100,7 +99,7 @@ gh repo edit grenzenloseSchublade/wotiti \
 
 ---
 
-## ✅ Checkliste zum Abhaken
+## Checkliste zum Abhaken
 
 Nach der Konfiguration prüfe:
 
@@ -115,7 +114,7 @@ Nach der Konfiguration prüfe:
 
 ---
 
-## 🔍 SEO-Validierung nach Setup
+## SEO-Validierung nach Setup
 
 ### Google Search Console (optional später)
 
@@ -138,7 +137,7 @@ Nach der Konfiguration prüfe:
 
 ---
 
-## 📊 Langfristige SEO Monitoring
+## Langfristige SEO Monitoring
 
 Nach Setup regelmäßig prüfen:
 
@@ -150,7 +149,7 @@ Nach Setup regelmäßig prüfen:
 
 ---
 
-## 🎯 Nächste Phasen (nicht MVP)
+## Nächste Phasen (nicht MVP)
 
 Nach diesem Setup können folgende Aktivitäten stattfinden:
 
@@ -168,6 +167,6 @@ Nach diesem Setup können folgende Aktivitäten stattfinden:
 
 ---
 
-## 📝 Kontakt & Support
+## Kontakt und Support
 
 Fragen? → [Öffne ein Issue](https://github.com/grenzenloseSchublade/wotiti/issues)
