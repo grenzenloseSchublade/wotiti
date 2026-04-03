@@ -6,7 +6,7 @@ description: "WoTiTi Installationsanleitung – Download, Quellcode-Setup, und B
 
 WoTiTi kann auf **3 verschiedene Wege** installiert werden:
 
-1. **[Vorgebaute Binärdatei](#vorgebaute-binärdatei)** – einfachste Methode, empfohlen
+1. **[Vorgebaute Binaerdatei](#vorgebaute-binaerdatei)** – einfachste Methode, empfohlen
 2. **[Aus Quellcode](#aus-quellcode)** – für Entwickler & Contributor
 3. **[Selbst bauen](#selbst-bauen)** – für Anpassungen und Windows-Build
 
@@ -23,7 +23,7 @@ WoTiTi kann auf **3 verschiedene Wege** installiert werden:
 
 ---
 
-## 📦 Option 1: Vorgebaute Binärdatei (empfohlen)
+## 📦 Option 1: Vorgebaute Binärdatei (empfohlen) { #vorgebaute-binaerdatei }
 
 Die **einfachste und schnellste** Variante – keine Installation nötig.
 
@@ -53,7 +53,7 @@ Die **einfachste und schnellste** Variante – keine Installation nötig.
 
 ---
 
-## 🔧 Option 2: Aus Quellcode
+## 🔧 Option 2: Aus Quellcode { #aus-quellcode }
 
 Ideal für **Entwickler** und wenn Du die neueste **Development-Version** testen möchtest.
 
@@ -115,7 +115,7 @@ Die **Erfassungs­komponente (Timer)** startet sofort. 🎉
 
 ---
 
-## 🏗️ Option 3: Selbst bauen (Build)
+## 🏗️ Option 3: Selbst bauen (Build) { #selbst-bauen }
 
 Falls Du eine **custom-angepasste Version** bauen oder für ein anderes OS kompilieren möchtest.
 

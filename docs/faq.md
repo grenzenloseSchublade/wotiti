@@ -305,8 +305,8 @@ Timeline: Abhängig von Community-Feedback und Contributor-Zeit.
 
 ## ❓ Noch Fragen?
 
-1. **Schau die [Features](../features/index.md)** – detaillierte Erklärungen
-2. **Lies den [Benutzer-Guide](user-guide.md)** – praktische Workflows
+1. **Schau die [Features](features/index.md)** – detaillierte Erklärungen
+2. **Lies den [Benutzer-Guide](guide/user-guide.md)** – praktische Workflows
 3. **Öffne ein [Issue](https://github.com/grenzenloseSchublade/wotiti/issues)** – eigentliche Bugs/Requests
 4. **Schau [Discussions](https://github.com/grenzenloseSchublade/wotiti/discussions)** – Community-Fragen
 
