@@ -1,0 +1,5 @@
+# WoTiTi Documentation robots.txt
+User-agent: *
+Allow: /
+
+Sitemap: https://grenzenloseSchublade.github.io/wotiti/sitemap.xml

@@ -1,0 +1,75 @@
+site_name: "WoTiTi – Work Time Tracker & Insights"
+site_description: "Lokale Open-Source Zeiterfassung mit Pomodoro-Funktion und Analyse-Dashboard für fokussiertes Arbeiten"
+site_url: "https://grenzenloseSchublade.github.io/wotiti/"
+repo_url: "https://github.com/grenzenloseSchublade/wotiti"
+repo_name: "grenzenloseSchublade/wotiti"
+edit_uri: "edit/main/docs/"
+
+# Language & Locale
+language: de
+
+# Theme Configuration
+theme:
+  name: material
+  language: de
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: cyan
+      accent: pink
+      toggle:
+        icon: material/brightness-7
+        name: Dunkel-Modus
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: cyan
+      accent: pink
+      toggle:
+        icon: material/brightness-4
+        name: Hell-Modus
+  font:
+    text: Roboto
+    code: Roboto Mono
+  features:
+    - navigation.tabs
+    - navigation.instant
+    - navigation.tracking
+    - content.code.copy
+    - content.code.select
+    - search.suggest
+    - search.highlight
+
+# Plugins
+plugins:
+  - search:
+      lang:
+        - de
+
+# Extensions
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+  - meta
+  - attr_list
+  - tables
+  - md_in_html
+
+# Navigation Structure
+nav:
+  - 🏠 Startseite: index.md
+  - 📥 Installation: installation/index.md
+  - ✨ Features: features/index.md
+  - 📖 Benutzer-Guide: guide/user-guide.md
+  - ❓ FAQ: faq.md
+  - 👥 Contributing: contributing.md
+
+# SEO & Analytics
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/grenzenloseSchublade/wotiti

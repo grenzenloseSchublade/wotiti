@@ -1,11 +1,15 @@
 # WoTiTi - Work Time Tracker and Insights
 
-WoTiTi ist ein lokal ausführbares System zur Zeiterfassung und Arbeitszeitanalyse. Die Anwendung besteht aus zwei funktional getrennten Komponenten:
+🚀 **[📖 Zur Dokumentation](https://grenzenloseSchublade.github.io/wotiti/)** | 📥 [Jetzt herunterladen](https://github.com/grenzenloseSchublade/wotiti/releases) | 🐛 [Bugs berichten](https://github.com/grenzenloseSchublade/wotiti/issues)
+
+---
+
+WoTiTi ist ein **lokal ausführbares System zur Zeiterfassung und Arbeitszeitanalyse** mit integrierter Pomodoro-Methode. Die Anwendung besteht aus zwei funktional getrennten Komponenten:
 
 1. **Work Time Timer**: Erfassungskomponente auf Basis von tkinter
 2. **Work Time Insights**: Analysekomponente auf Basis von Dash und Plotly
 
-## Kurzüberblick
+## 🎯 Kurzüberblick
 
 WoTiTi ist eine lokal ausführbare Desktop-Anwendung zur Erfassung von Arbeitszeiten mit zugehörigem Analyse-Dashboard.
 
@@ -22,7 +26,17 @@ WoTiTi ist eine lokal ausführbare Desktop-Anwendung zur Erfassung von Arbeitsze
 - Dashboard für deskriptive, visuelle und statistische Auswertungen
 - Standalone-Builds für Linux und Windows via PyInstaller
 
-## tl;dr - Schnellstart
+## 🚀 tl;dr - Schnellstart
+
+### 📦 Vorgebaute Binärdatei (einfachste Methode)
+
+**[Lade die neueste Version herunter](https://github.com/grenzenloseSchublade/wotiti/releases):**
+- Linux x64: [wotiti_1_1-linux-x64.zip](https://github.com/grenzenloseSchublade/wotiti/releases/download/v1.1.0/wotiti_1_1-linux-x64.zip)
+- Windows x64: [wotiti_1_1-win-x64.zip](https://github.com/grenzenloseSchublade/wotiti/releases/download/v1.1.0/wotiti_1_1-win-x64.zip)
+
+Entpacken → Ausführen. Fertig! 🎉
+
+### 💻 Aus Quellcode
 
 Ausführung aus dem Quellcode:
 ```bash
@@ -30,6 +44,8 @@ pip install uv
 uv sync
 uv run python src/main.py
 ```
+
+### 🏗️ Build
 
 Build unter Linux:
 ```bash
@@ -41,10 +57,7 @@ Build unter Windows:
 .\build_windows.ps1
 ```
 
-Herunterladbare Builds:
-- Aktuelle Releases: [GitHub Releases](https://github.com/grenzenloseSchublade/wotiti/releases)
-- Version `v1.1.0` Linux x64: [wotiti_1_1-linux-x64.zip](https://github.com/grenzenloseSchublade/wotiti/releases/download/v1.1.0/wotiti_1_1-linux-x64.zip)
-- Version `v1.1.0` Windows x64: [wotiti_1_1-win-x64.zip](https://github.com/grenzenloseSchublade/wotiti/releases/download/v1.1.0/wotiti_1_1-win-x64.zip)
+➡️ **[Detaillierte Installationshilfe →](https://grenzenloseSchublade.github.io/wotiti/installation/)**
 
 ## Motivation und Designprinzipien
 
