@@ -274,7 +274,7 @@ Statistische & ML-Features:
 
 - **[📖 Benutzer-Guide](../guide/user-guide.md)** – Schritt-für-Schritt Anleitung
 - **[❓ FAQ](../faq.md)** – Häufig gestellte Fragen
-- **[👥 Contributing](../contributing.md)** – Für Entwickler
+- **[👥 Contributing](../contributing-guide.md)** – Für Entwickler
 - **[GitHub Repository](https://github.com/grenzenloseSchublade/wotiti)**
 
 ---

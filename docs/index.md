@@ -144,9 +144,9 @@ WoTiTi ist Open-Source und freut sich über Beiträge!
 
 - **Feature-Ideen?** Öffne ein [GitHub Issue](https://github.com/grenzenloseSchublade/wotiti/issues)
 - **Bug gefunden?** [Report hier](https://github.com/grenzenloseSchublade/wotiti/issues/new?template=bug_report.md)
-- **Code-Beitrag?** [Fork & Pull Request](contributing.md)
+- **Code-Beitrag?** [Fork & Pull Request](contributing-guide.md)
 
-Siehe [👥 Contributing Guide](contributing.md) für Details.
+Siehe [👥 Contributing Guide](contributing-guide.md) für Details.
 
 ---
 

@@ -8,18 +8,13 @@ Vielen Dank, dass Du WoTiTi verbessern möchtest! 🙏
 
 Dieses Dokument erklärt wie Du **Bug-Reports**, **Feature-Requests** oder **Code-Beiträge** einreichen kannst.
 
+Für die GitHub-Startseite gibt es zusätzlich eine knappe Community-Datei unter `.github/CONTRIBUTING.md`.
+
 ---
 
 ## 🤝 Code of Conduct
 
-WoTiTi folgt klaren Community-Regeln für respektvolle und sichere Zusammenarbeit.
-
-- Sei höflich, konstruktiv und professionell
-- Akzeptiere unterschiedliche Perspektiven
-- Keine Beleidigungen, Belästigung oder Diskriminierung
-- Keine Veröffentlichung privater Informationen ohne Einwilligung
-
-Die vollständige Richtlinie inkl. Moderations- und Durchsetzungsleitfaden findest du hier:
+Regeln zu Verhalten, Moderation und Durchsetzung sind zentral im Code of Conduct definiert.
 
 - [Code of Conduct](code-of-conduct.md)
 

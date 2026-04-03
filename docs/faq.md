@@ -243,7 +243,7 @@ Das ist ein großer Vorteil gegenüber Cloud-Tools!
 3. Test lokal: `uv run python src/main.py`
 4. (Optional) Pull-Request einreichen um Änderungen zu teilen
 
-**Contributor-Guide**: [📖 Contributing](contributing.md)
+**Contributor-Guide**: [📖 Contributing](contributing-guide.md)
 
 ---
 
