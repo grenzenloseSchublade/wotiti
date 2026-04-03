@@ -12,12 +12,16 @@ Dieses Dokument erklärt wie Du **Bug-Reports**, **Feature-Requests** oder **Cod
 
 ## 🤝 Code of Conduct
 
-WoTiTi folgt einem einfachen Grundsatz: **Respektvolles, konstruktives Feedback**.
+WoTiTi folgt klaren Community-Regeln für respektvolle und sichere Zusammenarbeit.
 
-- ✅ Sei höflich und unterstützend
-- ✅ Gib aussagekräftiges Feedback
-- ✅ Lerne von anderen
-- ❌ Keine Beleidigungen oder Diskriminierung
+- Sei höflich, konstruktiv und professionell
+- Akzeptiere unterschiedliche Perspektiven
+- Keine Beleidigungen, Belästigung oder Diskriminierung
+- Keine Veröffentlichung privater Informationen ohne Einwilligung
+
+Die vollständige Richtlinie inkl. Moderations- und Durchsetzungsleitfaden findest du hier:
+
+- [Code of Conduct](code-of-conduct.md)
 
 ---
 
