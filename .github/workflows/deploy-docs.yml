@@ -27,6 +27,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      NO_MKDOCS_2_WARNING: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,7 +42,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install mkdocs mkdocs-material
+          pip install "mkdocs==1.6.1" "mkdocs-material==9.6.20"
 
       - name: Build documentation
         run: mkdocs build
@@ -52,7 +54,7 @@ jobs:
 
   deploy:
     needs: build
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && github.event.repository.private == false
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -61,3 +63,14 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  pages-unavailable:
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && github.event.repository.private == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Explain why deploy is skipped
+        run: |
+          echo "GitHub Pages deployment skipped: repository is private."
+          echo "Current account plan does not support Pages for this repository."
+          echo "Make the repo public or upgrade account/organization plan to enable Pages deployment."
