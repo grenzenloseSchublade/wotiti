@@ -1,16 +1,46 @@
 {
   "name": "WorkTimeTimer",
-  "image": "mcr.microsoft.com/devcontainers/python:3.12-bookworm", // Debian 11 (GLIBC 2.31)
+  // Debian 12 „bookworm“, GLIBC 2.36
+  "image": "mcr.microsoft.com/devcontainers/python:3.12-bookworm",
+  "remoteUser": "vscode",
+  "updateRemoteUserUID": false,
+  "initializeCommand": "bash .devcontainer/init.sh",
   "features": {
     "ghcr.io/devcontainers/features/common-utils:2": {
       "username": "vscode"
     },
     "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers-extra/features/uv:1": {
+      "version": "latest"
+    },
     "./local-features/devtools": {}
   },
   "runArgs": [
-    "--env", "DISPLAY=${localEnv:DISPLAY}",
-    "--network=host"
+    "--env",
+    "DISPLAY=${localEnv:DISPLAY}"
+  ],
+  "forwardPorts": [
+    8052,
+    8053,
+    8054,
+    8055,
+    8056,
+    8057,
+    8058,
+    8059,
+    8060,
+    8061,
+    8062,
+    8063,
+    8064,
+    8065,
+    8066,
+    8067,
+    8068,
+    8069,
+    8070,
+    8071,
+    8072
   ],
   "mounts": [
     "source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind,consistency=cached",
@@ -33,6 +63,6 @@
       ]
     }
   },
-  "updateContentCommand": "python -m uv sync --extra stats --extra dev",
-  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends pulseaudio-utils && sudo rm -rf /var/lib/apt/lists/*"
+  "updateContentCommand": "uv sync --extra stats --extra dev",
+  "postCreateCommand": "uv run pre-commit install"
 }

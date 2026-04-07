@@ -10,38 +10,31 @@ echo "========================================="
 echo "Installing devtools..."
 echo "========================================="
 
-# WICHTIG: Yarn-Repo entfernen BEVOR apt-get update
+# Yarn-Repo entfernen BEVOR apt-get update (bekanntes Problem im Basis-Image)
 echo "Removing broken Yarn repository..."
 rm -f /etc/apt/sources.list.d/yarn.list
 
-# Jetzt apt-get update
 echo "Updating package lists..."
 apt-get update
 
-packages="portaudio19-dev
-          libsndfile1
-          tk
-          liblapack-dev
-          libblas-dev
-          libatlas-base-dev 
-          gfortran"
-
 echo "Installing packages..."
-for package in $packages; do
-    echo "Installing $package..."
-    apt-get install -y $package
-done
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    portaudio19-dev \
+    libsndfile1 \
+    tk \
+    liblapack-dev \
+    libblas-dev \
+    libatlas-base-dev \
+    gfortran \
+    pulseaudio-utils
 
-echo "Upgrading packages..."
-apt-get upgrade -y
-
-echo "Upgrading pip and installing uv..."
+echo "Upgrading pip (uv wird über Dev-Container-Feature installiert)..."
 python -m pip install --upgrade pip
-python -m pip install --no-cache-dir uv
 
-echo "Setting up vscode user password..."
+echo "Unlocking vscode login (kein festes Passwort im Image)..."
 passwd -d vscode 2>/dev/null || true
-echo "vscode:qwertz." | chpasswd
+
+rm -rf /var/lib/apt/lists/*
 
 echo "========================================="
 echo "devtools installation completed!"

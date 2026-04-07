@@ -19,6 +19,9 @@ build/
 dist/
 *.spec
 
+# Lokale Umgebung (nicht committen)
+.env
+
 # IDE / Editor
 .vscode/
 .idea/

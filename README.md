@@ -45,6 +45,14 @@ uv sync
 uv run python src/main.py
 ```
 
+### Dev Container (Docker / VS Code / Cursor)
+
+Für eine reproduzierbare Entwicklungsumgebung: **Ordner `wotiti` öffnen** (Repository-Wurzel mit `pyproject.toml`), nicht nur ein beliebiges Elternverzeichnis. Anschließend in der Command Palette „Dev Containers: Reopen in Container“ wählen. Die Konfiguration liegt unter [`.devcontainer/`](.devcontainer/).
+
+- Vor dem Start legt [`.devcontainer/init.sh`](.devcontainer/init.sh) auf dem **Host** ggf. Platzhalter für fehlende Bind-Mount-Pfade an (z. B. `/mnt/wslg/PulseServer` ohne WSLg), damit Docker nicht abbricht.
+- Das Dash-Dashboard nutzt standardmäßig Ports um **8052**; bei Port-Konflikten werden bis zu 20 Folgeports probiert – diese sind in der Dev-Container-Konfiguration weitergeleitet (`forwardPorts`).
+- Optionale Variablen sind in [`.env.example`](.env.example) beschrieben.
+
 ### Build
 
 Build unter Linux:

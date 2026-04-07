@@ -1,0 +1,30 @@
+# Git und virtuelle Umgebungen
+.git
+.gitignore
+.venv
+venv
+env
+
+# Python / Tests / Build
+__pycache__
+*.py[cod]
+*$py.class
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.egg-info
+dist
+build
+*.spec
+
+# IDE
+.vscode
+.idea
+
+# Lokale Daten (nicht in Image-Kontext)
+data/*.db
+data/**/*.db
+
+# MkDocs Ausgabe
+site
+.site
