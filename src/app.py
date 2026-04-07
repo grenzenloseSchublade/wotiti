@@ -39,9 +39,11 @@ else:
 
 from db_helper import (
     TIMESTAMP_FORMAT,
+    calculate_daily_duration,
     calculate_duration,
     check_user,
     close_stale_breaks,
+    close_stale_sessions,
     create_break_events_table,
     create_connection,
     create_events_table,
@@ -60,6 +62,9 @@ from db_helper import (
     update_event,
 )
 from utils import (
+    APP_AUTHOR,
+    APP_LICENSE,
+    APP_VERSION,
     DATABASE_PATH,
     PATH_TO_DATA,
     PATH_TO_SOUNDS,
@@ -108,12 +113,14 @@ class App:
         self.pomodoro_long_break_every = int(self.config.get("pomodoro_long_break_every", 4))
         self.pomodoro_auto_break = bool(self.config.get("pomodoro_auto_break", True))
         self.pomodoro_sound_enabled = bool(self.config.get("pomodoro_sound_enabled", True))
-        self.pomodoro_sound_local_path = str(self.config.get("pomodoro_sound_local_path", "sounds/StartupSound.wav")).strip()
+        self.pomodoro_sound_local_path = str(
+            self.config.get("pomodoro_sound_local_path", "sounds/StartupSound.wav")
+        ).strip()
         self._cached_sound_path = ""
         self._cached_sound_player = ""
 
         master.title("WoTITI - Work Time Timer")
-        master.configure(bg='#C0C0C0')
+        master.configure(bg="#C0C0C0")
 
         # Restore last window geometry when available, fallback to sensible size.
         saved_geometry = str(self.config.get("window_geometry", "")).strip()
@@ -128,84 +135,104 @@ class App:
         master.grid_columnconfigure(0, weight=1)
 
         # Main frame
-        self.frame = Frame(master, bg='#C0C0C0')
+        self.frame = Frame(master, bg="#C0C0C0")
         self.frame.grid(padx=10, pady=10, sticky="nsew")
 
         # --- Shared configs ---
         button_config = {
-            'bg': '#D4D0C8', 'fg': 'black', 'font': ('MS Sans Serif', 10),
-            'relief': 'raised', 'borderwidth': 2
+            "bg": "#D4D0C8",
+            "fg": "black",
+            "font": ("MS Sans Serif", 10),
+            "relief": "raised",
+            "borderwidth": 2,
         }
-        label_config = {
-            'bg': '#C0C0C0', 'fg': 'black', 'font': ('MS Sans Serif', 10)
-        }
-        entry_config = {
-            'bg': '#FFFFFF', 'fg': 'black', 'font': ('MS Sans Serif', 10)
-        }
+        label_config = {"bg": "#C0C0C0", "fg": "black", "font": ("MS Sans Serif", 10)}
+        entry_config = {"bg": "#FFFFFF", "fg": "black", "font": ("MS Sans Serif", 10)}
 
         # =====================================================
         # ROW 0: Primary action buttons (Start / Stop) + secondary
         # =====================================================
-        self.button_frame = Frame(self.frame, bg='#C0C0C0')
+        self.button_frame = Frame(self.frame, bg="#C0C0C0")
         self.button_frame.grid(row=0, column=0, columnspan=6, pady=5, padx=5, sticky="ew")
 
         # Start button - prominent, green tint
         self.start_button = Button(
-            self.button_frame, text="\u25B6 Start", height=2, width=8,
+            self.button_frame,
+            text="\u25b6 Start",
+            height=2,
+            width=8,
             command=self.start_session,
-            bg='#D4D0C8', fg='black', font=('MS Sans Serif', 10, 'bold'),
-            activebackground='#90EE90', relief='raised', borderwidth=2
+            bg="#D4D0C8",
+            fg="black",
+            font=("MS Sans Serif", 10, "bold"),
+            activebackground="#90EE90",
+            relief="raised",
+            borderwidth=2,
         )
-        self.start_button.grid(row=0, column=0, pady=5, padx=3, sticky=W+E)
+        self.start_button.grid(row=0, column=0, pady=5, padx=3, sticky=W + E)
 
         # Pause button - toggle pause/resume
         self.pause_button = Button(
-            self.button_frame, text="\u25AE\u25AE Pause", height=2, width=8,
+            self.button_frame,
+            text="\u25ae\u25ae Pause",
+            height=2,
+            width=8,
             command=self.pause_session,
-            bg='#A9A9A9', fg='black', font=('MS Sans Serif', 10, 'bold'),
-            activebackground='#FFD700', relief='raised', borderwidth=2,
-            state="disabled"
+            bg="#A9A9A9",
+            fg="black",
+            font=("MS Sans Serif", 10, "bold"),
+            activebackground="#FFD700",
+            relief="raised",
+            borderwidth=2,
+            state="disabled",
         )
-        self.pause_button.grid(row=0, column=1, pady=5, padx=3, sticky=W+E)
+        self.pause_button.grid(row=0, column=1, pady=5, padx=3, sticky=W + E)
 
         # Stop button - ends session completely
         self.stop_button = Button(
-            self.button_frame, text="\u25A0 Stop", height=2, width=8,
+            self.button_frame,
+            text="\u25a0 Stop",
+            height=2,
+            width=8,
             command=self.stop_session,
-            bg='#A9A9A9', fg='black', font=('MS Sans Serif', 10, 'bold'),
-            activebackground='#FF6B6B', relief='raised', borderwidth=2,
-            state="disabled"
+            bg="#A9A9A9",
+            fg="black",
+            font=("MS Sans Serif", 10, "bold"),
+            activebackground="#FF6B6B",
+            relief="raised",
+            borderwidth=2,
+            state="disabled",
         )
-        self.stop_button.grid(row=0, column=2, pady=5, padx=3, sticky=W+E)
+        self.stop_button.grid(row=0, column=2, pady=5, padx=3, sticky=W + E)
 
         # Separator
-        self.button_separator = Frame(self.button_frame, width=10, bg='#C0C0C0')
+        self.button_separator = Frame(self.button_frame, width=10, bg="#C0C0C0")
         self.button_separator.grid(row=0, column=3, padx=2)
 
         self.calculate_button = Button(
             self.button_frame, text="Aktualisieren", command=self.update_duration, **button_config
         )
-        self.calculate_button.grid(row=0, column=4, pady=5, padx=3, sticky=W+E)
+        self.calculate_button.grid(row=0, column=4, pady=5, padx=3, sticky=W + E)
 
         self.stats_button = Button(
             self.button_frame, text="Auswertung", command=self.open_stats_dashboard, **button_config
         )
-        self.stats_button.grid(row=0, column=5, pady=5, padx=3, sticky=W+E)
+        self.stats_button.grid(row=0, column=5, pady=5, padx=3, sticky=W + E)
 
         self.user_mgmt_button = Button(
             self.button_frame, text="Benutzer", command=self.open_user_management, **button_config
         )
-        self.user_mgmt_button.grid(row=0, column=6, pady=5, padx=3, sticky=W+E)
+        self.user_mgmt_button.grid(row=0, column=6, pady=5, padx=3, sticky=W + E)
 
         self.settings_button = Button(
             self.button_frame, text="\u2699 Einst.", command=self.open_settings, **button_config
         )
-        self.settings_button.grid(row=0, column=7, pady=5, padx=3, sticky=W+E)
+        self.settings_button.grid(row=0, column=7, pady=5, padx=3, sticky=W + E)
 
         self.mini_button = Button(
-            self.button_frame, text="\u25BD Mini", command=self._toggle_mini_mode, **button_config
+            self.button_frame, text="\u25bd Mini", command=self._toggle_mini_mode, **button_config
         )
-        self.mini_button.grid(row=0, column=8, pady=5, padx=3, sticky=W+E)
+        self.mini_button.grid(row=0, column=8, pady=5, padx=3, sticky=W + E)
 
         # Configure button frame columns
         self.button_frame.grid_columnconfigure(0, weight=2)
@@ -221,13 +248,13 @@ class App:
         # =====================================================
         # ROW 1: Entry frame (Name, Datum, Projekt)
         # =====================================================
-        self.entry_frame = Frame(self.frame, bg='#C0C0C0', border=2, relief="sunken", padx=2, pady=2)
+        self.entry_frame = Frame(self.frame, bg="#C0C0C0", border=2, relief="sunken", padx=2, pady=2)
         self.entry_frame.grid(row=1, column=0, columnspan=6, pady=5, padx=5, sticky="ew")
 
         # Name label and combobox
         self.name_label = Label(self.entry_frame, text="Name:", **label_config)
         self.name_label.grid(row=0, column=0, pady=5, padx=3, sticky="w")
-        self.name_entry = Combobox(self.entry_frame, font=('MS Sans Serif', 10), width=14)
+        self.name_entry = Combobox(self.entry_frame, font=("MS Sans Serif", 10), width=14)
         self.name_entry.grid(row=0, column=1, pady=5, padx=3, sticky="ew")
         self.name_entry.set("Hans")
 
@@ -236,7 +263,7 @@ class App:
         self.date_label.grid(row=0, column=2, pady=5, padx=3, sticky="w")
         self.date_entry = Entry(self.entry_frame, **entry_config, width=12)
         self.date_entry.grid(row=0, column=3, pady=5, padx=3, sticky="ew")
-        self.date_entry.insert(0, str(datetime.today().strftime('%d-%m-%Y')))
+        self.date_entry.insert(0, str(datetime.today().strftime("%d-%m-%Y")))
 
         # Heute button
         self.heute_button = Button(self.entry_frame, text="Heute", command=self.set_today_date, **button_config)
@@ -245,7 +272,7 @@ class App:
         # Project label and combobox
         self.project_label = Label(self.entry_frame, text="Projekt:", **label_config)
         self.project_label.grid(row=0, column=5, pady=5, padx=3, sticky="w")
-        self.project_entry = Combobox(self.entry_frame, font=('MS Sans Serif', 10), width=14)
+        self.project_entry = Combobox(self.entry_frame, font=("MS Sans Serif", 10), width=14)
         self.project_entry.grid(row=0, column=6, pady=5, padx=3, sticky="ew")
         self.project_entry.set("1")
 
@@ -261,32 +288,30 @@ class App:
         # =====================================================
         # ROW 2: Timer display
         # =====================================================
-        self.timer_frame = Frame(self.frame, bg='#C0C0C0', border=2, relief="sunken", padx=5, pady=5)
+        self.timer_frame = Frame(self.frame, bg="#C0C0C0", border=2, relief="sunken", padx=5, pady=5)
         self.timer_frame.grid(row=2, column=0, columnspan=6, pady=5, padx=5, sticky="ew")
 
         self.timer_time_label = Label(
-            self.timer_frame, text="00:00:00", bg='#C0C0C0', fg='red',
-            font=('MS Sans Serif', 28, 'bold')
+            self.timer_frame, text="00:00:00", bg="#C0C0C0", fg="red", font=("MS Sans Serif", 28, "bold")
         )
         self.timer_time_label.grid(row=0, column=0, pady=5, padx=10, sticky="w")
 
-        self.timer_name_label = Label(
-            self.timer_frame, text="", bg='#C0C0C0', fg='#000080',
-            font=('MS Sans Serif', 12)
-        )
+        self.timer_name_label = Label(self.timer_frame, text="", bg="#C0C0C0", fg="#000080", font=("MS Sans Serif", 12))
         self.timer_name_label.grid(row=0, column=1, pady=5, padx=10, sticky="w")
 
         self.timer_project_label = Label(
-            self.timer_frame, text="", bg='#C0C0C0', fg='#000080',
-            font=('MS Sans Serif', 12)
+            self.timer_frame, text="", bg="#C0C0C0", fg="#000080", font=("MS Sans Serif", 12)
         )
         self.timer_project_label.grid(row=0, column=2, pady=5, padx=10, sticky="w")
 
         self.break_time_label = Label(
-            self.timer_frame, text="--:--", bg='#C0C0C0', fg='#0000FF',
-            font=('MS Sans Serif', 12, 'bold')
+            self.timer_frame, text="--:--", bg="#C0C0C0", fg="#0000FF", font=("MS Sans Serif", 12, "bold")
         )
         self.break_time_label.grid(row=0, column=3, pady=5, padx=10, sticky="e")
+
+        # Row 1: Total project time (small, faded red)
+        self.timer_total_label = Label(self.timer_frame, text="", bg="#C0C0C0", fg="#CC6666", font=("MS Sans Serif", 8))
+        self.timer_total_label.grid(row=1, column=0, columnspan=4, padx=12, sticky="w")
 
         self.timer_frame.grid_columnconfigure(0, weight=0)
         self.timer_frame.grid_columnconfigure(1, weight=1)
@@ -299,44 +324,62 @@ class App:
         # =====================================================
         # ROW 3: Database content listbox
         # =====================================================
-        self.db_content_frame = Frame(self.frame, bg='#C0C0C0')
+        self.db_content_frame = Frame(self.frame, bg="#C0C0C0")
         self.db_content_frame.grid(row=3, column=0, columnspan=6, pady=5, padx=5, sticky="nsew")
 
-        self.db_content_listbox = Listbox(self.db_content_frame, bg='#FFFFFF', fg='black', font=('MS Sans Serif', 10))
+        self.db_content_listbox = Listbox(self.db_content_frame, bg="#FFFFFF", fg="black", font=("MS Sans Serif", 10))
         self.db_content_listbox.grid(row=0, column=0, sticky="nsew")
-        self.db_content_listbox.bind('<Double-1>', self._edit_event)
+        self.db_content_listbox.bind("<Double-1>", self._edit_event)
         self._event_ids: list[int | None] = []
 
-        self.scrollbar_listbox = Scrollbar(self.db_content_frame, orient=VERTICAL, command=self.db_content_listbox.yview, bg='#C0C0C0', width=20)
+        self.scrollbar_listbox = Scrollbar(
+            self.db_content_frame, orient=VERTICAL, command=self.db_content_listbox.yview, bg="#C0C0C0", width=20
+        )
         self.scrollbar_listbox.grid(row=0, column=1, sticky="ns")
-        self.db_content_listbox['yscrollcommand'] = self.scrollbar_listbox.set
+        self.db_content_listbox["yscrollcommand"] = self.scrollbar_listbox.set
 
         # =====================================================
         # ROW 4: Console + Clear button
         # =====================================================
-        self.console_frame = Frame(self.frame, bg='#C0C0C0')
+        self.console_frame = Frame(self.frame, bg="#C0C0C0")
         self.console_frame.grid(row=4, column=0, columnspan=6, sticky="nsew")
 
         # Clear Console button above console, right-aligned
-        self.console_toolbar = Frame(self.console_frame, bg='#C0C0C0')
+        self.console_toolbar = Frame(self.console_frame, bg="#C0C0C0")
         self.console_toolbar.grid(row=0, column=0, columnspan=2, sticky="ew")
         self.clear_button = Button(
-            self.console_toolbar, text="Konsole leeren", command=self.clear_console,
-            bg='#D4D0C8', fg='black', font=('MS Sans Serif', 8), relief='raised', borderwidth=1
+            self.console_toolbar,
+            text="Konsole leeren",
+            command=self.clear_console,
+            bg="#D4D0C8",
+            fg="black",
+            font=("MS Sans Serif", 8),
+            relief="raised",
+            borderwidth=1,
         )
-        self.clear_button.pack(side='right', padx=2, pady=1)
+        self.clear_button.pack(side="right", padx=2, pady=1)
         self.copy_console_button = Button(
-            self.console_toolbar, text="Copy", command=self._copy_console,
-            bg='#D4D0C8', fg='black', font=('MS Sans Serif', 8), relief='raised', borderwidth=1
+            self.console_toolbar,
+            text="Copy",
+            command=self._copy_console,
+            bg="#D4D0C8",
+            fg="black",
+            font=("MS Sans Serif", 8),
+            relief="raised",
+            borderwidth=1,
         )
-        self.copy_console_button.pack(side='right', padx=2, pady=1)
+        self.copy_console_button.pack(side="right", padx=2, pady=1)
 
-        self.console = Text(self.console_frame, wrap='word', state='disabled', height=8, bg='black', fg='white', font=('Courier', 10))
+        self.console = Text(
+            self.console_frame, wrap="word", state="disabled", height=8, bg="black", fg="white", font=("Courier", 10)
+        )
         self.console.grid(row=1, column=0, sticky="nsew")
 
-        self.scrollbar = Scrollbar(self.console_frame, orient=VERTICAL, command=self.console.yview, bg='#C0C0C0', width=20)
+        self.scrollbar = Scrollbar(
+            self.console_frame, orient=VERTICAL, command=self.console.yview, bg="#C0C0C0", width=20
+        )
         self.scrollbar.grid(row=1, column=1, sticky="ns")
-        self.console['yscrollcommand'] = self.scrollbar.set
+        self.console["yscrollcommand"] = self.scrollbar.set
 
         # =====================================================
         # Grid weights
@@ -354,77 +397,16 @@ class App:
         sys.stdout = self
         sys.stderr = self
 
-        # =====================================================
-        # MINI MODE: Dedicated Toplevel window (hidden by default)
-        # =====================================================
-        self._mini_toplevel = Toplevel(master)
-        self._mini_toplevel.title("WoTITI Mini")
-        self._mini_toplevel.overrideredirect(True)
-        self._mini_toplevel.attributes('-topmost', True)
-        self._mini_toplevel.geometry(f"{self._mini_width}x{self._mini_height}")
-        self._mini_toplevel.configure(bg='#C0C0C0')
-        self._mini_toplevel.resizable(False, False)
-        self._mini_toplevel.protocol("WM_DELETE_WINDOW", self._exit_mini_mode)
-        self._mini_toplevel.withdraw()
-
-        self._mini_toplevel.grid_rowconfigure(0, weight=1)
-        self._mini_toplevel.grid_columnconfigure(0, weight=1)
-
-        self._mini_frame = Frame(self._mini_toplevel, bg='#C0C0C0')
-        self._mini_frame.grid(padx=4, pady=4, sticky='nsew')
-        mini_btn = {'bg': '#D4D0C8', 'fg': 'black', 'font': ('MS Sans Serif', 9),
-                    'relief': 'raised', 'borderwidth': 2}
-
-        # Row 0: Buttons
-        self._mini_start_btn = Button(
-            self._mini_frame, text="\u25B6", command=self.start_session,
-            width=3, height=1, bg='#D4D0C8', fg='green',
-            font=('MS Sans Serif', 11, 'bold'), relief='raised', borderwidth=2)
-        self._mini_start_btn.grid(row=0, column=0, padx=2, pady=2, sticky='ew')
-
-        self._mini_pause_btn = Button(
-            self._mini_frame, text="\u25AE\u25AE", command=self.pause_session,
-            width=3, height=1, bg='#A9A9A9', fg='#B8860B',
-            font=('MS Sans Serif', 11, 'bold'), relief='raised', borderwidth=2,
-            state="disabled")
-        self._mini_pause_btn.grid(row=0, column=1, padx=2, pady=2, sticky='ew')
-
-        self._mini_stop_btn = Button(
-            self._mini_frame, text="\u25A0", command=self.stop_session,
-            width=2, height=1, bg='#A9A9A9', fg='red',
-            font=('MS Sans Serif', 11, 'bold'), relief='raised', borderwidth=2,
-            state="disabled")
-        self._mini_stop_btn.grid(row=0, column=2, padx=2, pady=2, sticky='ew')
-
-        self._mini_restore_btn = Button(
-            self._mini_frame, text="\u25B3", command=self._toggle_mini_mode, width=2, **mini_btn)
-        self._mini_restore_btn.grid(row=0, column=3, padx=2, pady=2, sticky='ew')
-
-        # Row 1: Timer + Break + Projekt
-        self._mini_timer_label = Label(
-            self._mini_frame, text="00:00:00", bg='#C0C0C0', fg='red',
-            font=('MS Sans Serif', 18, 'bold'))
-        self._mini_timer_label.grid(row=1, column=0, padx=4, pady=2, sticky='w')
-
-        self._mini_break_label = Label(
-            self._mini_frame, text="", bg='#C0C0C0', fg='#0000FF',
-            font=('MS Sans Serif', 10, 'bold'))
-        self._mini_break_label.grid(row=1, column=1, padx=2, pady=2, sticky='w')
-
-        self._mini_project_combo = Combobox(
-            self._mini_frame, font=('MS Sans Serif', 9), width=7)
-        self._mini_project_combo.grid(row=1, column=2, columnspan=2, padx=4, pady=2, sticky='ew')
-
-        self._mini_frame.grid_columnconfigure(0, weight=1)
-        self._mini_frame.grid_columnconfigure(1, weight=0)
-        self._mini_frame.grid_columnconfigure(2, weight=1)
-        self._mini_frame.grid_columnconfigure(3, weight=1)
-
-        # Enable dragging on mini mode (always bound, Toplevel handles visibility)
-        self._mini_frame.bind("<Button-1>", self._drag_start)
-        self._mini_frame.bind("<B1-Motion>", self._drag_move)
-        self._mini_timer_label.bind("<Button-1>", self._drag_start)
-        self._mini_timer_label.bind("<B1-Motion>", self._drag_move)
+        # Mini mode widgets are created lazily on first toggle.
+        self._mini_toplevel = None
+        self._mini_frame = None
+        self._mini_start_btn = None
+        self._mini_pause_btn = None
+        self._mini_stop_btn = None
+        self._mini_restore_btn = None
+        self._mini_timer_label = None
+        self._mini_break_label = None
+        self._mini_project_combo = None
 
         # Reflect dashboard status on the button
         self.update_stats_button_state()
@@ -438,6 +420,9 @@ class App:
                 create_events_table(self.db_conn)
                 create_break_events_table(self.db_conn)
                 close_stale_breaks(self.db_conn)
+                stale_count = close_stale_sessions(self.db_conn)
+                if stale_count:
+                    logger.info("Bereinigt: %d verwaiste Session(s) geschlossen.", stale_count)
                 default_user = self.config.get("default_user", "Hans")
                 check_user(self.db_conn, default_user)
                 migrate_legacy_user_tables(self.db_conn)
@@ -498,8 +483,8 @@ class App:
         # Re-check: manual break may have closed the session already.
         active = [k for k, v in self.session_active.items() if v]
         if active:
-            for (n, p) in active:
-                date = datetime.today().strftime('%d-%m-%Y')
+            for n, p in active:
+                date = datetime.today().strftime("%d-%m-%Y")
                 log_stop(project=p, name=n, date=date, conn=self.db_conn)
 
         self._closing = True
@@ -509,9 +494,112 @@ class App:
                 logger.info("Datenbankverbindung geschlossen.")
             except Exception as e:
                 logger.error("Fehler beim Schlie\u00dfen der DB: %s", e)
-        with contextlib.suppress(Exception):
-            self._mini_toplevel.destroy()
+        if self._mini_toplevel:
+            with contextlib.suppress(Exception):
+                self._mini_toplevel.destroy()
         self.master.destroy()
+
+    def _ensure_mini_toplevel(self):
+        """Create the mini-mode Toplevel and its widgets on first use."""
+        if self._mini_toplevel is not None:
+            return
+
+        self._mini_toplevel = Toplevel(self.master)
+        self._mini_toplevel.title("WoTITI Mini")
+        self._mini_toplevel.overrideredirect(True)
+        self._mini_toplevel.attributes("-topmost", True)
+        self._mini_toplevel.geometry(f"{self._mini_width}x{self._mini_height}")
+        self._mini_toplevel.configure(bg="#C0C0C0")
+        self._mini_toplevel.resizable(False, False)
+        self._mini_toplevel.protocol("WM_DELETE_WINDOW", self._exit_mini_mode)
+        self._mini_toplevel.withdraw()
+
+        self._mini_toplevel.grid_rowconfigure(0, weight=1)
+        self._mini_toplevel.grid_columnconfigure(0, weight=1)
+
+        self._mini_frame = Frame(self._mini_toplevel, bg="#C0C0C0")
+        self._mini_frame.grid(padx=4, pady=4, sticky="nsew")
+        mini_btn = {"bg": "#D4D0C8", "fg": "black", "font": ("MS Sans Serif", 9), "relief": "raised", "borderwidth": 2}
+
+        self._mini_start_btn = Button(
+            self._mini_frame,
+            text="\u25b6",
+            command=self.start_session,
+            width=3,
+            height=1,
+            bg="#D4D0C8",
+            fg="green",
+            font=("MS Sans Serif", 11, "bold"),
+            relief="raised",
+            borderwidth=2,
+        )
+        self._mini_start_btn.grid(row=0, column=0, padx=2, pady=2, sticky="ew")
+
+        self._mini_pause_btn = Button(
+            self._mini_frame,
+            text="\u25ae\u25ae",
+            command=self.pause_session,
+            width=3,
+            height=1,
+            bg="#A9A9A9",
+            fg="#B8860B",
+            font=("MS Sans Serif", 11, "bold"),
+            relief="raised",
+            borderwidth=2,
+            state="disabled",
+        )
+        self._mini_pause_btn.grid(row=0, column=1, padx=2, pady=2, sticky="ew")
+
+        self._mini_stop_btn = Button(
+            self._mini_frame,
+            text="\u25a0",
+            command=self.stop_session,
+            width=2,
+            height=1,
+            bg="#A9A9A9",
+            fg="red",
+            font=("MS Sans Serif", 11, "bold"),
+            relief="raised",
+            borderwidth=2,
+            state="disabled",
+        )
+        self._mini_stop_btn.grid(row=0, column=2, padx=2, pady=2, sticky="ew")
+
+        self._mini_restore_btn = Button(
+            self._mini_frame, text="\u25b3", command=self._toggle_mini_mode, width=2, **mini_btn
+        )
+        self._mini_restore_btn.grid(row=0, column=3, padx=2, pady=2, sticky="ew")
+
+        self._mini_timer_label = Label(
+            self._mini_frame, text="00:00:00", bg="#C0C0C0", fg="red", font=("MS Sans Serif", 18, "bold")
+        )
+        self._mini_timer_label.grid(row=1, column=0, padx=4, pady=2, sticky="w")
+
+        self._mini_break_label = Label(
+            self._mini_frame, text="", bg="#C0C0C0", fg="#0000FF", font=("MS Sans Serif", 10, "bold")
+        )
+        self._mini_break_label.grid(row=1, column=1, padx=2, pady=2, sticky="w")
+
+        self._mini_project_combo = Combobox(self._mini_frame, font=("MS Sans Serif", 9), width=7)
+        self._mini_project_combo.grid(row=1, column=2, columnspan=2, padx=4, pady=2, sticky="ew")
+
+        self._mini_frame.grid_columnconfigure(0, weight=1)
+        self._mini_frame.grid_columnconfigure(1, weight=0)
+        self._mini_frame.grid_columnconfigure(2, weight=1)
+        self._mini_frame.grid_columnconfigure(3, weight=1)
+
+        self._mini_frame.bind("<Button-1>", self._drag_start)
+        self._mini_frame.bind("<B1-Motion>", self._drag_move)
+        self._mini_timer_label.bind("<Button-1>", self._drag_start)
+        self._mini_timer_label.bind("<B1-Motion>", self._drag_move)
+
+    def _clamp_mini_position(self, x: int, y: int) -> tuple[int, int]:
+        """Ensure mini window coordinates are within the visible screen area."""
+        screen_w = self.master.winfo_screenwidth()
+        screen_h = self.master.winfo_screenheight()
+        x = max(0, min(x, screen_w - self._mini_width))
+        y = max(0, min(y, screen_h - self._mini_height))
+        return x, y
 
     def _toggle_mini_mode(self):
         """Toggle between full and compact mini mode."""
@@ -522,30 +610,32 @@ class App:
 
     def _enter_mini_mode(self):
         """Switch to compact always-on-top Toplevel; hide main window."""
+        self._ensure_mini_toplevel()
         self._mini_mode = True
         self._full_geometry = self.master.geometry()
 
         # Sync project values from main to mini
-        self._mini_project_combo['values'] = self.project_entry['values']
+        self._mini_project_combo["values"] = self.project_entry["values"]
         self._mini_project_combo.set(self.project_entry.get().strip())
-        self._mini_timer_label.configure(text=self.timer_time_label.cget('text'))
-        self._mini_break_label.configure(text=self.break_time_label.cget('text'))
+        self._mini_timer_label.configure(text=self.timer_time_label.cget("text"))
+        self._mini_break_label.configure(text=self.break_time_label.cget("text"))
 
         # Lock project combo during active session or break to prevent orphaned sessions.
         if any(self.session_active.values()) or self._break_active:
-            self._mini_project_combo.config(state='disabled')
+            self._mini_project_combo.config(state="disabled")
         else:
-            self._mini_project_combo.config(state='readonly')
+            self._mini_project_combo.config(state="readonly")
 
-        # Show mini Toplevel first, then hide main window. This avoids a
-        # transient "no window visible" state on some window managers.
+        # Determine position, clamped to visible screen bounds.
         self.master.update_idletasks()
-        if re.match(r"^\+\d+\+\d+$", self._mini_last_position):
-            self._mini_toplevel.geometry(f"{self._mini_width}x{self._mini_height}{self._mini_last_position}")
+        m = re.match(r"^\+(\d+)\+(\d+)$", self._mini_last_position)
+        if m:
+            x, y = int(m.group(1)), int(m.group(2))
         else:
             x = self.master.winfo_x()
             y = self.master.winfo_y()
-            self._mini_toplevel.geometry(f"{self._mini_width}x{self._mini_height}+{x}+{y}")
+        x, y = self._clamp_mini_position(x, y)
+        self._mini_toplevel.geometry(f"{self._mini_width}x{self._mini_height}+{x}+{y}")
         self._mini_toplevel.deiconify()
         self._mini_toplevel.lift()
         with contextlib.suppress(Exception):
@@ -593,11 +683,12 @@ class App:
         projects = get_all_projects(self.db_conn)
         if users != self._cached_users:
             self._cached_users = users
-            self.name_entry['values'] = users
+            self.name_entry["values"] = users
         if projects != self._cached_projects:
             self._cached_projects = projects
-            self.project_entry['values'] = projects
-            self._mini_project_combo['values'] = projects
+            self.project_entry["values"] = projects
+            if self._mini_toplevel:
+                self._mini_project_combo["values"] = projects
         self._combobox_dirty = False
 
     # ----- User Management Window -----
@@ -605,7 +696,7 @@ class App:
         """Open a separate user management window."""
         win = Toplevel(self.master)
         win.title("Benutzerverwaltung")
-        win.configure(bg='#C0C0C0')
+        win.configure(bg="#C0C0C0")
         w, h = 400, 350
         x = self.master.winfo_x() + (self.master.winfo_width() - w) // 2
         y = self.master.winfo_y() + (self.master.winfo_height() - h) // 2
@@ -614,19 +705,25 @@ class App:
         win.wait_visibility()
         win.grab_set()
 
-        label_config = {'bg': '#C0C0C0', 'fg': 'black', 'font': ('MS Sans Serif', 10)}
-        button_config = {'bg': '#D4D0C8', 'fg': 'black', 'font': ('MS Sans Serif', 10), 'relief': 'raised', 'borderwidth': 2}
+        label_config = {"bg": "#C0C0C0", "fg": "black", "font": ("MS Sans Serif", 10)}
+        button_config = {
+            "bg": "#D4D0C8",
+            "fg": "black",
+            "font": ("MS Sans Serif", 10),
+            "relief": "raised",
+            "borderwidth": 2,
+        }
 
         Label(win, text="Benutzer in der Datenbank:", **label_config).pack(pady=(10, 5), padx=10, anchor="w")
 
-        list_frame = Frame(win, bg='#C0C0C0')
-        list_frame.pack(fill='both', expand=True, padx=10, pady=5)
+        list_frame = Frame(win, bg="#C0C0C0")
+        list_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
-        user_listbox = Listbox(list_frame, bg='#FFFFFF', fg='black', font=('MS Sans Serif', 10))
-        user_listbox.pack(side='left', fill='both', expand=True)
-        sb = Scrollbar(list_frame, orient=VERTICAL, command=user_listbox.yview, bg='#C0C0C0')
-        sb.pack(side='right', fill='y')
-        user_listbox['yscrollcommand'] = sb.set
+        user_listbox = Listbox(list_frame, bg="#FFFFFF", fg="black", font=("MS Sans Serif", 10))
+        user_listbox.pack(side="left", fill="both", expand=True)
+        sb = Scrollbar(list_frame, orient=VERTICAL, command=user_listbox.yview, bg="#C0C0C0")
+        sb.pack(side="right", fill="y")
+        user_listbox["yscrollcommand"] = sb.set
 
         def refresh_list():
             user_listbox.delete(0, END)
@@ -636,19 +733,22 @@ class App:
         refresh_list()
 
         # New user frame
-        new_frame = Frame(win, bg='#C0C0C0')
-        new_frame.pack(fill='x', padx=10, pady=5)
-        Label(new_frame, text="Neuer Benutzer:", **label_config).pack(side='left', padx=(0, 5))
-        new_entry = Entry(new_frame, bg='#FFFFFF', fg='black', font=('MS Sans Serif', 10))
-        new_entry.pack(side='left', fill='x', expand=True, padx=(0, 5))
+        new_frame = Frame(win, bg="#C0C0C0")
+        new_frame.pack(fill="x", padx=10, pady=5)
+        Label(new_frame, text="Neuer Benutzer:", **label_config).pack(side="left", padx=(0, 5))
+        new_entry = Entry(new_frame, bg="#FFFFFF", fg="black", font=("MS Sans Serif", 10))
+        new_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
 
         def add_user():
             name = new_entry.get().strip()
             if not name:
                 return
-            if not re.match(r'^[A-Za-z0-9_\-\s]+$', name):
-
-                messagebox.showwarning("Ung\u00fcltiger Name", "Name darf nur Buchstaben, Zahlen, Leerzeichen, - und _ enthalten.", parent=win)
+            if not re.match(r"^[A-Za-z0-9_\-\s]+$", name):
+                messagebox.showwarning(
+                    "Ung\u00fcltiger Name",
+                    "Name darf nur Buchstaben, Zahlen, Leerzeichen, - und _ enthalten.",
+                    parent=win,
+                )
                 return
             check_user(self.db_conn, name)
             new_entry.delete(0, END)
@@ -656,11 +756,11 @@ class App:
             self._combobox_dirty = True
             self._refresh_comboboxes()
 
-        Button(new_frame, text="Hinzuf\u00fcgen", command=add_user, **button_config).pack(side='left')
+        Button(new_frame, text="Hinzuf\u00fcgen", command=add_user, **button_config).pack(side="left")
 
         # Select user button
-        btn_frame = Frame(win, bg='#C0C0C0')
-        btn_frame.pack(fill='x', padx=10, pady=(5, 10))
+        btn_frame = Frame(win, bg="#C0C0C0")
+        btn_frame.pack(fill="x", padx=10, pady=(5, 10))
 
         def select_user():
             sel = user_listbox.curselection()
@@ -670,8 +770,11 @@ class App:
                 self.update_db_content()
                 win.destroy()
 
-        Button(btn_frame, text="Benutzer ausw\u00e4hlen", command=select_user, **button_config).pack(side='left', padx=(0, 5))
-        Button(btn_frame, text="Schlie\u00dfen", command=win.destroy, **button_config).pack(side='right')
+        Button(btn_frame, text="Benutzer ausw\u00e4hlen", command=select_user, **button_config).pack(
+            side="left", padx=(0, 5)
+        )
+        Button(btn_frame, text="Schlie\u00dfen", command=win.destroy, **button_config).pack(side="right")
+
     # ----- Settings Window -----
     def open_settings(self):
         """Open the settings/configuration window."""
@@ -687,7 +790,7 @@ class App:
 
         win = Toplevel(self.master)
         win.title("Einstellungen")
-        win.configure(bg='#C0C0C0')
+        win.configure(bg="#C0C0C0")
         w, h = 560, 780
         x = self.master.winfo_x() + (self.master.winfo_width() - w) // 2
         y = self.master.winfo_y() + (self.master.winfo_height() - h) // 2
@@ -696,21 +799,22 @@ class App:
         win.wait_visibility()
         win.grab_set()
 
-        lbl = {'bg': '#C0C0C0', 'fg': 'black', 'font': ('MS Sans Serif', 10)}
-        btn = {'bg': '#D4D0C8', 'fg': 'black', 'font': ('MS Sans Serif', 10), 'relief': 'raised', 'borderwidth': 2}
+        lbl = {"bg": "#C0C0C0", "fg": "black", "font": ("MS Sans Serif", 10)}
+        btn = {"bg": "#D4D0C8", "fg": "black", "font": ("MS Sans Serif", 10), "relief": "raised", "borderwidth": 2}
 
         # ── Datenbank ──
-        db_frame = LabelFrame(win, text="Datenbank", bg='#C0C0C0', fg='black',
-                              font=('MS Sans Serif', 10, 'bold'), padx=8, pady=8)
-        db_frame.pack(fill='x', padx=10, pady=(10, 5))
+        db_frame = LabelFrame(
+            win, text="Datenbank", bg="#C0C0C0", fg="black", font=("MS Sans Serif", 10, "bold"), padx=8, pady=8
+        )
+        db_frame.pack(fill="x", padx=10, pady=(10, 5))
 
-        Label(db_frame, text="Aktive Datenbank:", **lbl).grid(row=0, column=0, sticky='w', pady=2)
-        db_var = Combobox(db_frame, font=('MS Sans Serif', 10), width=35)
-        db_var.grid(row=0, column=1, padx=5, pady=2, sticky='ew')
+        Label(db_frame, text="Aktive Datenbank:", **lbl).grid(row=0, column=0, sticky="w", pady=2)
+        db_var = Combobox(db_frame, font=("MS Sans Serif", 10), width=35)
+        db_var.grid(row=0, column=1, padx=5, pady=2, sticky="ew")
 
         def _refresh_db_list():
             dbs = sorted(glob.glob(os.path.join(PATH_TO_DATA, "**", "*.db"), recursive=True))
-            db_var['values'] = dbs
+            db_var["values"] = dbs
             if self._db_path in dbs:
                 db_var.set(self._db_path)
             elif dbs:
@@ -718,11 +822,12 @@ class App:
 
         _refresh_db_list()
 
-        btn_row = Frame(db_frame, bg='#C0C0C0')
-        btn_row.grid(row=1, column=0, columnspan=2, pady=(5, 0), sticky='ew')
+        btn_row = Frame(db_frame, bg="#C0C0C0")
+        btn_row.grid(row=1, column=0, columnspan=2, pady=(5, 0), sticky="ew")
 
         def _browse_db():
             from tkinter import filedialog
+
             path = filedialog.askopenfilename(
                 initialdir=PATH_TO_DATA,
                 filetypes=[("SQLite Datenbank", "*.db"), ("Alle Dateien", "*.*")],
@@ -733,6 +838,7 @@ class App:
 
         def _new_db():
             from tkinter import filedialog
+
             path = filedialog.asksaveasfilename(
                 initialdir=PATH_TO_DATA,
                 defaultextension=".db",
@@ -760,11 +866,17 @@ class App:
                 messagebox.showwarning("Keine Auswahl", "Bitte eine vorhandene Datenbank auswählen.", parent=win)
                 return
             if os.path.abspath(target) == os.path.abspath(self._db_path):
-                messagebox.showwarning("Nicht möglich", "Die aktive Datenbank kann nicht gelöscht werden.\nBitte zuerst eine andere Datenbank auswählen.", parent=win)
+                messagebox.showwarning(
+                    "Nicht möglich",
+                    "Die aktive Datenbank kann nicht gelöscht werden.\nBitte zuerst eine andere Datenbank auswählen.",
+                    parent=win,
+                )
                 return
-            if messagebox.askyesno("Datenbank löschen",
-                                   f"Datenbank wirklich löschen?\n\n{target}\n\nDieser Vorgang kann nicht rückgängig gemacht werden!",
-                                   parent=win):
+            if messagebox.askyesno(
+                "Datenbank löschen",
+                f"Datenbank wirklich löschen?\n\n{target}\n\nDieser Vorgang kann nicht rückgängig gemacht werden!",
+                parent=win,
+            ):
                 try:
                     os.remove(target)
                     _refresh_db_list()
@@ -773,55 +885,68 @@ class App:
                 except OSError as e:
                     messagebox.showerror("Fehler", f"Löschen fehlgeschlagen:\n{e}", parent=win)
 
-        Button(btn_row, text="Durchsuchen...", command=_browse_db, **btn).pack(side='left', padx=(0, 5))
-        Button(btn_row, text="Neue DB", command=_new_db, **btn).pack(side='left', padx=(0, 5))
-        Button(btn_row, text="DB löschen", command=_delete_db, fg='#B00020', **{k: v for k, v in btn.items() if k != 'fg'}).pack(side='left')
+        Button(btn_row, text="Durchsuchen...", command=_browse_db, **btn).pack(side="left", padx=(0, 5))
+        Button(btn_row, text="Neue DB", command=_new_db, **btn).pack(side="left", padx=(0, 5))
+        Button(
+            btn_row, text="DB löschen", command=_delete_db, fg="#B00020", **{k: v for k, v in btn.items() if k != "fg"}
+        ).pack(side="left")
 
         db_frame.grid_columnconfigure(1, weight=1)
 
         # ── Benutzer ──
-        user_frame = LabelFrame(win, text="Benutzer & Projekt", bg='#C0C0C0', fg='black',
-                                font=('MS Sans Serif', 10, 'bold'), padx=8, pady=8)
-        user_frame.pack(fill='x', padx=10, pady=5)
+        user_frame = LabelFrame(
+            win, text="Benutzer & Projekt", bg="#C0C0C0", fg="black", font=("MS Sans Serif", 10, "bold"), padx=8, pady=8
+        )
+        user_frame.pack(fill="x", padx=10, pady=5)
 
-        Label(user_frame, text="Standard-Benutzer:", **lbl).grid(row=0, column=0, sticky='w', pady=2)
-        default_user_var = Combobox(user_frame, font=('MS Sans Serif', 10), width=20)
-        default_user_var.grid(row=0, column=1, padx=5, pady=2, sticky='ew')
+        Label(user_frame, text="Standard-Benutzer:", **lbl).grid(row=0, column=0, sticky="w", pady=2)
+        default_user_var = Combobox(user_frame, font=("MS Sans Serif", 10), width=20)
+        default_user_var.grid(row=0, column=1, padx=5, pady=2, sticky="ew")
         if self.db_conn:
-            default_user_var['values'] = get_all_users(self.db_conn)
+            default_user_var["values"] = get_all_users(self.db_conn)
         default_user_var.set(self.config.get("default_user", "Hans"))
 
-        Label(user_frame, text="Standard-Projekt:", **lbl).grid(row=1, column=0, sticky='w', pady=2)
-        default_proj_var = Combobox(user_frame, font=('MS Sans Serif', 10), width=20)
-        default_proj_var.grid(row=1, column=1, padx=5, pady=2, sticky='ew')
+        Label(user_frame, text="Standard-Projekt:", **lbl).grid(row=1, column=0, sticky="w", pady=2)
+        default_proj_var = Combobox(user_frame, font=("MS Sans Serif", 10), width=20)
+        default_proj_var.grid(row=1, column=1, padx=5, pady=2, sticky="ew")
         if self.db_conn:
-            default_proj_var['values'] = get_all_projects(self.db_conn)
+            default_proj_var["values"] = get_all_projects(self.db_conn)
         default_proj_var.set(self.config.get("default_project", "1"))
 
         user_frame.grid_columnconfigure(1, weight=1)
 
         # ── Dashboard ──
-        dash_frame = LabelFrame(win, text="Auswertung (Dashboard)", bg='#C0C0C0', fg='black',
-                                font=('MS Sans Serif', 10, 'bold'), padx=8, pady=8)
-        dash_frame.pack(fill='x', padx=10, pady=5)
+        dash_frame = LabelFrame(
+            win,
+            text="Auswertung (Dashboard)",
+            bg="#C0C0C0",
+            fg="black",
+            font=("MS Sans Serif", 10, "bold"),
+            padx=8,
+            pady=8,
+        )
+        dash_frame.pack(fill="x", padx=10, pady=5)
 
-        Label(dash_frame, text="Port:", **lbl).grid(row=0, column=0, sticky='w', pady=2)
-        port_var = Spinbox(dash_frame, from_=1024, to=65535, width=8,
-                           font=('MS Sans Serif', 10), bg='#FFFFFF', fg='black')
-        port_var.grid(row=0, column=1, padx=5, pady=2, sticky='w')
+        Label(dash_frame, text="Port:", **lbl).grid(row=0, column=0, sticky="w", pady=2)
+        port_var = Spinbox(
+            dash_frame, from_=1024, to=65535, width=8, font=("MS Sans Serif", 10), bg="#FFFFFF", fg="black"
+        )
+        port_var.grid(row=0, column=1, padx=5, pady=2, sticky="w")
         port_var.delete(0, END)
         port_var.insert(0, str(self.config.get("dashboard_port", 8052)))
 
-        Label(dash_frame, text="Theme:", **lbl).grid(row=1, column=0, sticky='w', pady=2)
-        theme_var = Combobox(dash_frame, font=('MS Sans Serif', 10), width=15,
-                             values=["Modern", "Synthwave"], state='readonly')
-        theme_var.grid(row=1, column=1, padx=5, pady=2, sticky='w')
+        Label(dash_frame, text="Theme:", **lbl).grid(row=1, column=0, sticky="w", pady=2)
+        theme_var = Combobox(
+            dash_frame, font=("MS Sans Serif", 10), width=15, values=["Modern", "Synthwave"], state="readonly"
+        )
+        theme_var.grid(row=1, column=1, padx=5, pady=2, sticky="w")
         theme_var.set(self.config.get("theme", "Modern"))
 
         # ── Pomodoro ──
-        pomodoro_frame = LabelFrame(win, text="Pomodoro & Pause", bg='#C0C0C0', fg='black',
-                        font=('MS Sans Serif', 10, 'bold'), padx=8, pady=8)
-        pomodoro_frame.pack(fill='x', padx=10, pady=5)
+        pomodoro_frame = LabelFrame(
+            win, text="Pomodoro & Pause", bg="#C0C0C0", fg="black", font=("MS Sans Serif", 10, "bold"), padx=8, pady=8
+        )
+        pomodoro_frame.pack(fill="x", padx=10, pady=5)
 
         pomodoro_enabled_var = BooleanVar(value=self.pomodoro_enabled)
         pomodoro_auto_var = BooleanVar(value=self.pomodoro_auto_break)
@@ -831,38 +956,42 @@ class App:
             pomodoro_frame,
             text="Pomodoro aktiv",
             variable=pomodoro_enabled_var,
-            bg='#C0C0C0',
-            fg='black',
-            selectcolor='#C0C0C0',
-            activebackground='#C0C0C0',
-            font=('MS Sans Serif', 10),
-        ).grid(row=0, column=0, columnspan=2, sticky='w', pady=2)
+            bg="#C0C0C0",
+            fg="black",
+            selectcolor="#C0C0C0",
+            activebackground="#C0C0C0",
+            font=("MS Sans Serif", 10),
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=2)
 
-        Label(pomodoro_frame, text="Arbeitszeit (min):", **lbl).grid(row=1, column=0, sticky='w', pady=2)
-        pomodoro_work_var = Spinbox(pomodoro_frame, from_=1, to=120, width=8,
-                        font=('MS Sans Serif', 10), bg='#FFFFFF', fg='black')
-        pomodoro_work_var.grid(row=1, column=1, padx=5, pady=2, sticky='w')
+        Label(pomodoro_frame, text="Arbeitszeit (min):", **lbl).grid(row=1, column=0, sticky="w", pady=2)
+        pomodoro_work_var = Spinbox(
+            pomodoro_frame, from_=1, to=120, width=8, font=("MS Sans Serif", 10), bg="#FFFFFF", fg="black"
+        )
+        pomodoro_work_var.grid(row=1, column=1, padx=5, pady=2, sticky="w")
         pomodoro_work_var.delete(0, END)
         pomodoro_work_var.insert(0, str(self.pomodoro_work_minutes))
 
-        Label(pomodoro_frame, text="Kurze Pause (min):", **lbl).grid(row=2, column=0, sticky='w', pady=2)
-        pomodoro_break_var = Spinbox(pomodoro_frame, from_=1, to=60, width=8,
-                         font=('MS Sans Serif', 10), bg='#FFFFFF', fg='black')
-        pomodoro_break_var.grid(row=2, column=1, padx=5, pady=2, sticky='w')
+        Label(pomodoro_frame, text="Kurze Pause (min):", **lbl).grid(row=2, column=0, sticky="w", pady=2)
+        pomodoro_break_var = Spinbox(
+            pomodoro_frame, from_=1, to=60, width=8, font=("MS Sans Serif", 10), bg="#FFFFFF", fg="black"
+        )
+        pomodoro_break_var.grid(row=2, column=1, padx=5, pady=2, sticky="w")
         pomodoro_break_var.delete(0, END)
         pomodoro_break_var.insert(0, str(self.pomodoro_break_minutes))
 
-        Label(pomodoro_frame, text="Lange Pause (min):", **lbl).grid(row=3, column=0, sticky='w', pady=2)
-        pomodoro_long_break_var = Spinbox(pomodoro_frame, from_=1, to=120, width=8,
-                          font=('MS Sans Serif', 10), bg='#FFFFFF', fg='black')
-        pomodoro_long_break_var.grid(row=3, column=1, padx=5, pady=2, sticky='w')
+        Label(pomodoro_frame, text="Lange Pause (min):", **lbl).grid(row=3, column=0, sticky="w", pady=2)
+        pomodoro_long_break_var = Spinbox(
+            pomodoro_frame, from_=1, to=120, width=8, font=("MS Sans Serif", 10), bg="#FFFFFF", fg="black"
+        )
+        pomodoro_long_break_var.grid(row=3, column=1, padx=5, pady=2, sticky="w")
         pomodoro_long_break_var.delete(0, END)
         pomodoro_long_break_var.insert(0, str(self.pomodoro_long_break_minutes))
 
-        Label(pomodoro_frame, text="Lange Pause alle N:", **lbl).grid(row=4, column=0, sticky='w', pady=2)
-        pomodoro_every_var = Spinbox(pomodoro_frame, from_=2, to=12, width=8,
-                         font=('MS Sans Serif', 10), bg='#FFFFFF', fg='black')
-        pomodoro_every_var.grid(row=4, column=1, padx=5, pady=2, sticky='w')
+        Label(pomodoro_frame, text="Lange Pause alle N:", **lbl).grid(row=4, column=0, sticky="w", pady=2)
+        pomodoro_every_var = Spinbox(
+            pomodoro_frame, from_=2, to=12, width=8, font=("MS Sans Serif", 10), bg="#FFFFFF", fg="black"
+        )
+        pomodoro_every_var.grid(row=4, column=1, padx=5, pady=2, sticky="w")
         pomodoro_every_var.delete(0, END)
         pomodoro_every_var.insert(0, str(self.pomodoro_long_break_every))
 
@@ -870,31 +999,32 @@ class App:
             pomodoro_frame,
             text="Auto-Pause",
             variable=pomodoro_auto_var,
-            bg='#C0C0C0',
-            fg='black',
-            selectcolor='#C0C0C0',
-            activebackground='#C0C0C0',
-            font=('MS Sans Serif', 10),
-        ).grid(row=0, column=2, columnspan=2, sticky='w', pady=2)
+            bg="#C0C0C0",
+            fg="black",
+            selectcolor="#C0C0C0",
+            activebackground="#C0C0C0",
+            font=("MS Sans Serif", 10),
+        ).grid(row=0, column=2, columnspan=2, sticky="w", pady=2)
 
         Checkbutton(
             pomodoro_frame,
             text="Sound aktiv",
             variable=pomodoro_sound_enabled_var,
-            bg='#C0C0C0',
-            fg='black',
-            selectcolor='#C0C0C0',
-            activebackground='#C0C0C0',
-            font=('MS Sans Serif', 10),
-        ).grid(row=1, column=2, columnspan=2, sticky='w', pady=2)
+            bg="#C0C0C0",
+            fg="black",
+            selectcolor="#C0C0C0",
+            activebackground="#C0C0C0",
+            font=("MS Sans Serif", 10),
+        ).grid(row=1, column=2, columnspan=2, sticky="w", pady=2)
 
-        Label(pomodoro_frame, text="Sound Datei:", **lbl).grid(row=3, column=2, sticky='w', pady=2)
-        sound_file_entry = Entry(pomodoro_frame, bg='#FFFFFF', fg='black', font=('MS Sans Serif', 10), width=28)
-        sound_file_entry.grid(row=3, column=3, padx=5, pady=2, sticky='ew')
+        Label(pomodoro_frame, text="Sound Datei:", **lbl).grid(row=3, column=2, sticky="w", pady=2)
+        sound_file_entry = Entry(pomodoro_frame, bg="#FFFFFF", fg="black", font=("MS Sans Serif", 10), width=28)
+        sound_file_entry.grid(row=3, column=3, padx=5, pady=2, sticky="ew")
         sound_file_entry.insert(0, self.pomodoro_sound_local_path)
 
         def _browse_sound():
             from tkinter import filedialog
+
             path = filedialog.askopenfilename(
                 initialdir=PATH_TO_SOUNDS,
                 filetypes=[("Audio", "*.wav *.opus *.ogg *.mp3 *.m4a"), ("Alle Dateien", "*.*")],
@@ -902,15 +1032,24 @@ class App:
             )
             if path:
                 try:
-                    rel = os.path.relpath(path, PATH_TO_DATA).replace('\\', '/')
+                    rel = os.path.relpath(path, PATH_TO_DATA).replace("\\", "/")
                 except ValueError:
                     rel = path
                 sound_file_entry.delete(0, END)
                 sound_file_entry.insert(0, rel)
 
-        Button(pomodoro_frame, text="...", command=_browse_sound, width=2,
-               bg='#D4D0C8', fg='black', font=('MS Sans Serif', 8),
-               relief='raised', borderwidth=1, pady=0).grid(row=3, column=4, padx=(2, 0), pady=2)
+        Button(
+            pomodoro_frame,
+            text="...",
+            command=_browse_sound,
+            width=2,
+            bg="#D4D0C8",
+            fg="black",
+            font=("MS Sans Serif", 8),
+            relief="raised",
+            borderwidth=1,
+            pady=0,
+        ).grid(row=3, column=4, padx=(2, 0), pady=2)
 
         def _preview_sound():
             """Play first 7 seconds of the selected sound file."""
@@ -930,13 +1069,17 @@ class App:
                             return
                         exe = which("ffplay") or which("mpv")
                         if exe:
-                            cmd = ([exe, "-nodisp", "-autoexit", "-t", "7", path]
-                                   if "ffplay" in exe
-                                   else [exe, "--no-video", "--end=7", path])
+                            cmd = (
+                                [exe, "-nodisp", "-autoexit", "-t", "7", path]
+                                if "ffplay" in exe
+                                else [exe, "--no-video", "--end=7", path]
+                            )
                             subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                             return
                     elif sys.platform == "darwin" and which("afplay"):
-                        subprocess.Popen(["afplay", "-t", "7", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        subprocess.Popen(
+                            ["afplay", "-t", "7", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                        )
                         return
                     else:
                         for cmd_name in ("paplay", "ffplay", "mpv", "play", "aplay"):
@@ -946,9 +1089,17 @@ class App:
                             if cmd_name == "aplay" and not is_wav:
                                 continue
                             if cmd_name == "ffplay":
-                                subprocess.Popen([exe, "-nodisp", "-autoexit", "-t", "7", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                subprocess.Popen(
+                                    [exe, "-nodisp", "-autoexit", "-t", "7", path],
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL,
+                                )
                             elif cmd_name == "mpv":
-                                subprocess.Popen([exe, "--no-video", "--end=7", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                subprocess.Popen(
+                                    [exe, "--no-video", "--end=7", path],
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL,
+                                )
                             else:
                                 subprocess.Popen([exe, path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                             return
@@ -958,63 +1109,74 @@ class App:
 
             threading.Thread(target=_worker, daemon=True).start()
 
-        Button(pomodoro_frame, text="\u25B6", command=_preview_sound, width=2,
-               bg='#D4D0C8', fg='black', font=('MS Sans Serif', 8),
-               relief='raised', borderwidth=1, pady=0).grid(row=3, column=5, padx=(2, 0), pady=2)
+        Button(
+            pomodoro_frame,
+            text="\u25b6",
+            command=_preview_sound,
+            width=2,
+            bg="#D4D0C8",
+            fg="black",
+            font=("MS Sans Serif", 8),
+            relief="raised",
+            borderwidth=1,
+            pady=0,
+        ).grid(row=3, column=5, padx=(2, 0), pady=2)
 
         pomodoro_frame.grid_columnconfigure(3, weight=1)
 
         # ── Entwickler ──
-        dev_frame = LabelFrame(win, text="Entwickler", bg='#C0C0C0', fg='black',
-                               font=('MS Sans Serif', 10, 'bold'), padx=8, pady=8)
-        dev_frame.pack(fill='both', expand=True, padx=10, pady=5)
+        dev_frame = LabelFrame(
+            win, text="Entwickler", bg="#C0C0C0", fg="black", font=("MS Sans Serif", 10, "bold"), padx=8, pady=8
+        )
+        dev_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
-        log_text = Text(dev_frame, wrap='word', state='disabled', height=8,
-                        bg='black', fg='#00ff00', font=('Courier', 9))
+        log_text = Text(
+            dev_frame, wrap="word", state="disabled", height=8, bg="black", fg="#00ff00", font=("Courier", 9)
+        )
         log_text.grid(row=0, column=0, sticky="nsew")
-        log_scroll = Scrollbar(dev_frame, orient='vertical', command=log_text.yview,
-                               bg='#C0C0C0', width=14)
+        log_scroll = Scrollbar(dev_frame, orient="vertical", command=log_text.yview, bg="#C0C0C0", width=14)
         log_scroll.grid(row=0, column=1, sticky="ns")
-        log_text['yscrollcommand'] = log_scroll.set
+        log_text["yscrollcommand"] = log_scroll.set
         dev_frame.grid_rowconfigure(0, weight=1)
         dev_frame.grid_columnconfigure(0, weight=1)
 
         log_path = os.path.join(PATH_TO_DATA, "wotiti.log")
 
         def _load_log():
-            log_text.configure(state='normal')
-            log_text.delete('1.0', END)
+            log_text.configure(state="normal")
+            log_text.delete("1.0", END)
             if os.path.isfile(log_path):
                 try:
-                    with open(log_path, encoding='utf-8', errors='replace') as f:
+                    with open(log_path, encoding="utf-8", errors="replace") as f:
                         content = f.read()
                     log_text.insert(END, content if content else "(Logdatei ist leer)")
                 except Exception as e:
                     log_text.insert(END, f"Fehler beim Lesen: {e}")
             else:
                 log_text.insert(END, "(Keine Logdatei vorhanden)")
-            log_text.configure(state='disabled')
+            log_text.configure(state="disabled")
             log_text.see(END)
 
-        log_btn_frame = Frame(dev_frame, bg='#C0C0C0')
-        log_btn_frame.grid(row=1, column=0, columnspan=2, sticky='ew', pady=(4, 0))
+        log_btn_frame = Frame(dev_frame, bg="#C0C0C0")
+        log_btn_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0))
 
         def _clear_log():
             if os.path.isfile(log_path):
-                with open(log_path, 'w', encoding='utf-8'):
+                with open(log_path, "w", encoding="utf-8"):
                     pass
             _load_log()
 
-        Button(log_btn_frame, text="Aktualisieren", command=_load_log, **btn).pack(side='left')
-        Button(log_btn_frame, text="Log löschen", command=_clear_log, **btn).pack(side='left', padx=(8, 0))
-        Button(log_btn_frame, text="Copy", command=lambda: self._copy_text_widget(log_text),
-               **btn).pack(side='left', padx=(8, 0))
+        Button(log_btn_frame, text="Aktualisieren", command=_load_log, **btn).pack(side="left")
+        Button(log_btn_frame, text="Log löschen", command=_clear_log, **btn).pack(side="left", padx=(8, 0))
+        Button(log_btn_frame, text="Copy", command=lambda: self._copy_text_widget(log_text), **btn).pack(
+            side="left", padx=(8, 0)
+        )
 
         _load_log()
 
         # ── Speichern / Abbrechen ──
-        action_frame = Frame(win, bg='#C0C0C0')
-        action_frame.pack(fill='x', padx=10, pady=(10, 10))
+        action_frame = Frame(win, bg="#C0C0C0")
+        action_frame.pack(fill="x", padx=10, pady=(10, 10))
 
         def _save():
             new_db = db_var.get().strip()
@@ -1035,10 +1197,10 @@ class App:
                     return
 
             raw_sound_path = sound_file_entry.get().strip() or "sounds/StartupSound.wav"
-            sound_path = raw_sound_path.replace('\\', '/')
+            sound_path = raw_sound_path.replace("\\", "/")
             if os.path.isabs(sound_path):
                 try:
-                    sound_path = os.path.relpath(sound_path, PATH_TO_DATA).replace('\\', '/')
+                    sound_path = os.path.relpath(sound_path, PATH_TO_DATA).replace("\\", "/")
                 except ValueError:
                     messagebox.showwarning(
                         "Ungültiger Sound-Pfad",
@@ -1064,9 +1226,12 @@ class App:
                 "pomodoro_sound_local_path": sound_path,
             }
             save_config(new_config)
-            logger.info("Einstellungen gespeichert: theme=%s, port=%s, db=%s",
-                        new_config["theme"], new_config["dashboard_port"],
-                        new_config["database_path"])
+            logger.info(
+                "Einstellungen gespeichert: theme=%s, port=%s, db=%s",
+                new_config["theme"],
+                new_config["dashboard_port"],
+                new_config["database_path"],
+            )
             self.config = new_config
             self.pomodoro_enabled = bool(new_config.get("pomodoro_enabled", False))
             self.pomodoro_work_minutes = int(new_config.get("pomodoro_work_minutes", 25))
@@ -1075,7 +1240,9 @@ class App:
             self.pomodoro_long_break_every = int(new_config.get("pomodoro_long_break_every", 4))
             self.pomodoro_auto_break = bool(new_config.get("pomodoro_auto_break", True))
             self.pomodoro_sound_enabled = bool(new_config.get("pomodoro_sound_enabled", True))
-            self.pomodoro_sound_local_path = str(new_config.get("pomodoro_sound_local_path", "sounds/StartupSound.wav")).strip()
+            self.pomodoro_sound_local_path = str(
+                new_config.get("pomodoro_sound_local_path", "sounds/StartupSound.wav")
+            ).strip()
             self._preload_sound()
 
             # Switch database if changed
@@ -1109,41 +1276,90 @@ class App:
 
             win.destroy()
 
-        Button(action_frame, text="Speichern", command=_save, **btn).pack(side='left', padx=(0, 10))
-        Button(action_frame, text="Abbrechen", command=win.destroy, **btn).pack(side='left')
+        Button(action_frame, text="Speichern", command=_save, **btn).pack(side="left", padx=(0, 10))
+        Button(action_frame, text="Abbrechen", command=win.destroy, **btn).pack(side="left")
+        Button(action_frame, text="Über WoTITI", command=lambda: self._open_about(win), **btn).pack(side="right")
+
+    # ----- About Dialog -----
+    def _open_about(self, parent=None):
+        """Show the About dialog with version and author info."""
+        about = Toplevel(parent or self.master)
+        about.title("Über WoTITI")
+        about.configure(bg="#C0C0C0")
+        w, h = 360, 240
+        ref = parent or self.master
+        x = ref.winfo_x() + (ref.winfo_width() - w) // 2
+        y = ref.winfo_y() + (ref.winfo_height() - h) // 2
+        about.geometry(f"{w}x{h}+{x}+{y}")
+        about.transient(ref)
+        about.wait_visibility()
+        about.grab_set()
+        about.resizable(False, False)
+
+        lbl = {"bg": "#C0C0C0", "fg": "black"}
+
+        Label(about, text="WoTITI", font=("MS Sans Serif", 18, "bold"), **lbl).pack(pady=(15, 2))
+        Label(about, text="Work Time Timer", font=("MS Sans Serif", 10), **lbl).pack()
+        Label(about, text=f"Version {APP_VERSION}", font=("MS Sans Serif", 10), **lbl).pack(pady=(10, 2))
+        Label(about, text=f"Autor: {APP_AUTHOR}", font=("MS Sans Serif", 10), **lbl).pack()
+        Label(about, text=f"Lizenz: {APP_LICENSE}", font=("MS Sans Serif", 9), fg="#555555", bg="#C0C0C0").pack(
+            pady=(2, 0)
+        )
+        Label(
+            about,
+            text="Lokale Zeiterfassung mit Pomodoro und Analysen",
+            font=("MS Sans Serif", 8),
+            fg="#555555",
+            bg="#C0C0C0",
+        ).pack(pady=(8, 0))
+
+        Button(
+            about,
+            text="Schließen",
+            command=about.destroy,
+            bg="#D4D0C8",
+            fg="black",
+            font=("MS Sans Serif", 10),
+            relief="raised",
+            borderwidth=2,
+        ).pack(pady=(15, 10))
+
     # ----- Session management -----
     def _set_button_state_idle(self):
         """Set buttons to idle state: Start enabled, Pause+Stop disabled."""
-        self.start_button.config(state="normal", bg='#D4D0C8', text="\u25B6 Start")
-        self.pause_button.config(state="disabled", bg='#A9A9A9', text="\u25AE\u25AE Pause")
-        self.stop_button.config(state="disabled", bg='#A9A9A9')
-        self._mini_start_btn.config(state="normal", bg='#D4D0C8', text="\u25B6")
-        self._mini_pause_btn.config(state="disabled", bg='#A9A9A9', text="\u25AE\u25AE")
-        self._mini_stop_btn.config(state="disabled", bg='#A9A9A9')
-        self._mini_project_combo.config(state='readonly')
-        self.project_entry.config(state='normal')
+        self.start_button.config(state="normal", bg="#D4D0C8", text="\u25b6 Start")
+        self.pause_button.config(state="disabled", bg="#A9A9A9", text="\u25ae\u25ae Pause")
+        self.stop_button.config(state="disabled", bg="#A9A9A9")
+        if self._mini_toplevel:
+            self._mini_start_btn.config(state="normal", bg="#D4D0C8", text="\u25b6")
+            self._mini_pause_btn.config(state="disabled", bg="#A9A9A9", text="\u25ae\u25ae")
+            self._mini_stop_btn.config(state="disabled", bg="#A9A9A9")
+            self._mini_project_combo.config(state="readonly")
+        self.project_entry.config(state="normal")
 
     def _set_button_state_running(self):
         """Set buttons to running state: Start disabled, Pause+Stop enabled."""
-        self.start_button.config(state="disabled", bg='#A9A9A9', text="\u25B6 Start")
-        self.pause_button.config(state="normal", bg='#D4D0C8', text="\u25AE\u25AE Pause")
-        self.stop_button.config(state="normal", bg='#D4D0C8')
-        self._mini_start_btn.config(state="disabled", bg='#A9A9A9', text="\u25B6")
-        self._mini_pause_btn.config(state="normal", bg='#D4D0C8', text="\u25AE\u25AE")
-        self._mini_stop_btn.config(state="normal", bg='#D4D0C8')
-        self._mini_project_combo.config(state='disabled')
-        self.project_entry.config(state='disabled')
+        self.start_button.config(state="disabled", bg="#A9A9A9", text="\u25b6 Start")
+        self.pause_button.config(state="normal", bg="#D4D0C8", text="\u25ae\u25ae Pause")
+        self.stop_button.config(state="normal", bg="#D4D0C8")
+        if self._mini_toplevel:
+            self._mini_start_btn.config(state="disabled", bg="#A9A9A9", text="\u25b6")
+            self._mini_pause_btn.config(state="normal", bg="#D4D0C8", text="\u25ae\u25ae")
+            self._mini_stop_btn.config(state="normal", bg="#D4D0C8")
+            self._mini_project_combo.config(state="disabled")
+        self.project_entry.config(state="disabled")
 
     def _set_button_state_break(self):
         """Set buttons to break state: Start='Resume', Pause disabled, Stop enabled."""
-        self.start_button.config(state="normal", bg='#D4D0C8', text="\u25B6 Weiter")
-        self.pause_button.config(state="disabled", bg='#A9A9A9', text="\u25AE\u25AE Pause")
-        self.stop_button.config(state="normal", bg='#D4D0C8')
-        self._mini_start_btn.config(state="normal", bg='#D4D0C8', text="\u25B6")
-        self._mini_pause_btn.config(state="disabled", bg='#A9A9A9', text="\u25AE\u25AE")
-        self._mini_stop_btn.config(state="normal", bg='#D4D0C8')
-        self._mini_project_combo.config(state='disabled')
-        self.project_entry.config(state='disabled')
+        self.start_button.config(state="normal", bg="#D4D0C8", text="\u25b6 Weiter")
+        self.pause_button.config(state="disabled", bg="#A9A9A9", text="\u25ae\u25ae Pause")
+        self.stop_button.config(state="normal", bg="#D4D0C8")
+        if self._mini_toplevel:
+            self._mini_start_btn.config(state="normal", bg="#D4D0C8", text="\u25b6")
+            self._mini_pause_btn.config(state="disabled", bg="#A9A9A9", text="\u25ae\u25ae")
+            self._mini_stop_btn.config(state="normal", bg="#D4D0C8")
+            self._mini_project_combo.config(state="disabled")
+        self.project_entry.config(state="disabled")
 
     def start_session(self):
         if self.db_conn:
@@ -1224,16 +1440,14 @@ class App:
     ):
         """Start a break phase and persist it in break_events."""
         if self._break_active or not self.db_conn:
-            logger.debug("_start_break aborted: break_active=%s, db=%s",
-                         self._break_active, bool(self.db_conn))
+            logger.debug("_start_break aborted: break_active=%s, db=%s", self._break_active, bool(self.db_conn))
             return
 
         project = self._get_project_silent()
         name = self._get_name_silent()
         date = self.get_date()
         if not project or not name or not date:
-            logger.warning("_start_break aborted: project=%s, name=%s, date=%s",
-                           project, name, date)
+            logger.warning("_start_break aborted: project=%s, name=%s, date=%s", project, name, date)
             return
 
         # Close stale breaks that may linger from a crashed session.
@@ -1260,7 +1474,11 @@ class App:
         self._last_break_user = name
 
         if self.pomodoro_enabled and break_kind == "manual":
-            remaining = max(1, int(self._pomodoro_work_deadline_ts - time.time())) if self._pomodoro_work_deadline_ts else max(1, self.pomodoro_work_minutes * 60)
+            remaining = (
+                max(1, int(self._pomodoro_work_deadline_ts - time.time()))
+                if self._pomodoro_work_deadline_ts
+                else max(1, self.pomodoro_work_minutes * 60)
+            )
             self._paused_pomodoro_remaining_seconds = remaining
             self._pomodoro_work_deadline_ts = 0.0
 
@@ -1284,15 +1502,16 @@ class App:
         else:
             self.write("Manuelle Pause gestartet.")
 
-    def _finish_break(self, play_sound: bool = True, bring_to_front: bool = True,
-                       auto_resume: bool = True, force_resume: bool = False):
+    def _finish_break(
+        self, play_sound: bool = True, bring_to_front: bool = True, auto_resume: bool = True, force_resume: bool = False
+    ):
         """Finish an active break. Resume if auto_resume or force_resume."""
         if not self._break_active or not self.db_conn:
             return
 
         project = self._last_break_project or self._get_project_silent()
         name = self._last_break_user or self._get_name_silent()
-        date = self.get_date() or datetime.today().strftime('%d-%m-%Y')
+        date = self.get_date() or datetime.today().strftime("%d-%m-%Y")
         if not project or not name:
             return
 
@@ -1302,7 +1521,8 @@ class App:
         self._break_end_ts = 0.0
         self._break_started_ts = 0.0
         self.break_time_label.config(text="--:--")
-        self._mini_break_label.config(text="")
+        if self._mini_toplevel:
+            self._mini_break_label.config(text="")
 
         if play_sound:
             self._play_pause_sound()
@@ -1313,10 +1533,7 @@ class App:
         ended_source = self._current_break_source
         self._current_break_source = ""
         should_resume = force_resume or (
-            auto_resume and (
-                ended_kind == "manual"
-                or (self.pomodoro_auto_break and self.pomodoro_enabled)
-            )
+            auto_resume and (ended_kind == "manual" or (self.pomodoro_auto_break and self.pomodoro_enabled))
         )
 
         if should_resume:
@@ -1359,8 +1576,8 @@ class App:
             else:
                 self.master.deiconify()
                 self.master.lift()
-                self.master.attributes('-topmost', True)
-                self.master.after(250, lambda: self.master.attributes('-topmost', False))
+                self.master.attributes("-topmost", True)
+                self.master.after(250, lambda: self.master.attributes("-topmost", False))
                 self.master.focus_force()
         except Exception as e:
             logger.warning("Window focus failed: %s", e)
@@ -1424,9 +1641,11 @@ class App:
                         winsound.PlaySound(sound_path, winsound.SND_FILENAME)
                         return
                     if player:
-                        cmd = ([player, "-nodisp", "-autoexit", sound_path]
-                               if "ffplay" in player
-                               else [player, "--no-video", sound_path])
+                        cmd = (
+                            [player, "-nodisp", "-autoexit", sound_path]
+                            if "ffplay" in player
+                            else [player, "--no-video", sound_path]
+                        )
                         subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                         return
                 elif sys.platform == "darwin" and player:
@@ -1435,9 +1654,15 @@ class App:
                 elif player:
                     player_name = os.path.basename(player)
                     if player_name == "ffplay":
-                        subprocess.Popen([player, "-nodisp", "-autoexit", sound_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        subprocess.Popen(
+                            [player, "-nodisp", "-autoexit", sound_path],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
                     elif player_name == "mpv":
-                        subprocess.Popen([player, "--no-video", sound_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        subprocess.Popen(
+                            [player, "--no-video", sound_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                        )
                     else:
                         subprocess.Popen([player, sound_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     return
@@ -1449,7 +1674,7 @@ class App:
 
     def _resolve_sound_path(self, configured_path: str) -> str:
         """Resolve relative sound paths against data directory for source and EXE mode."""
-        candidate = (configured_path or "sounds/StartupSound.wav").strip().replace('\\', '/')
+        candidate = (configured_path or "sounds/StartupSound.wav").strip().replace("\\", "/")
         if os.path.isabs(candidate):
             return candidate
         return os.path.join(PATH_TO_DATA, candidate)
@@ -1459,9 +1684,11 @@ class App:
             project = self.get_project()
             name = self.get_name()
             if project is not None and name:
-                duration = calculate_duration(project=project, name=name, conn=self.db_conn)
-                logger.info("Dauer aktualisiert: user=%s, project=%s, %.0f s", name, project, duration)
+                today_str = datetime.today().strftime("%d-%m-%Y")
+                duration = calculate_daily_duration(project=project, name=name, date=today_str, conn=self.db_conn)
+                logger.info("Tages-Dauer aktualisiert: user=%s, project=%s, %.0f s", name, project, duration)
                 self.update_timer(duration)
+                self._refresh_total_label(project, name)
             else:
                 self.write("Ungültige Dauer. Bitte erneut versuchen.", error=True)
                 return None
@@ -1492,7 +1719,7 @@ class App:
             return None
         # Validate format DD-MM-YYYY and semantic correctness
         try:
-            datetime.strptime(val, '%d-%m-%Y')
+            datetime.strptime(val, "%d-%m-%Y")
         except ValueError:
             self.write(f"Ungültiges Datum: '{val}'. Erwartet: DD-MM-YYYY", error=True)
             return None
@@ -1501,13 +1728,13 @@ class App:
     def set_today_date(self):
         """Sets the date entry to today's date."""
         self.date_entry.delete(0, END)
-        self.date_entry.insert(0, str(datetime.today().strftime('%d-%m-%Y')))
+        self.date_entry.insert(0, str(datetime.today().strftime("%d-%m-%Y")))
 
     def clear_console(self):
         """Clears the console text widget."""
-        self.console.configure(state='normal')
+        self.console.configure(state="normal")
         self.console.delete(1.0, END)
-        self.console.configure(state='disabled')
+        self.console.configure(state="disabled")
 
     def _copy_text_widget(self, text_widget):
         """Copies the full content of a Text widget to the system clipboard."""
@@ -1558,13 +1785,13 @@ class App:
         if message.strip():
             message = f"[{timestamp}] {message}"
         try:
-            self.console.configure(state='normal')
+            self.console.configure(state="normal")
             if error:
-                self.console.insert(END, message, 'error')
-                self.console.tag_config('error', foreground='red')
+                self.console.insert(END, message, "error")
+                self.console.tag_config("error", foreground="red")
             else:
                 self.console.insert(END, message)
-            self.console.configure(state='disabled')
+            self.console.configure(state="disabled")
             self.console.see(END)
         except Exception:
             self._fallback_write(message, error=error)
@@ -1580,26 +1807,32 @@ class App:
                 return
 
             # Filter by currently selected user, show only today
-            today_str = datetime.today().strftime('%d-%m-%Y')
+            today_str = datetime.today().strftime("%d-%m-%Y")
             current_name = self.name_entry.get().strip()
             if current_name:
-                cursor.execute("""
+                cursor.execute(
+                    """
                     SELECT e.id, u.name, e.project, e.event_type, e.timestamp
                     FROM events e
                     JOIN users u ON u.id = e.user_id
                     WHERE u.name = ? AND e.date = ?
                     ORDER BY e.timestamp
                     LIMIT 500
-                """, (current_name, today_str))
+                """,
+                    (current_name, today_str),
+                )
             else:
-                cursor.execute("""
+                cursor.execute(
+                    """
                     SELECT e.id, u.name, e.project, e.event_type, e.timestamp
                     FROM events e
                     JOIN users u ON u.id = e.user_id
                     WHERE e.date = ?
                     ORDER BY u.name, e.timestamp
                     LIMIT 500
-                """, (today_str,))
+                """,
+                    (today_str,),
+                )
             events = cursor.fetchall()
             current_user = None
             for event_id, user_name, project, event_type, timestamp in events:
@@ -1629,7 +1862,7 @@ class App:
 
         win = Toplevel(self.master)
         win.title("Eintrag bearbeiten")
-        win.configure(bg='#C0C0C0')
+        win.configure(bg="#C0C0C0")
         w, h = 420, 220
         x = self.master.winfo_x() + (self.master.winfo_width() - w) // 2
         y = self.master.winfo_y() + (self.master.winfo_height() - h) // 2
@@ -1638,40 +1871,45 @@ class App:
         win.wait_visibility()
         win.grab_set()
 
-        lbl_cfg = {'bg': '#C0C0C0', 'fg': 'black', 'font': ('MS Sans Serif', 10)}
-        entry_cfg = {'font': ('MS Sans Serif', 10), 'bg': '#FFFFFF', 'fg': 'black',
-                     'relief': 'sunken', 'borderwidth': 2}
+        lbl_cfg = {"bg": "#C0C0C0", "fg": "black", "font": ("MS Sans Serif", 10)}
+        entry_cfg = {
+            "font": ("MS Sans Serif", 10),
+            "bg": "#FFFFFF",
+            "fg": "black",
+            "relief": "sunken",
+            "borderwidth": 2,
+        }
 
         # Row 0: Event type (read-only)
-        Label(win, text="Typ:", **lbl_cfg).grid(row=0, column=0, padx=8, pady=4, sticky='w')
-        Label(win, text=ev["event_type"].upper(), bg='#C0C0C0', fg='black',
-              font=('MS Sans Serif', 10, 'bold')).grid(row=0, column=1, padx=8, pady=4, sticky='w')
+        Label(win, text="Typ:", **lbl_cfg).grid(row=0, column=0, padx=8, pady=4, sticky="w")
+        Label(win, text=ev["event_type"].upper(), bg="#C0C0C0", fg="black", font=("MS Sans Serif", 10, "bold")).grid(
+            row=0, column=1, padx=8, pady=4, sticky="w"
+        )
 
         # Row 1: Project
-        Label(win, text="Projekt:", **lbl_cfg).grid(row=1, column=0, padx=8, pady=4, sticky='w')
-        proj_combo = Combobox(win, font=('MS Sans Serif', 10), width=28)
-        proj_combo['values'] = self.project_entry['values']
+        Label(win, text="Projekt:", **lbl_cfg).grid(row=1, column=0, padx=8, pady=4, sticky="w")
+        proj_combo = Combobox(win, font=("MS Sans Serif", 10), width=28)
+        proj_combo["values"] = self.project_entry["values"]
         proj_combo.set(ev["project"])
-        proj_combo.grid(row=1, column=1, padx=8, pady=4, sticky='ew')
+        proj_combo.grid(row=1, column=1, padx=8, pady=4, sticky="ew")
 
         # Row 2: Date
-        Label(win, text="Datum (TT-MM-JJJJ):", **lbl_cfg).grid(row=2, column=0, padx=8, pady=4, sticky='w')
+        Label(win, text="Datum (TT-MM-JJJJ):", **lbl_cfg).grid(row=2, column=0, padx=8, pady=4, sticky="w")
         date_entry = Entry(win, **entry_cfg, width=30)
         date_entry.insert(0, ev["date"])
-        date_entry.grid(row=2, column=1, padx=8, pady=4, sticky='ew')
+        date_entry.grid(row=2, column=1, padx=8, pady=4, sticky="ew")
 
         # Row 3: Timestamp
-        Label(win, text="Zeitstempel:", **lbl_cfg).grid(row=3, column=0, padx=8, pady=4, sticky='w')
+        Label(win, text="Zeitstempel:", **lbl_cfg).grid(row=3, column=0, padx=8, pady=4, sticky="w")
         ts_entry = Entry(win, **entry_cfg, width=30)
         ts_entry.insert(0, ev["timestamp"])
-        ts_entry.grid(row=3, column=1, padx=8, pady=4, sticky='ew')
+        ts_entry.grid(row=3, column=1, padx=8, pady=4, sticky="ew")
 
         win.grid_columnconfigure(1, weight=1)
 
         # Buttons
-        btn_cfg = {'bg': '#D4D0C8', 'fg': 'black', 'font': ('MS Sans Serif', 10),
-                   'relief': 'raised', 'borderwidth': 2}
-        btn_frame = Frame(win, bg='#C0C0C0')
+        btn_cfg = {"bg": "#D4D0C8", "fg": "black", "font": ("MS Sans Serif", 10), "relief": "raised", "borderwidth": 2}
+        btn_frame = Frame(win, bg="#C0C0C0")
         btn_frame.grid(row=4, column=0, columnspan=2, pady=10)
 
         def _save():
@@ -1685,14 +1923,16 @@ class App:
                 messagebox.showwarning("Fehler", "Datum darf nicht leer sein.", parent=win)
                 return
             try:
-                datetime.strptime(new_date, '%d-%m-%Y')
+                datetime.strptime(new_date, "%d-%m-%Y")
             except ValueError:
                 messagebox.showwarning("Fehler", f"Ungültiges Datum: '{new_date}'.\nErwartet: TT-MM-JJJJ", parent=win)
                 return
             try:
                 datetime.strptime(new_ts, TIMESTAMP_FORMAT)
             except ValueError:
-                messagebox.showwarning("Fehler", f"Ungültiger Zeitstempel: '{new_ts}'.\nErwartet: JJJJ-MM-TT HH:MM:SS", parent=win)
+                messagebox.showwarning(
+                    "Fehler", f"Ungültiger Zeitstempel: '{new_ts}'.\nErwartet: JJJJ-MM-TT HH:MM:SS", parent=win
+                )
                 return
             if update_event(self.db_conn, event_id, new_project, new_ts, new_date):
                 logger.info("Event %s bearbeitet.", event_id)
@@ -1705,12 +1945,14 @@ class App:
                 messagebox.showerror("Fehler", "Eintrag konnte nicht gespeichert werden.", parent=win)
 
         def _delete():
-            if not messagebox.askyesno("Eintrag löschen",
-                                       f"Eintrag #{event_id} wirklich löschen?\n\n"
-                                       f"Typ: {ev['event_type'].upper()}\n"
-                                       f"Projekt: {ev['project']}\n"
-                                       f"Zeitstempel: {ev['timestamp']}",
-                                       parent=win):
+            if not messagebox.askyesno(
+                "Eintrag löschen",
+                f"Eintrag #{event_id} wirklich löschen?\n\n"
+                f"Typ: {ev['event_type'].upper()}\n"
+                f"Projekt: {ev['project']}\n"
+                f"Zeitstempel: {ev['timestamp']}",
+                parent=win,
+            ):
                 return
             if delete_event(self.db_conn, event_id):
                 logger.info("Event %s gelöscht.", event_id)
@@ -1722,10 +1964,18 @@ class App:
             else:
                 messagebox.showerror("Fehler", "Eintrag konnte nicht gelöscht werden.", parent=win)
 
-        Button(btn_frame, text="Speichern", command=_save, **btn_cfg).pack(side='left', padx=5)
-        Button(btn_frame, text="Löschen", command=_delete, bg='#D4D0C8', fg='red',
-               font=('MS Sans Serif', 10), relief='raised', borderwidth=2).pack(side='left', padx=5)
-        Button(btn_frame, text="Abbrechen", command=win.destroy, **btn_cfg).pack(side='left', padx=5)
+        Button(btn_frame, text="Speichern", command=_save, **btn_cfg).pack(side="left", padx=5)
+        Button(
+            btn_frame,
+            text="Löschen",
+            command=_delete,
+            bg="#D4D0C8",
+            fg="red",
+            font=("MS Sans Serif", 10),
+            relief="raised",
+            borderwidth=2,
+        ).pack(side="left", padx=5)
+        Button(btn_frame, text="Abbrechen", command=win.destroy, **btn_cfg).pack(side="left", padx=5)
 
     def update_timer_realtime(self):
         """Update the timer label with the elapsed time."""
@@ -1744,26 +1994,39 @@ class App:
                 if remaining == 0:
                     self._finish_break(play_sound=True, bring_to_front=True)
             self.break_time_label.config(text=break_text)
-            self._mini_break_label.config(text=break_text)
+            if self._mini_toplevel:
+                self._mini_break_label.config(text=break_text)
         else:
             self.break_time_label.config(text="--:--")
-            self._mini_break_label.config(text="")
+            if self._mini_toplevel:
+                self._mini_break_label.config(text="")
 
         if project is not None and name and self.session_active.get((name, project)):
-            duration = calculate_duration(project=project, name=name, conn=self.db_conn) if self.db_conn else 0
+            today_str = datetime.today().strftime("%d-%m-%Y")
+            daily_dur = (
+                calculate_daily_duration(project=project, name=name, date=today_str, conn=self.db_conn)
+                if self.db_conn
+                else 0
+            )
             if self.timer_running:
                 start_ts = self.timer_start_time or time.time()
-                elapsed_time = time.time() - start_ts + duration
+                elapsed_time = time.time() - start_ts + daily_dur
             else:
-                elapsed_time = duration
+                elapsed_time = daily_dur
             minutes, seconds = divmod(elapsed_time, 60)
             hours, minutes = divmod(minutes, 60)
             time_text = f"{int(hours):02}:{int(minutes):02}:{int(seconds):02}"
             self.timer_time_label.config(text=time_text)
             self.timer_name_label.config(text=f"[{name}]")
             self.timer_project_label.config(text=f"Projekt: {project}")
-            # Sync to mini mode timer
-            self._mini_timer_label.config(text=time_text)
+            if self._mini_toplevel:
+                self._mini_timer_label.config(text=time_text)
+
+            # Update total time label less frequently (every 30s)
+            self._total_update_counter = getattr(self, "_total_update_counter", 0) + 1
+            if self._total_update_counter >= 30:
+                self._total_update_counter = 0
+                self._refresh_total_label(project, name)
 
             if self.pomodoro_enabled and not self._break_active and self.timer_running:
                 if self._pomodoro_work_deadline_ts <= 0:
@@ -1785,7 +2048,7 @@ class App:
             self.master.after(1000, self.update_timer_realtime)
 
     def update_timer(self, duration):
-        """Update the timer label with the elapsed time."""
+        """Update the timer label with the daily elapsed time."""
         project = self._get_project_silent()
         name = self._get_name_silent()
 
@@ -1801,7 +2064,8 @@ class App:
             self.timer_time_label.config(text=time_text)
             self.timer_name_label.config(text=f"[{name}]")
             self.timer_project_label.config(text=f"Projekt: {project}")
-            self._mini_timer_label.config(text=time_text)
+            if self._mini_toplevel:
+                self._mini_timer_label.config(text=time_text)
         else:
             self.write("Ungültiges Projekt oder Name.", error=True)
 
@@ -1814,6 +2078,22 @@ class App:
         """Get name without validation errors (for timer updates)."""
         val = self.name_entry.get().strip()
         return val if val else None
+
+    def _refresh_total_label(self, project: str | None = None, name: str | None = None):
+        """Refresh the small total-time label below the main timer."""
+        if not self.db_conn:
+            return
+        if project is None:
+            project = self._get_project_silent()
+        if name is None:
+            name = self._get_name_silent()
+        if not project or not name:
+            self.timer_total_label.config(text="")
+            return
+        total = calculate_duration(project=project, name=name, conn=self.db_conn)
+        t_min, t_sec = divmod(int(total), 60)
+        t_hr, t_min = divmod(t_min, 60)
+        self.timer_total_label.config(text=f"Gesamt: {t_hr:02}:{t_min:02}:{t_sec:02}")
 
     def open_stats_dashboard(self):
         """Opens the statistics dashboard."""

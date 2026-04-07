@@ -14,28 +14,32 @@ import polars as pl
 
 logger = logging.getLogger(__name__)
 
+APP_VERSION = "1.2.0"
+APP_AUTHOR = "grenzenloseSchublade"
+APP_LICENSE = "MIT"
+
 # Color schemes
 MODERN_COLORS = {
-    'background': '#282a36', 'text': '#f8f8f2', 'primary': '#6272a4',
-    'secondary': '#44475a', 'accent': '#8be9fd'
+    "background": "#282a36",
+    "text": "#f8f8f2",
+    "primary": "#6272a4",
+    "secondary": "#44475a",
+    "accent": "#8be9fd",
 }
 SYNTHWAVE_COLORS = {
-    'background': '#1a1a2e', 'text': '#e0e0e0', 'primary': '#e94560',
-    'secondary': '#16213e', 'accent': '#00d4ff'
+    "background": "#1a1a2e",
+    "text": "#e0e0e0",
+    "primary": "#e94560",
+    "secondary": "#16213e",
+    "accent": "#00d4ff",
 }
 
-MODERN_SEQUENCE = [
-    '#8be9fd', '#ff79c6', '#f1fa8c', '#50fa7b',
-    '#ffb86c', '#bd93f9', '#ff5555', '#6272a4'
-]
-SYNTHWAVE_SEQUENCE = [
-    '#00d4ff', '#ff00ff', '#ffff00', '#e94560',
-    '#50fa7b', '#bd93f9', '#ff5555', '#ff79c6'
-]
+MODERN_SEQUENCE = ["#8be9fd", "#ff79c6", "#f1fa8c", "#50fa7b", "#ffb86c", "#bd93f9", "#ff5555", "#6272a4"]
+SYNTHWAVE_SEQUENCE = ["#00d4ff", "#ff00ff", "#ffff00", "#e94560", "#50fa7b", "#bd93f9", "#ff5555", "#ff79c6"]
 
 THEMES = {
-    'Modern': {'colors': MODERN_COLORS, 'sequence': MODERN_SEQUENCE},
-    'Synthwave': {'colors': SYNTHWAVE_COLORS, 'sequence': SYNTHWAVE_SEQUENCE},
+    "Modern": {"colors": MODERN_COLORS, "sequence": MODERN_SEQUENCE},
+    "Synthwave": {"colors": SYNTHWAVE_COLORS, "sequence": SYNTHWAVE_SEQUENCE},
 }
 
 
@@ -44,10 +48,11 @@ def get_theme_colors(theme_name: str | None = None) -> tuple[dict[str, str], lis
     if theme_name is None:
         theme_name = load_config().get("theme", "Modern")
     theme = THEMES.get(theme_name, THEMES["Modern"])
-    return theme['colors'], theme['sequence']
+    return theme["colors"], theme["sequence"]
+
 
 # Pfade
-if getattr(sys, 'frozen', False):
+if getattr(sys, "frozen", False):
     # PyInstaller frozen EXE: use the directory containing the executable
     BASE_DIR = os.path.dirname(sys.executable)
 else:
@@ -105,7 +110,6 @@ def save_config(config: dict) -> None:
     os.replace(tmp_path, CONFIG_PATH)
 
 
-
 def save_to_csv(data: pl.DataFrame, csv_path: str) -> None:
     """Save the DataFrame to a CSV file."""
     try:
@@ -118,6 +122,7 @@ def save_to_csv(data: pl.DataFrame, csv_path: str) -> None:
     except (OSError, ValueError, TypeError) as e:
         logger.error("CSV-Export fehlgeschlagen: %s", e)
 
+
 def convert_timestamp_format(timestamp_str: str | None) -> datetime | None:
     """
     Konvertiert verschiedene Timestamp-Formate in datetime-Objekte.
@@ -125,10 +130,10 @@ def convert_timestamp_format(timestamp_str: str | None) -> datetime | None:
     if timestamp_str is None:
         return None
     for date_format in [
-        '%Y-%m-%d %H:%M:%S',  # Standardformat
-        '%d-%m-%Y %H:%M:%S',  # Altes Format
-        '%Y/%m/%d %H:%M:%S',  # Alternative Schreibweise
-        '%d/%m/%Y %H:%M:%S'   # Alternative Schreibweise
+        "%Y-%m-%d %H:%M:%S",  # Standardformat
+        "%d-%m-%Y %H:%M:%S",  # Altes Format
+        "%Y/%m/%d %H:%M:%S",  # Alternative Schreibweise
+        "%d/%m/%Y %H:%M:%S",  # Alternative Schreibweise
     ]:
         try:
             return datetime.strptime(timestamp_str, date_format)
@@ -139,6 +144,7 @@ def convert_timestamp_format(timestamp_str: str | None) -> datetime | None:
     except (ValueError, TypeError) as e:
         logger.warning("Timestamp-Konvertierung fehlgeschlagen: %s — %s", timestamp_str, e)
         return None
+
 
 def read_database(db_path: str) -> pl.DataFrame:
     """Liest die Datenbank (events-Schema) und konvertiert Timestamps in datetime-Objekte."""
@@ -163,21 +169,18 @@ def read_database(db_path: str) -> pl.DataFrame:
 
             # Vektorisierte Timestamp-Konvertierung
             formats = [
-                '%Y-%m-%d %H:%M:%S',
-                '%d-%m-%Y %H:%M:%S',
-                '%Y/%m/%d %H:%M:%S',
-                '%d/%m/%Y %H:%M:%S',
+                "%Y-%m-%d %H:%M:%S",
+                "%d-%m-%Y %H:%M:%S",
+                "%Y/%m/%d %H:%M:%S",
+                "%d/%m/%Y %H:%M:%S",
             ]
-            parsed_ts = pl.coalesce([
-                pl.col("timestamp").cast(pl.Utf8).str.strptime(pl.Datetime, fmt, strict=False)
-                for fmt in formats
-            ])
+            parsed_ts = pl.coalesce(
+                [pl.col("timestamp").cast(pl.Utf8).str.strptime(pl.Datetime, fmt, strict=False) for fmt in formats]
+            )
             combined_data = combined_data.with_columns(parsed_ts.alias("timestamp"))
 
             # Füge das Datum als separate Spalte hinzu (YYYY-MM-DD Format)
-            combined_data = combined_data.with_columns(
-                pl.col("timestamp").dt.strftime('%Y-%m-%d').alias("date")
-            )
+            combined_data = combined_data.with_columns(pl.col("timestamp").dt.strftime("%Y-%m-%d").alias("date"))
 
             return combined_data
 
@@ -185,14 +188,16 @@ def read_database(db_path: str) -> pl.DataFrame:
         logger.error("Fehler beim Lesen der Datenbank: %s", e)
         return pl.DataFrame()
 
+
 def read_parameters(file_path: str) -> dict:
     """Reads parameters from a JSON file."""
     try:
-        with open(file_path, encoding='utf-8') as file:
+        with open(file_path, encoding="utf-8") as file:
             return json.load(file)
     except (OSError, json.JSONDecodeError) as e:
         logger.error("Parameter-Datei konnte nicht gelesen werden: %s", e)
         return {}
+
 
 def browse_directory() -> str:
     """Browses for a directory using a Tkinter dialog."""
@@ -202,12 +207,16 @@ def browse_directory() -> str:
     root.destroy()
     return directory
 
+
 def get_app_database_path(directory: str = PATH_TO_DATA) -> str | None:
     """Returns the app_database.db path if it exists in the directory."""
     db_path = os.path.join(directory, "app_database.db")
     return db_path if os.path.isfile(db_path) else None
 
-def find_latest_example_dataset(directory: str = PATH_TO_DATA, update_progress: Callable | None = None) -> tuple[str | None, str | None]:
+
+def find_latest_example_dataset(
+    directory: str = PATH_TO_DATA, update_progress: Callable | None = None
+) -> tuple[str | None, str | None]:
     """Finds the newest example dataset (beispieldaten.db + parameter*.json) recursively."""
     if update_progress:
         update_progress(20, "Searching for example datasets...")
