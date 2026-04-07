@@ -2005,6 +2005,7 @@ class App:
                 self._combobox_dirty = True
                 self._refresh_comboboxes()
                 self.update_db_content()
+                self.update_duration()
                 win.destroy()
             else:
                 messagebox.showerror("Fehler", "Eintrag konnte nicht gespeichert werden.", parent=win)
@@ -2025,6 +2026,7 @@ class App:
                 self._combobox_dirty = True
                 self._refresh_comboboxes()
                 self.update_db_content()
+                self.update_duration()
                 win.destroy()
             else:
                 messagebox.showerror("Fehler", "Eintrag konnte nicht gelöscht werden.", parent=win)
