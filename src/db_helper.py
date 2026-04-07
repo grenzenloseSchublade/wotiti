@@ -719,6 +719,50 @@ def close_stale_sessions(conn: sqlite3.Connection | None) -> int:
     return closed
 
 
+def calculate_daily_break_duration(
+    name: str = "Hans",
+    date: str | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> float:
+    """Sum completed break durations for a user on a given day (all projects)."""
+    if not conn or not name:
+        return 0
+    if date is None:
+        date = datetime.now().strftime("%d-%m-%Y")
+    # break_events.started_at is stored as YYYY-MM-DD HH:MM:SS.
+    # Convert the DD-MM-YYYY date to YYYY-MM-DD prefix for LIKE matching.
+    try:
+        parts = date.split("-")
+        iso_prefix = f"{parts[2]}-{parts[1]}-{parts[0]}"
+    except (IndexError, ValueError):
+        return 0
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM users WHERE name = ?", (name,))
+        row = cursor.fetchone()
+        if row is None:
+            return 0
+        user_id = row[0]
+        cursor.execute(
+            """
+            SELECT COALESCE(SUM(duration_seconds), 0)
+            FROM break_events
+            WHERE user_id = ?
+              AND started_at LIKE ?
+              AND duration_seconds IS NOT NULL
+        """,
+            (user_id, f"{iso_prefix}%"),
+        )
+        total = cursor.fetchone()[0]
+        return float(total)
+    except Error as e:
+        logger.error("Error calculating daily break duration: %s", e)
+        return 0
+    finally:
+        cursor.close()
+
+
 def read_database(db_path: str = PATH_TO_DATA) -> pl.DataFrame:
     """Read the SQLite database and return the data as a pandas DataFrame."""
     try:

@@ -91,17 +91,39 @@ WoTiTi ist damit als kompaktes, lokal betriebenes System zur Erfassung und Analy
 ## Systemarchitektur
 
 ### Erfassungskomponente (Work Time Timer)
+
+**Timer-Anzeige**
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  01:23:45      [Hans]      Projekt: 1           05:00    │
+│  Σ 42:15:30                               ▮▮ 00:15:00   │
+└──────────────────────────────────────────────────────────┘
+   ▲ Tageszeit    ▲ User      ▲ Projekt   ▲ Pause-Timer
+   (rot, groß)                             (blau)
+
+Zeile 2 (kompakt, Tooltip bei Hover):
+   Σ = Gesamte Projektzeit (alle Tage)
+  ▮▮ = Pausenzeit heute
+```
+
+Der Timer zeigt primär die **Tagesarbeitszeit** pro Projekt. Die Gesamtzeit über alle Tage und die heutige Pausensumme werden kompakt darunter angezeigt — Hover-Tooltips erklären die Werte.
+
+**Mini-Modus** (▽/△): Kompakte Always-on-top Ansicht mit Tageszeit, Drag-Support und persistenter Position.
+
+**Funktionsumfang**
+
 - Drei-Zustands-Logik für Arbeitssitzungen: Start, Pause, Stop
 - Mehrbenutzer-Unterstützung mit Dropdown-Auswahl
 - Projektbasierte Zeiterfassung mit Combobox (intelligentes Caching)
 - Benutzerverwaltung (eigenes Fenster zum Anlegen/Auswählen)
-- **Mini-Modus** (▽/△): Kompakte Always-on-top Ansicht als separates Fenster mit Drag-Support und persistenter letzter Position
 - **Tastenkürzel**: `Ctrl+S` Start, `Ctrl+E` Stop, `Ctrl+M` Mini-Modus, `Ctrl+P` Pause
-- **Einstellungen**: Datenbank, Defaults, Port, Theme, Entwickler-Konsole, Pomodoro-Optionen
+- **Einstellungen**: Datenbank, Defaults, Port, Theme, Entwickler-Konsole, Pomodoro-Optionen, Über-Dialog
 - Persistente Konfiguration (`data/config.json`)
 - SQLite-Datenbankintegration (users, projects, events, break_events)
 - Separate Break-Tabellenlogik für manuelle und Pomodoro-Pausen
-- Echtzeit-Timer-Anzeige
+- Automatische Bereinigung verwaister Sessions und Pausen nach unsauberem Beenden
+- Echtzeit-Timer-Anzeige (Tageszeit + Gesamtzeit)
 - Session-Schutz bei App-Schließen
 - Eingabevalidierung (Datumsformat DD-MM-YYYY)
 - Log-Rotation (`data/wotiti.log`, 1 MB, 3 Backups)

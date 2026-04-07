@@ -1,6 +1,6 @@
 [project]
 name = "wotiti"
-version = "1.2.0"
+version = "1.2.2"
 description = "Small UI to track worktime"
 readme = "README.md"
 requires-python = ">=3.10,<3.14"

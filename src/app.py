@@ -39,6 +39,7 @@ else:
 
 from db_helper import (
     TIMESTAMP_FORMAT,
+    calculate_daily_break_duration,
     calculate_daily_duration,
     calculate_duration,
     check_user,
@@ -75,6 +76,42 @@ from utils import (
 logger = logging.getLogger(__name__)
 
 
+class _ToolTip:
+    """Lightweight hover tooltip for any tkinter widget."""
+
+    def __init__(self, widget, text: str):
+        self._widget = widget
+        self._text = text
+        self._tw = None
+        widget.bind("<Enter>", self._show, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+
+    def _show(self, _event=None):
+        if self._tw:
+            return
+        x = self._widget.winfo_rootx() + self._widget.winfo_width() // 2
+        y = self._widget.winfo_rooty() + self._widget.winfo_height() + 2
+        self._tw = tw = Toplevel(self._widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        Label(
+            tw,
+            text=self._text,
+            bg="#FFFFE0",
+            fg="black",
+            font=("MS Sans Serif", 9),
+            relief="solid",
+            borderwidth=1,
+            padx=4,
+            pady=2,
+        ).pack()
+
+    def _hide(self, _event=None):
+        if self._tw:
+            self._tw.destroy()
+            self._tw = None
+
+
 class App:
     def __init__(self, master, stats_port=None):
         self.master = master
@@ -103,6 +140,7 @@ class App:
         self._paused_pomodoro_remaining_seconds = 0
         self._last_break_project = None
         self._last_break_user = None
+        self._total_update_counter = 0
         os.makedirs(PATH_TO_SOUNDS, exist_ok=True)
 
         # Pomodoro settings (persisted in config)
@@ -218,6 +256,7 @@ class App:
             self.button_frame, text="Auswertung", command=self.open_stats_dashboard, **button_config
         )
         self.stats_button.grid(row=0, column=5, pady=5, padx=3, sticky=W + E)
+        _ToolTip(self.stats_button, "Dashboard öffnen (rot = nicht gestartet)")
 
         self.user_mgmt_button = Button(
             self.button_frame, text="Benutzer", command=self.open_user_management, **button_config
@@ -308,10 +347,20 @@ class App:
             self.timer_frame, text="--:--", bg="#C0C0C0", fg="#0000FF", font=("MS Sans Serif", 12, "bold")
         )
         self.break_time_label.grid(row=0, column=3, pady=5, padx=10, sticky="e")
+        _ToolTip(self.break_time_label, "Aktuelle Pause (Countdown oder Dauer)")
 
-        # Row 1: Total project time (small, faded red)
-        self.timer_total_label = Label(self.timer_frame, text="", bg="#C0C0C0", fg="#CC6666", font=("MS Sans Serif", 8))
-        self.timer_total_label.grid(row=1, column=0, columnspan=4, padx=12, sticky="w")
+        # Row 1: compact totals — symbol + time, tooltip on hover
+        self.timer_total_label = Label(
+            self.timer_frame, text="", bg="#C0C0C0", fg="#CC6666", font=("MS Sans Serif", 10)
+        )
+        self.timer_total_label.grid(row=1, column=0, columnspan=2, padx=12, pady=(0, 2), sticky="sw")
+        _ToolTip(self.timer_total_label, "Gesamte Projektzeit (alle Tage)")
+
+        self.break_total_label = Label(
+            self.timer_frame, text="", bg="#C0C0C0", fg="#6666BB", font=("MS Sans Serif", 10)
+        )
+        self.break_total_label.grid(row=1, column=2, columnspan=2, padx=12, pady=(0, 2), sticky="se")
+        _ToolTip(self.break_total_label, "Pausenzeit heute")
 
         self.timer_frame.grid_columnconfigure(0, weight=0)
         self.timer_frame.grid_columnconfigure(1, weight=1)
@@ -608,23 +657,38 @@ class App:
         else:
             self._enter_mini_mode()
 
+    def _sync_mini_button_states(self):
+        """Mirror main window button states onto mini mode widgets."""
+        if not self._mini_toplevel:
+            return
+        if self._break_active:
+            self._mini_start_btn.config(state="normal", bg="#D4D0C8", text="\u25b6")
+            self._mini_pause_btn.config(state="disabled", bg="#A9A9A9", text="\u25ae\u25ae")
+            self._mini_stop_btn.config(state="normal", bg="#D4D0C8")
+            self._mini_project_combo.config(state="disabled")
+        elif any(self.session_active.values()):
+            self._mini_start_btn.config(state="disabled", bg="#A9A9A9", text="\u25b6")
+            self._mini_pause_btn.config(state="normal", bg="#D4D0C8", text="\u25ae\u25ae")
+            self._mini_stop_btn.config(state="normal", bg="#D4D0C8")
+            self._mini_project_combo.config(state="disabled")
+        else:
+            self._mini_start_btn.config(state="normal", bg="#D4D0C8", text="\u25b6")
+            self._mini_pause_btn.config(state="disabled", bg="#A9A9A9", text="\u25ae\u25ae")
+            self._mini_stop_btn.config(state="disabled", bg="#A9A9A9")
+            self._mini_project_combo.config(state="readonly")
+
     def _enter_mini_mode(self):
         """Switch to compact always-on-top Toplevel; hide main window."""
         self._ensure_mini_toplevel()
         self._mini_mode = True
         self._full_geometry = self.master.geometry()
 
-        # Sync project values from main to mini
+        # Sync project values, timer, break, and button states from main to mini
         self._mini_project_combo["values"] = self.project_entry["values"]
         self._mini_project_combo.set(self.project_entry.get().strip())
         self._mini_timer_label.configure(text=self.timer_time_label.cget("text"))
         self._mini_break_label.configure(text=self.break_time_label.cget("text"))
-
-        # Lock project combo during active session or break to prevent orphaned sessions.
-        if any(self.session_active.values()) or self._break_active:
-            self._mini_project_combo.config(state="disabled")
-        else:
-            self._mini_project_combo.config(state="readonly")
+        self._sync_mini_button_states()
 
         # Determine position, clamped to visible screen bounds.
         self.master.update_idletasks()
@@ -1387,6 +1451,7 @@ class App:
                     self._refresh_comboboxes()
                     self.update_db_content()
                     self._set_button_state_running()
+                    self._refresh_total_label(project, name)
 
     def stop_session(self):
         """End the session completely. If a break is active, close it first without auto-resume."""
@@ -2023,7 +2088,7 @@ class App:
                 self._mini_timer_label.config(text=time_text)
 
             # Update total time label less frequently (every 30s)
-            self._total_update_counter = getattr(self, "_total_update_counter", 0) + 1
+            self._total_update_counter += 1
             if self._total_update_counter >= 30:
                 self._total_update_counter = 0
                 self._refresh_total_label(project, name)
@@ -2080,7 +2145,7 @@ class App:
         return val if val else None
 
     def _refresh_total_label(self, project: str | None = None, name: str | None = None):
-        """Refresh the small total-time label below the main timer."""
+        """Refresh the total-time and daily-break labels below the timer."""
         if not self.db_conn:
             return
         if project is None:
@@ -2089,11 +2154,22 @@ class App:
             name = self._get_name_silent()
         if not project or not name:
             self.timer_total_label.config(text="")
+            self.break_total_label.config(text="")
             return
+
         total = calculate_duration(project=project, name=name, conn=self.db_conn)
         t_min, t_sec = divmod(int(total), 60)
         t_hr, t_min = divmod(t_min, 60)
-        self.timer_total_label.config(text=f"Gesamt: {t_hr:02}:{t_min:02}:{t_sec:02}")
+        self.timer_total_label.config(text=f"\u03a3 {t_hr:02}:{t_min:02}:{t_sec:02}")
+
+        today_str = datetime.today().strftime("%d-%m-%Y")
+        brk = calculate_daily_break_duration(name=name, date=today_str, conn=self.db_conn)
+        b_min, b_sec = divmod(int(brk), 60)
+        b_hr, b_min = divmod(b_min, 60)
+        if brk > 0:
+            self.break_total_label.config(text=f"\u25ae\u25ae {b_hr:02}:{b_min:02}:{b_sec:02}")
+        else:
+            self.break_total_label.config(text="")
 
     def open_stats_dashboard(self):
         """Opens the statistics dashboard."""
