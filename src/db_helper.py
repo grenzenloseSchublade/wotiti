@@ -675,6 +675,37 @@ def calculate_daily_duration(
         cursor.close()
 
 
+def get_last_start_date(conn: sqlite3.Connection | None, name: str, project: str) -> str | None:
+    """Return the ``date`` column of the most recent unmatched start event."""
+    if not conn or not name or not project:
+        return None
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM users WHERE name = ?", (name,))
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        user_id = row[0]
+        cursor.execute(
+            """
+            SELECT e.date FROM events e
+            WHERE e.user_id = ? AND e.project = ? AND e.event_type = 'start'
+              AND NOT EXISTS (
+                  SELECT 1 FROM events e2
+                  WHERE e2.user_id = e.user_id AND e2.project = e.project
+                    AND e2.event_type = 'stop' AND e2.timestamp > e.timestamp
+              )
+            ORDER BY e.timestamp DESC LIMIT 1
+        """,
+            (user_id, project),
+        )
+        row = cursor.fetchone()
+        return row[0] if row else None
+    except Error as e:
+        logger.error("Error fetching last start date: %s", e)
+        return None
+
+
 def close_stale_sessions(conn: sqlite3.Connection | None) -> int:
     """Close orphaned start events that have no matching stop (from unclean shutdown).
 

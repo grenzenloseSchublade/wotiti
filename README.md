@@ -30,9 +30,8 @@ WoTiTi ist eine lokal ausführbare Desktop-Anwendung zur Erfassung von Arbeitsze
 
 ### Vorgebaute Binärdatei (einfachste Methode)
 
-**[Lade die neueste Version herunter](https://github.com/grenzenloseSchublade/wotiti/releases):**
-- Linux x64: [wotiti_1_1-linux-x64.zip](https://github.com/grenzenloseSchublade/wotiti/releases/download/v1.1.0/wotiti_1_1-linux-x64.zip)
-- Windows x64: [wotiti_1_1-win-x64.zip](https://github.com/grenzenloseSchublade/wotiti/releases/download/v1.1.0/wotiti_1_1-win-x64.zip)
+**[Releases – neueste Version herunterladen](https://github.com/grenzenloseSchublade/wotiti/releases)**  
+Dort finden sich die aktuellen ZIP-Pakete für Linux x64 und Windows x64 (Dateinamen enthalten die Versionsnummer, z. B. `wotiti_1_2-*`).
 
 Entpacken → Ausführen. Fertig!
 
@@ -104,10 +103,13 @@ WoTiTi ist damit als kompaktes, lokal betriebenes System zur Erfassung und Analy
 
 Zeile 2 (kompakt, Tooltip bei Hover):
    Σ = Gesamte Projektzeit (alle Tage)
-  ▮▮ = Pausenzeit heute
+  ▮▮ = Summe der Pausen am gewählten Kalendertag
 ```
 
-Der Timer zeigt primär die **Tagesarbeitszeit** pro Projekt. Die Gesamtzeit über alle Tage und die heutige Pausensumme werden kompakt darunter angezeigt — Hover-Tooltips erklären die Werte.
+Der Timer zeigt primär die **Tagesarbeitszeit** für das **im Datumsfeld gewählte Datum** (nicht nur „heute“). **Σ** bleibt die **Gesamtzeit des Projekts über alle Tage**. **▮▮** ist die **Tages-Pausensumme** für dasselbe gewählte Datum. Weitere Tooltips u. a. am Button **Auswertung** (Status Farbe) und am Pause-Timer.
+
+**Datumsfeld (TT-MM-JJJJ)**  
+Steuert die **Ereignisliste** (nur Einträge dieses Tages) und die **angezeigten Tageswerte** (Haupttimer, ▮▮). Nach **Enter** oder beim Verlassen des Felds wird neu geladen; **Heute** setzt auf den aktuellen Tag und aktualisiert sofort. Ist ein **anderer Tag** gewählt, erscheint das Datumsfeld **leicht gelb** hinterlegt. Der **Live-Zähler** (laufende Session) läuft nur, wenn **heute** angezeigt wird; für vergangene Tage sieht man den gespeicherten Stand aus der Datenbank. Der Button **Aktualisieren** bleibt als manueller Fallback. Nach **Bearbeiten/Löschen** eines Listeneintrags werden die Zeiten ebenfalls neu berechnet.
 
 **Mini-Modus** (▽/△): Kompakte Always-on-top Ansicht mit Tageszeit, Drag-Support und persistenter Position.
 
@@ -123,12 +125,13 @@ Der Timer zeigt primär die **Tagesarbeitszeit** pro Projekt. Die Gesamtzeit üb
 - SQLite-Datenbankintegration (users, projects, events, break_events)
 - Separate Break-Tabellenlogik für manuelle und Pomodoro-Pausen
 - Automatische Bereinigung verwaister Sessions und Pausen nach unsauberem Beenden
-- Echtzeit-Timer-Anzeige (Tageszeit + Gesamtzeit)
+- Echtzeit-Timer-Anzeige (Tageszeit bezogen auf gewähltes Datum, Σ gesamt, ▮▮ Pausen am gewählten Tag)
 - Session-Schutz bei App-Schließen
 - Eingabevalidierung (Datumsformat DD-MM-YYYY)
 - Log-Rotation (`data/wotiti.log`, 1 MB, 3 Backups)
 
 ### Analysekomponente (Work Time Insights)
+- Datenaufbereitung mit **Polars** (schnelle, speichereffiziente Tabellenoperationen)
 - Durchgehend **deutschsprachige** Oberfläche (Titel, Achsen, UI-Elemente)
 - **Theme-System**: Modern (Cyan/Pink/Gelb) & Synthwave — umschaltbar in den Einstellungen
 - Eigenes Plotly-Template `wotiti` mit definierter Farbpalette und Layoutvorgaben
@@ -162,7 +165,7 @@ wotiti/
 │   └── test_db_helper.py   # Datenbank-Tests
 ├── build.sh                # Linux Build-Skript
 ├── build_windows.ps1       # Windows Build-Skript
-├── pyproject.toml          # uv/pyproject-Konfiguration
+├── pyproject.toml          # uv/pyproject-Konfiguration (Feld `version` = App-Version)
 └── README.md
 ```
 
@@ -219,8 +222,8 @@ Wichtige Konfigurationsbereiche:
 ## Geplante Erweiterungen
 
 - Export-Funktionen für Analysen
-- Docker-Container
-- GitHub Actions für Build-Automatisierung
+- Endnutzer-Docker-Image (optional; Entwicklung: siehe Dev Container oben)
+- Weitere Build-/Release-Automatisierung
 
 ## Mitwirkung
 

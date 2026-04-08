@@ -16,6 +16,7 @@ from tkinter import (
     VERTICAL,
     BooleanVar,
     Button,
+    Canvas,
     Checkbutton,
     E,
     Entry,
@@ -144,6 +145,8 @@ class App:
         self._last_date_view_input_cache = None
         self._date_entry_normal_bg = "#FFFFFF"
         self._date_entry_past_bg = "#FFFACD"
+        self._db_dirty = False
+        self._db_dirty_since: float = 0.0
         os.makedirs(PATH_TO_SOUNDS, exist_ok=True)
 
         # Pomodoro settings (persisted in config)
@@ -435,6 +438,23 @@ class App:
         )
         self.scrollbar.grid(row=1, column=1, sticky="ns")
         self.console["yscrollcommand"] = self.scrollbar.set
+
+        # =====================================================
+        # ROW 5: Status bar
+        # =====================================================
+        self._status_frame = Frame(self.frame, bg="#C0C0C0", height=20, relief="sunken", borderwidth=1)
+        self._status_frame.grid(row=5, column=0, columnspan=6, sticky="ew", padx=5, pady=(2, 0))
+        self._status_frame.grid_propagate(False)
+
+        self._status_date_label = Label(
+            self._status_frame, text="", bg="#C0C0C0", fg="#333333", font=("MS Sans Serif", 8), anchor="w"
+        )
+        self._status_date_label.pack(side="left", padx=4)
+
+        self._sync_canvas = Canvas(self._status_frame, width=12, height=12, bg="#C0C0C0", highlightthickness=0)
+        self._sync_canvas.pack(side="right", padx=4)
+        self._sync_dot = self._sync_canvas.create_oval(2, 2, 10, 10, fill="#00AA00", outline="#006600")
+        _ToolTip(self._sync_canvas, "Sync-Status: grün = aktuell, gelb = Daten veraltet")
 
         # =====================================================
         # Grid weights
@@ -837,7 +857,7 @@ class App:
             if sel:
                 name = user_listbox.get(sel[0])
                 self.name_entry.set(name)
-                self.update_db_content()
+                self._force_date_refresh()
                 win.destroy()
 
         Button(btn_frame, text="Benutzer ausw\u00e4hlen", command=select_user, **button_config).pack(
@@ -1339,7 +1359,7 @@ class App:
             self._refresh_comboboxes(force=True)
             self.name_entry.set(new_config["default_user"])
             self.project_entry.set(new_config["default_project"])
-            self.update_db_content()
+            self._force_date_refresh()
 
             if int(new_port) != self._stats_port:
                 self.write(f"Port-Änderung ({self._stats_port} → {new_port}) wird beim nächsten App-Start wirksam.")
@@ -1446,6 +1466,7 @@ class App:
                 else:
                     logger.info("Session gestartet: user=%s, project=%s, date=%s", name, project, date)
                     log_start(project=project, name=name, date=date, conn=self.db_conn)
+                    self._mark_dirty()
                     self.session_active[(name, project)] = True
                     self.timer_running = True
                     self.timer_start_time = time.time()
@@ -1455,9 +1476,8 @@ class App:
                         self._pomodoro_work_deadline_ts = time.time() + (self.pomodoro_work_minutes * 60)
                     self._combobox_dirty = True
                     self._refresh_comboboxes()
-                    self.update_db_content()
+                    self._force_date_refresh()
                     self._set_button_state_running()
-                    self._refresh_total_label(project, name)
 
     def stop_session(self):
         """End the session completely. If a break is active, close it first without auto-resume."""
@@ -1476,13 +1496,14 @@ class App:
                 return
             logger.info("Session gestoppt: user=%s, project=%s", name, project)
             log_stop(project=project, name=name, date=date, conn=self.db_conn)
+            self._mark_dirty()
             self.session_active[(name, project)] = False
             self.timer_running = False
             self._session_started_ts = 0.0
             self._pomodoro_work_deadline_ts = 0.0
             self._paused_pomodoro_remaining_seconds = 0
             self._pomodoro_cycles = 0
-            self.update_db_content()
+            self._force_date_refresh()
             self._set_button_state_idle()
 
     def pause_session(self):
@@ -1563,6 +1584,7 @@ class App:
             work_interval_minutes=self.pomodoro_work_minutes if self.pomodoro_enabled else None,
             conn=self.db_conn,
         )
+        self._mark_dirty()
 
         self._set_button_state_break()
 
@@ -1587,6 +1609,7 @@ class App:
             return
 
         log_break_stop(project=project, name=name, conn=self.db_conn)
+        self._mark_dirty()
         ended_kind = self._current_break_kind
         self._break_active = False
         self._break_end_ts = 0.0
@@ -1636,7 +1659,7 @@ class App:
             self._set_button_state_idle()
             self.write("Pause beendet.")
 
-        self.update_db_content()
+        self._force_date_refresh()
 
     def _bring_main_window_to_front(self):
         """Bring the visible window to front when break starts/ends."""
@@ -1766,6 +1789,9 @@ class App:
                 )
                 self.update_timer(duration)
                 self._refresh_total_label(project, name)
+                self.update_db_content()
+                self._update_date_entry_visual()
+                self._mark_clean()
             else:
                 self.write("Ungültige Dauer. Bitte erneut versuchen.", error=True)
                 return None
@@ -1827,13 +1853,33 @@ class App:
         if key == self._last_date_view_input_cache:
             self._update_date_entry_visual()
             return
-        self._last_date_view_input_cache = key
+        self._force_date_refresh()
+
+    def _force_date_refresh(self):
+        """Unconditionally refresh list, timer and totals from DB for the selected date."""
+        self._last_date_view_input_cache = self.date_entry.get().strip()
         if self._closing:
             self._update_date_entry_visual()
             return
         self.update_db_content()
         self._refresh_duration_display()
         self._update_date_entry_visual()
+        self._mark_clean()
+
+    # ----- Sync indicator (dirty/clean) -----
+
+    def _mark_dirty(self):
+        """Signal that the DB changed and the display may be stale."""
+        if not self._db_dirty:
+            self._db_dirty = True
+            self._db_dirty_since = time.time()
+            self._sync_canvas.itemconfig(self._sync_dot, fill="#DDAA00", outline="#AA7700")
+
+    def _mark_clean(self):
+        """Signal that the display is in sync with the DB."""
+        self._db_dirty = False
+        self._db_dirty_since = 0.0
+        self._sync_canvas.itemconfig(self._sync_dot, fill="#00AA00", outline="#006600")
 
     def _refresh_duration_display(self) -> None:
         """Recalculate timer and totals from DB for the selected date (no validation popups)."""
@@ -1933,6 +1979,8 @@ class App:
 
             # Filter by currently selected user and the date shown in the date field
             view_date = self._get_selected_date()
+            suffix = "" if self._is_viewing_today() else "  (nicht heute)"
+            self._status_date_label.config(text=f"Ansicht: {view_date}{suffix}")
             current_name = self.name_entry.get().strip()
             if current_name:
                 cursor.execute(
@@ -1959,6 +2007,8 @@ class App:
                     (view_date,),
                 )
             events = cursor.fetchall()
+            self.db_content_listbox.insert(END, f"── {view_date} ──")
+            self._event_ids.append(None)
             current_user = None
             for event_id, user_name, project, event_type, timestamp in events:
                 if user_name != current_user:
@@ -2064,8 +2114,7 @@ class App:
                 self.write(f"Eintrag {event_id} aktualisiert.")
                 self._combobox_dirty = True
                 self._refresh_comboboxes()
-                self.update_db_content()
-                self.update_duration()
+                self._force_date_refresh()
                 win.destroy()
             else:
                 messagebox.showerror("Fehler", "Eintrag konnte nicht gespeichert werden.", parent=win)
@@ -2085,8 +2134,7 @@ class App:
                 self.write(f"Eintrag {event_id} gelöscht.")
                 self._combobox_dirty = True
                 self._refresh_comboboxes()
-                self.update_db_content()
-                self.update_duration()
+                self._force_date_refresh()
                 win.destroy()
             else:
                 messagebox.showerror("Fehler", "Eintrag konnte nicht gelöscht werden.", parent=win)
@@ -2171,6 +2219,9 @@ class App:
                         source_label="pomodoro_break",
                         timed_break=True,
                     )
+        if self._db_dirty and (time.time() - self._db_dirty_since) >= 2:
+            self._force_date_refresh()
+
         if not self._closing:
             self.master.after(1000, self.update_timer_realtime)
 
