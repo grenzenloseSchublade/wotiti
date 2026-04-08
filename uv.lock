@@ -1368,7 +1368,7 @@ wheels = [
 
 [[package]]
 name = "wotiti"
-version = "1.2.2"
+version = "1.2.4"
 source = { editable = "." }
 dependencies = [
     { name = "polars" },

@@ -141,6 +141,9 @@ class App:
         self._last_break_project = None
         self._last_break_user = None
         self._total_update_counter = 0
+        self._last_date_view_input_cache = None
+        self._date_entry_normal_bg = "#FFFFFF"
+        self._date_entry_past_bg = "#FFFACD"
         os.makedirs(PATH_TO_SOUNDS, exist_ok=True)
 
         # Pomodoro settings (persisted in config)
@@ -303,6 +306,9 @@ class App:
         self.date_entry = Entry(self.entry_frame, **entry_config, width=12)
         self.date_entry.grid(row=0, column=3, pady=5, padx=3, sticky="ew")
         self.date_entry.insert(0, str(datetime.today().strftime("%d-%m-%Y")))
+        self._last_date_view_input_cache = self.date_entry.get().strip()
+        self.date_entry.bind("<Return>", self._on_date_changed)
+        self.date_entry.bind("<FocusOut>", self._on_date_changed)
 
         # Heute button
         self.heute_button = Button(self.entry_frame, text="Heute", command=self.set_today_date, **button_config)
@@ -1749,9 +1755,15 @@ class App:
             project = self.get_project()
             name = self.get_name()
             if project is not None and name:
-                today_str = datetime.today().strftime("%d-%m-%Y")
-                duration = calculate_daily_duration(project=project, name=name, date=today_str, conn=self.db_conn)
-                logger.info("Tages-Dauer aktualisiert: user=%s, project=%s, %.0f s", name, project, duration)
+                date_str = self._get_selected_date()
+                duration = calculate_daily_duration(project=project, name=name, date=date_str, conn=self.db_conn)
+                logger.info(
+                    "Tages-Dauer aktualisiert: user=%s, project=%s, date=%s, %.0f s",
+                    name,
+                    project,
+                    date_str,
+                    duration,
+                )
                 self.update_timer(duration)
                 self._refresh_total_label(project, name)
             else:
@@ -1790,10 +1802,58 @@ class App:
             return None
         return val
 
+    def _get_selected_date(self) -> str:
+        """Return the date from the date entry field, or today if empty/invalid."""
+        val = self.date_entry.get().strip()
+        if val:
+            try:
+                datetime.strptime(val, "%d-%m-%Y")
+                return val
+            except ValueError:
+                pass
+        return datetime.today().strftime("%d-%m-%Y")
+
+    def _is_viewing_today(self) -> bool:
+        return self._get_selected_date() == datetime.today().strftime("%d-%m-%Y")
+
+    def _update_date_entry_visual(self):
+        """Highlight date field when viewing a day other than today."""
+        bg = self._date_entry_normal_bg if self._is_viewing_today() else self._date_entry_past_bg
+        self.date_entry.config(bg=bg)
+
+    def _on_date_changed(self, _event=None):
+        """Refresh list and duration when the date field changes (Return / focus out)."""
+        key = self.date_entry.get().strip()
+        if key == self._last_date_view_input_cache:
+            self._update_date_entry_visual()
+            return
+        self._last_date_view_input_cache = key
+        if self._closing:
+            self._update_date_entry_visual()
+            return
+        self.update_db_content()
+        self._refresh_duration_display()
+        self._update_date_entry_visual()
+
+    def _refresh_duration_display(self) -> None:
+        """Recalculate timer and totals from DB for the selected date (no validation popups)."""
+        if not self.db_conn:
+            return
+        project = self._get_project_silent()
+        name = self._get_name_silent()
+        if not project or not name:
+            return
+        date_str = self._get_selected_date()
+        duration = calculate_daily_duration(project=project, name=name, date=date_str, conn=self.db_conn)
+        self.update_timer(duration)
+        self._refresh_total_label(project, name)
+
     def set_today_date(self):
         """Sets the date entry to today's date."""
+        self._last_date_view_input_cache = None
         self.date_entry.delete(0, END)
         self.date_entry.insert(0, str(datetime.today().strftime("%d-%m-%Y")))
+        self._on_date_changed()
 
     def clear_console(self):
         """Clears the console text widget."""
@@ -1871,8 +1931,8 @@ class App:
             if cursor.fetchone() is None:
                 return
 
-            # Filter by currently selected user, show only today
-            today_str = datetime.today().strftime("%d-%m-%Y")
+            # Filter by currently selected user and the date shown in the date field
+            view_date = self._get_selected_date()
             current_name = self.name_entry.get().strip()
             if current_name:
                 cursor.execute(
@@ -1884,7 +1944,7 @@ class App:
                     ORDER BY e.timestamp
                     LIMIT 500
                 """,
-                    (current_name, today_str),
+                    (current_name, view_date),
                 )
             else:
                 cursor.execute(
@@ -1896,7 +1956,7 @@ class App:
                     ORDER BY u.name, e.timestamp
                     LIMIT 500
                 """,
-                    (today_str,),
+                    (view_date,),
                 )
             events = cursor.fetchall()
             current_user = None
@@ -2069,13 +2129,13 @@ class App:
                 self._mini_break_label.config(text="")
 
         if project is not None and name and self.session_active.get((name, project)):
-            today_str = datetime.today().strftime("%d-%m-%Y")
+            view_date = self._get_selected_date()
             daily_dur = (
-                calculate_daily_duration(project=project, name=name, date=today_str, conn=self.db_conn)
+                calculate_daily_duration(project=project, name=name, date=view_date, conn=self.db_conn)
                 if self.db_conn
                 else 0
             )
-            if self.timer_running:
+            if self.timer_running and self._is_viewing_today():
                 start_ts = self.timer_start_time or time.time()
                 elapsed_time = time.time() - start_ts + daily_dur
             else:
@@ -2120,7 +2180,7 @@ class App:
         name = self._get_name_silent()
 
         if project is not None and name:
-            if self.timer_running:
+            if self.timer_running and self._is_viewing_today():
                 start_ts = self.timer_start_time or time.time()
                 elapsed_time = time.time() - start_ts + duration
             else:
@@ -2164,8 +2224,8 @@ class App:
         t_hr, t_min = divmod(t_min, 60)
         self.timer_total_label.config(text=f"\u03a3 {t_hr:02}:{t_min:02}:{t_sec:02}")
 
-        today_str = datetime.today().strftime("%d-%m-%Y")
-        brk = calculate_daily_break_duration(name=name, date=today_str, conn=self.db_conn)
+        view_date = self._get_selected_date()
+        brk = calculate_daily_break_duration(name=name, date=view_date, conn=self.db_conn)
         b_min, b_sec = divmod(int(brk), 60)
         b_hr, b_min = divmod(b_min, 60)
         if brk > 0:
