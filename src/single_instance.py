@@ -4,6 +4,9 @@ Single-instance IPC for the WoTITI tkinter GUI only.
 A dedicated localhost TCP port carries a short magic payload so a second process
 can ask the first to raise the main (or mini) window. This is not related to the
 Dash dashboard or browser.
+
+On Windows, a named mutex (CreateMutexW) provides a hard guarantee that only one
+process runs; the socket is used to raise the existing window.
 """
 
 from __future__ import annotations
@@ -12,7 +15,9 @@ import contextlib
 import errno
 import logging
 import socket
+import sys
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -20,6 +25,10 @@ from typing import Any
 # Magic line sent by a second process; first process raises the main window only.
 FOCUS_MESSAGE = b"WOTITI_FOCUS\n"
 FOCUS_PREFIX = b"WOTITI_FOCUS"
+
+# Windows named mutex — kernel-level single instance (Local namespace).
+_WIN_MUTEX_NAME = "Local\\WoTitiSingleInstance"
+_win_mutex_handle: int | None = None
 
 
 def ipc_port_from_config(config: dict) -> int:
@@ -47,19 +56,98 @@ def _notify_existing(port: int, logger: logging.Logger) -> None:
         sock.sendall(FOCUS_MESSAGE)
 
 
+def _notify_existing_with_retries(
+    port: int,
+    logger: logging.Logger,
+    attempts: int = 12,
+    delay_sec: float = 0.15,
+) -> bool:
+    """Try to reach the primary instance; return True if any attempt succeeded."""
+    for i in range(attempts):
+        try:
+            _notify_existing(port, logger)
+            return True
+        except OSError as e:
+            logger.debug("IPC notify attempt %s/%s: %s", i + 1, attempts, e)
+            if i + 1 < attempts:
+                time.sleep(delay_sec)
+    return False
+
+
+def windows_single_instance_mutex_guard_or_exit(config: dict, logger: logging.Logger) -> None:
+    """
+    Windows only: if another WoTITI process already holds the mutex, notify via TCP
+    and exit. Otherwise acquire the mutex for the lifetime of this process.
+
+    Call after logging is configured, before ``tk.Tk()`` and before socket bind.
+    """
+    global _win_mutex_handle
+
+    if not sys.platform.startswith("win"):
+        return
+    if not config.get("single_instance", True):
+        return
+
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    CreateMutexW = kernel32.CreateMutexW
+    CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+    CreateMutexW.restype = wintypes.HANDLE
+
+    ERROR_ALREADY_EXISTS = 183
+    mutex = CreateMutexW(None, False, _WIN_MUTEX_NAME)
+    last_err = kernel32.GetLastError()
+
+    if not mutex:
+        logger.warning("CreateMutexW failed; continuing without Windows mutex guard.")
+        return
+
+    if last_err == ERROR_ALREADY_EXISTS:
+        port = ipc_port_from_config(config)
+        if _notify_existing_with_retries(port, logger):
+            logger.info("WoTITI läuft bereits (Mutex) — Hauptfenster in den Vordergrund angefordert.")
+        else:
+            logger.warning(
+                "WoTITI-Mutex zeigt zweite Instanz, IPC auf Port %s nicht erreichbar — beende ohne zweites Fenster.",
+                port,
+            )
+        kernel32.CloseHandle(mutex)
+        sys.exit(0)
+
+    _win_mutex_handle = int(mutex)
+
+
+def release_windows_singleton_mutex() -> None:
+    """Release the Windows mutex handle if held (call on shutdown)."""
+    global _win_mutex_handle
+
+    if _win_mutex_handle is None or not sys.platform.startswith("win"):
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    with contextlib.suppress(Exception):
+        kernel32.CloseHandle(wintypes.HANDLE(_win_mutex_handle))
+    _win_mutex_handle = None
+
+
 def try_acquire_single_instance(config: dict, logger: logging.Logger) -> SingleInstanceOutcome:
     """
     Before ``tk.Tk()``:
     - Bind localhost IPC port -> we are primary; return listen socket + stop_event.
-    - Port busy -> try to notify primary and return ``should_exit=True``.
-    - Port busy but notify fails -> log warning and run without single-instance (return no socket).
+    - Port busy -> notify primary (with retries); ``should_exit=True`` or ``sys.exit(0)``.
     """
     if not config.get("single_instance", True):
         return SingleInstanceOutcome(False, None, 0, None)
 
     port = ipc_port_from_config(config)
     listen_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    listen_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    # SO_REUSEADDR on Windows can weaken exclusivity for listeners; use only on non-Windows.
+    if not sys.platform.startswith("win"):
+        listen_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         listen_sock.bind(("127.0.0.1", port))
     except OSError as e:
@@ -68,19 +156,16 @@ def try_acquire_single_instance(config: dict, logger: logging.Logger) -> SingleI
             listen_sock.close()
             raise
         listen_sock.close()
-        try:
-            _notify_existing(port, logger)
+        if _notify_existing_with_retries(port, logger):
             logger.info("WoTITI läuft bereits — Hauptfenster in den Vordergrund angefordert.")
             return SingleInstanceOutcome(True, None, port, None)
-        except OSError:
-            logger.warning(
-                "Single-Instance-Port %s ist belegt, aber keine WoTITI-Instanz hat geantwortet — "
-                "Start ohne Single-Instance-Schutz.",
-                port,
-            )
-            return SingleInstanceOutcome(False, None, port, None)
+        logger.warning(
+            "Single-Instance-Port %s belegt, IPC nicht erreichbar — beende ohne zweites Fenster.",
+            port,
+        )
+        sys.exit(0)
 
-    listen_sock.listen(1)
+    listen_sock.listen(128)
     stop_event = threading.Event()
     return SingleInstanceOutcome(False, listen_sock, port, stop_event)
 
@@ -129,3 +214,4 @@ def shutdown_ipc(listen_sock: socket.socket | None, stop_event: threading.Event 
     if listen_sock:
         with contextlib.suppress(OSError):
             listen_sock.close()
+    release_windows_singleton_mutex()

@@ -15,7 +15,12 @@ from app import App
 # Centralized logging configuration
 # Always log to data/wotiti.log so the in-app developer console can show entries.
 # In frozen --noconsole mode, sys.__stdout__/stderr are None → also redirect streams.
-from single_instance import shutdown_ipc, start_ipc_server_thread, try_acquire_single_instance
+from single_instance import (
+    shutdown_ipc,
+    start_ipc_server_thread,
+    try_acquire_single_instance,
+    windows_single_instance_mutex_guard_or_exit,
+)
 from utils import PATH_TO_DATA, load_config
 
 _log_file = os.path.join(PATH_TO_DATA, "wotiti.log")
@@ -88,6 +93,7 @@ def main():
     config = load_config()
     stats_port = _find_available_port(config.get("dashboard_port", 8052))
 
+    windows_single_instance_mutex_guard_or_exit(config, logger)
     si = try_acquire_single_instance(config, logger)
     if si.should_exit:
         sys.exit(0)
