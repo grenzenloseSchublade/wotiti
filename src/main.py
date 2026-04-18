@@ -15,23 +15,22 @@ from app import App
 # Centralized logging configuration
 # Always log to data/wotiti.log so the in-app developer console can show entries.
 # In frozen --noconsole mode, sys.__stdout__/stderr are None → also redirect streams.
+from single_instance import shutdown_ipc, start_ipc_server_thread, try_acquire_single_instance
 from utils import PATH_TO_DATA, load_config
 
 _log_file = os.path.join(PATH_TO_DATA, "wotiti.log")
 os.makedirs(PATH_TO_DATA, exist_ok=True)
 _log_fmt = logging.Formatter(
-    '[%(asctime)s] %(levelname)s - %(name)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S',
+    "[%(asctime)s] %(levelname)s - %(name)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
-_file_handler = logging.handlers.RotatingFileHandler(
-    _log_file, encoding="utf-8", maxBytes=1_000_000, backupCount=3
-)
+_file_handler = logging.handlers.RotatingFileHandler(_log_file, encoding="utf-8", maxBytes=1_000_000, backupCount=3)
 _file_handler.setFormatter(_log_fmt)
 
-if getattr(sys, 'frozen', False) and sys.__stdout__ is None:
+if getattr(sys, "frozen", False) and sys.__stdout__ is None:
     # Frozen --noconsole: file-only logging; give streams a safe target
     logging.basicConfig(level=logging.INFO, handlers=[_file_handler])
-    _devnull = open(os.devnull, "w")          # noqa: SIM115
+    _devnull = open(os.devnull, "w")  # noqa: SIM115
     sys.stdout = sys.stderr = _devnull
     sys.__stdout__ = sys.__stderr__ = _devnull
 else:
@@ -40,7 +39,7 @@ else:
     _stream_handler.setFormatter(_log_fmt)
     logging.basicConfig(level=logging.INFO, handlers=[_stream_handler, _file_handler])
 # Suppress noisy debug output from internal modules
-logging.getLogger('db_helper').setLevel(logging.INFO)
+logging.getLogger("db_helper").setLevel(logging.INFO)
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +55,7 @@ def _find_available_port(start_port):
 
 def _resolve_app_icon_path() -> str:
     """Return path to the ICO used for runtime window/taskbar icon."""
-    if getattr(sys, 'frozen', False):
+    if getattr(sys, "frozen", False):
         base_dir = os.path.dirname(sys.executable)
         return os.path.join(base_dir, "assets", "wotiti.ico")
     project_root = os.path.dirname(os.path.abspath(__file__))
@@ -72,12 +71,14 @@ def _configure_windows_taskbar_icon(root: tk.Tk) -> None:
     app_id = "WoTiTi.WorkTimeTracker"
     with contextlib.suppress(Exception):
         import ctypes
+
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
 
     icon_path = _resolve_app_icon_path()
     if os.path.isfile(icon_path):
         with contextlib.suppress(Exception):
             root.iconbitmap(default=icon_path)
+
 
 def main():
     """Main function to start both the Tkinter app and the statistics dashboard."""
@@ -87,20 +88,35 @@ def main():
     config = load_config()
     stats_port = _find_available_port(config.get("dashboard_port", 8052))
 
+    si = try_acquire_single_instance(config, logger)
+    if si.should_exit:
+        sys.exit(0)
+
     try:
         # Start the Tkinter app in the main thread
         root = tk.Tk()
         _configure_windows_taskbar_icon(root)
         app = App(root, stats_port=stats_port)  # noqa: F841
 
+        if si.listen_socket and si.stop_event:
+            logger.info("Single-Instance aktiv (IPC 127.0.0.1:%s, nur Hauptfenster).", si.port)
+            start_ipc_server_thread(
+                si.listen_socket,
+                si.stop_event,
+                lambda fn: root.after(0, fn),
+                app.raise_main_window_from_second_instance,
+                logger,
+            )
+
         # Start the statistics dashboard in a separate thread/process
         def run_stats():
             nonlocal stats_process
             try:
                 logger.info("Dashboard wird gestartet auf Port %d...", stats_port)
-                if getattr(sys, 'frozen', False):
+                if getattr(sys, "frozen", False):
                     # Frozen EXE: run dashboard in-process (subprocess would re-launch the EXE)
                     from stats_dashboard import app as dash_app
+
                     dash_app.run(debug=False, use_reloader=False, port=stats_port)
                 else:
                     # Development: run as subprocess
@@ -108,9 +124,7 @@ def main():
                     env = os.environ.copy()
                     env["DASH_PORT"] = str(stats_port)
                     stats_process = subprocess.Popen(
-                        [sys.executable, os.path.join(project_root, "stats_dashboard.py")],
-                        cwd=project_root,
-                        env=env
+                        [sys.executable, os.path.join(project_root, "stats_dashboard.py")], cwd=project_root, env=env
                     )
                     logger.info("Dashboard-Subprocess gestartet (PID %d).", stats_process.pid)
                     stats_process.wait()
@@ -138,6 +152,7 @@ def main():
         messagebox.showerror("Error", f"An unexpected error occurred: {e}")
         logger.error("Unerwarteter Fehler: %s", e)
     finally:
+        shutdown_ipc(si.listen_socket, si.stop_event)
         if stats_process:
             logger.info("Dashboard-Subprocess wird beendet...")
             try:
@@ -149,6 +164,7 @@ def main():
             except Exception as e:
                 logger.error("Fehler beim Beenden des Dashboards: %s", e)
         logger.info("Shutdown abgeschlossen.")
+
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()

@@ -113,6 +113,9 @@ Steuert die **Ereignisliste** (nur Einträge dieses Tages) und die **angezeigten
 
 **Mini-Modus** (▽/△): Kompakte Always-on-top Ansicht mit Tageszeit, Drag-Support und persistenter Position.
 
+**Ein Fenster (Single-Instance)**  
+Ein erneuter Start der Anwendung (EXE/App unter Windows/Linux) beendet sich und holt stattdessen das **laufende WoTITI-Hauptfenster** (bzw. den **Mini-Modus**, falls aktiv) in den Vordergrund. Das betrifft **nicht** den Browser oder das Auswertungs-Dashboard. Zum Testen mehrerer Instanzen kann in `data/config.json` `single_instance` auf `false` gesetzt werden (optional auch `single_instance_port` für den reinen IPC-Port).
+
 **Funktionsumfang**
 
 - Drei-Zustands-Logik für Arbeitssitzungen: Start, Pause, Stop

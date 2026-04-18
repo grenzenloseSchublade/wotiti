@@ -14,7 +14,7 @@ import polars as pl
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "1.2.5"
+APP_VERSION = "1.2.6"
 APP_AUTHOR = "grenzenloseSchublade"
 APP_LICENSE = "MIT"
 
@@ -80,6 +80,7 @@ DEFAULT_CONFIG = {
     "pomodoro_auto_break": True,
     "pomodoro_sound_enabled": True,
     "pomodoro_sound_local_path": "sounds/StartupSound.wav",
+    "single_instance": True,
 }
 
 

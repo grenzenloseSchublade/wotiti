@@ -1676,6 +1676,21 @@ class App:
         except Exception as e:
             logger.warning("Window focus failed: %s", e)
 
+    def raise_main_window_from_second_instance(self):
+        """Raise main or mini tkinter window (second EXE / IPC). Does not touch browser/Dash."""
+        self._bring_main_window_to_front()
+        if sys.platform.startswith("win"):
+            try:
+                import ctypes
+
+                if self._mini_mode and self._mini_toplevel:
+                    hwnd = int(self._mini_toplevel.winfo_id())
+                else:
+                    hwnd = int(self.master.winfo_id())
+                ctypes.windll.user32.SetForegroundWindow(hwnd)
+            except Exception as e:
+                logger.debug("SetForegroundWindow (best effort): %s", e)
+
     def _preload_sound(self):
         """Cache sound path and player executable for instant playback."""
         path = self._resolve_sound_path(self.pomodoro_sound_local_path)
