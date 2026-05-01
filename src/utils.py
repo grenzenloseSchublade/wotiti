@@ -107,7 +107,7 @@ def _validate_config(cfg: dict) -> dict:
         except (TypeError, ValueError):
             logger.warning("Config: '%s' ungültig (%r) — verwende Default %s.", key, out.get(key), default)
             out[key] = default
-    bool_fields = ["pomodoro_enabled", "pomodoro_auto_break", "pomodoro_sound_enabled"]
+    bool_fields = ["pomodoro_enabled", "pomodoro_auto_break", "pomodoro_sound_enabled", "single_instance"]
     for key in bool_fields:
         if not isinstance(out.get(key), bool):
             out[key] = bool(DEFAULT_CONFIG[key])
