@@ -16,6 +16,24 @@ logger = logging.getLogger(__name__)
 # Konstanten für Datumsformate
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 DATE_FORMAT = "%Y-%m-%d"
+# In der ``events.date``-Spalte verwendete UI-Darstellung (Tag-Reiter, Listbox).
+UI_DATE_FORMAT = "%d-%m-%Y"
+
+
+def derive_date_from_timestamp(timestamp: str | datetime | None) -> str | None:
+    """Leitet aus einem Zeitstempel den UI-Datums-String (DD-MM-YYYY) ab.
+
+    Akzeptiert ``datetime``-Objekte sowie Strings im Standardformat
+    ``%Y-%m-%d %H:%M:%S``. Liefert ``None`` bei ungültiger Eingabe.
+    """
+    if timestamp is None:
+        return None
+    if isinstance(timestamp, datetime):
+        return timestamp.strftime(UI_DATE_FORMAT)
+    try:
+        return datetime.strptime(str(timestamp), TIMESTAMP_FORMAT).strftime(UI_DATE_FORMAT)
+    except (ValueError, TypeError):
+        return None
 
 
 def create_connection(db_file: str = DATABASE_PATH) -> sqlite3.Connection | None:
@@ -90,6 +108,8 @@ def create_events_table(conn: sqlite3.Connection) -> bool:
         execute_sql(conn, "CREATE INDEX IF NOT EXISTS idx_events_user_id ON events(user_id);")
         execute_sql(conn, "CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);")
         execute_sql(conn, "CREATE INDEX IF NOT EXISTS idx_events_project_user ON events(project, user_id);")
+        # Häufiger Filter: Listbox-Tagessicht und Tagesdauer-Berechnung.
+        execute_sql(conn, "CREATE INDEX IF NOT EXISTS idx_events_user_date ON events(user_id, date);")
     return success
 
 
@@ -322,13 +342,18 @@ def log_event(
     timestamp: datetime | None = None,
     date: str | None = None,
 ) -> bool:
-    """Log an event (start/stop) for a session."""
-    if not all([conn, name, date, event_type in ["start", "stop"]]):
+    """Log an event (start/stop) for a session.
+
+    ``date`` ist optional: wird er nicht (oder inkonsistent) angegeben, wird er
+    aus ``timestamp`` (bzw. ``datetime.now()``) abgeleitet. Damit ist die
+    ``events.date``-Spalte garantiert konsistent zum Zeitstempel — Single
+    Source of Truth ist immer der Zeitstempel.
+    """
+    if not conn or not name or event_type not in ("start", "stop"):
         logger.error("Missing required parameters for log_event.")
         return False
     project = str(project).strip()
     name = str(name).strip()
-    date = str(date).strip()
 
     try:
         cursor = conn.cursor()
@@ -339,8 +364,21 @@ def log_event(
         # Ensure project exists in projects table
         check_project(conn, project)
 
-        # Format timestamp
-        timestamp_str = timestamp.strftime(TIMESTAMP_FORMAT) if timestamp else datetime.now().strftime(TIMESTAMP_FORMAT)
+        # Format timestamp (Single Source of Truth)
+        ts_obj = timestamp if timestamp else datetime.now()
+        timestamp_str = ts_obj.strftime(TIMESTAMP_FORMAT)
+
+        # Datum konsequent aus Zeitstempel ableiten. Vom Aufrufer übergebenes
+        # ``date`` wird verworfen, wenn es vom Zeitstempel abweicht.
+        derived_date = ts_obj.strftime(UI_DATE_FORMAT)
+        provided = str(date).strip() if date else ""
+        if provided and provided != derived_date:
+            logger.warning(
+                "log_event: date '%s' weicht vom Zeitstempel ab — verwende '%s'.",
+                provided,
+                derived_date,
+            )
+        final_date = derived_date
 
         # Insert event
         cursor.execute(
@@ -348,12 +386,17 @@ def log_event(
             INSERT INTO events (user_id, project, event_type, timestamp, date)
             VALUES (?, ?, ?, ?, ?)
         """,
-            (user_id, project, event_type, timestamp_str, date),
+            (user_id, project, event_type, timestamp_str, final_date),
         )
         conn.commit()
 
-        print(
-            f"{event_type.capitalize()} time for project {project} logged for user '{name}' on {date}: {timestamp_str}"
+        logger.info(
+            "%s logged: user=%s project=%s date=%s ts=%s",
+            event_type.capitalize(),
+            name,
+            project,
+            final_date,
+            timestamp_str,
         )
         return True
     except Error as e:
@@ -632,11 +675,21 @@ def calculate_daily_duration(
     date: str | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> float:
-    """Calculate the duration for a single day only."""
+    """Calculate the duration for a single day only.
+
+    Sessions, die Mitternacht überspannen, werden anteilig auf beide Tage
+    verteilt — d. h. eine Session 23:50 → 00:30 trägt 10 min zum Vortag
+    und 30 min zum Folgetag bei.
+    """
     if not conn or not name:
         return 0
     if date is None:
         date = datetime.now().strftime("%d-%m-%Y")
+
+    try:
+        target_day = datetime.strptime(date, "%d-%m-%Y").date()
+    except ValueError:
+        return 0
 
     try:
         cursor = conn.cursor()
@@ -645,29 +698,42 @@ def calculate_daily_duration(
         if row is None:
             return 0
         user_id = row[0]
+        # Lade alle Events für (user, project) und paare start/stop. Damit
+        # können auch Sessions korrekt verbucht werden, deren Start- bzw.
+        # Stop-Event auf einen anderen Tag fällt (Mitternachts-Split).
         cursor.execute(
             """
             SELECT event_type, timestamp
             FROM events
-            WHERE project = ? AND user_id = ? AND date = ?
+            WHERE project = ? AND user_id = ?
             ORDER BY timestamp
         """,
-            (project, user_id, date),
+            (project, user_id),
         )
 
         events = cursor.fetchall()
-        total_duration = 0
-        start_time = None
+        total_seconds = 0.0
+        start_time: datetime | None = None
+        from datetime import timedelta as _td
 
         for event_type, timestamp_str in events:
-            timestamp = datetime.strptime(timestamp_str, TIMESTAMP_FORMAT)
+            try:
+                ts = datetime.strptime(timestamp_str, TIMESTAMP_FORMAT)
+            except ValueError:
+                continue
             if event_type == "start":
-                start_time = timestamp
+                start_time = ts
             elif event_type == "stop" and start_time is not None:
-                total_duration += (timestamp - start_time).total_seconds()
+                # Anteil dieser Session, der in ``target_day`` fällt.
+                day_start = datetime.combine(target_day, datetime.min.time())
+                day_end = day_start + _td(days=1)
+                chunk_start = max(start_time, day_start)
+                chunk_end = min(ts, day_end)
+                if chunk_end > chunk_start:
+                    total_seconds += (chunk_end - chunk_start).total_seconds()
                 start_time = None
 
-        return total_duration
+        return total_seconds
     except Error as e:
         logger.error("Error calculating daily duration: %s", e)
         return 0
@@ -850,26 +916,54 @@ def get_event_by_id(conn: sqlite3.Connection | None, event_id: int) -> dict | No
         cur.close()
 
 
-def update_event(conn: sqlite3.Connection | None, event_id: int, project: str, timestamp: str, date: str) -> bool:
-    """Update project, timestamp, and date of an existing event."""
+def update_event(
+    conn: sqlite3.Connection | None,
+    event_id: int,
+    project: str,
+    timestamp: str,
+    date: str | None = None,
+) -> bool:
+    """Update project, timestamp und (abgeleitetes) date eines Events.
+
+    ``date`` wird IMMER aus ``timestamp`` abgeleitet — ein abweichend
+    übergebener Wert führt zu einer Warnung und wird ignoriert. Damit kann
+    die UI den Zeitstempel ändern, ohne dass die Tag-Zuordnung veraltet.
+    """
     if not conn:
         return False
     cur = None
     try:
-        # Validate timestamp format
-        datetime.strptime(timestamp, TIMESTAMP_FORMAT)
-        cur = conn.cursor()
-        # Ensure project exists
-        check_project(conn, project)
-        cur.execute(
-            """
-            UPDATE events SET project = ?, timestamp = ?, date = ?
-            WHERE id = ?
-        """,
-            (project, timestamp, date, event_id),
+        # Validate timestamp format and derive date.
+        parsed_ts = datetime.strptime(timestamp, TIMESTAMP_FORMAT)
+        derived_date = parsed_ts.strftime(UI_DATE_FORMAT)
+        if date and str(date).strip() and str(date).strip() != derived_date:
+            logger.warning(
+                "update_event(%s): date '%s' weicht vom Zeitstempel ab — verwende '%s'.",
+                event_id,
+                date,
+                derived_date,
+            )
+        final_date = derived_date
+
+        # Verwende eine explizite Transaktion, damit ``check_project`` und
+        # das UPDATE atomar sind.
+        with conn:
+            check_project(conn, project)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE events SET project = ?, timestamp = ?, date = ?
+                WHERE id = ?
+            """,
+                (project, timestamp, final_date, event_id),
+            )
+        logger.info(
+            "Event %s updated: project=%s, timestamp=%s, date=%s",
+            event_id,
+            project,
+            timestamp,
+            final_date,
         )
-        conn.commit()
-        logger.info("Event %s updated: project=%s, timestamp=%s, date=%s", event_id, project, timestamp, date)
         return cur.rowcount > 0
     except (Error, ValueError) as e:
         logger.error("Error updating event %s: %s", event_id, e)
@@ -877,6 +971,115 @@ def update_event(conn: sqlite3.Connection | None, event_id: int, project: str, t
     finally:
         if cur:
             cur.close()
+
+
+def validate_event_pair(conn: sqlite3.Connection | None, event_id: int) -> tuple[bool, str]:
+    """Prüft Plausibilität eines Events ggü. seinem Pendant (start↔stop).
+
+    Liefert ``(ok, message)``. ``ok=False`` bedeutet, dass die zeitliche
+    Reihenfolge verletzt ist (Stop vor Start oder Start nach Stop des Paares).
+    Findet sich kein passendes Pendant, gilt der Eintrag als zulässig
+    (z. B. offene Session ohne Stop).
+    """
+    if not conn:
+        return False, "Keine Datenbankverbindung."
+    ev = get_event_by_id(conn, event_id)
+    if ev is None:
+        return False, "Eintrag nicht gefunden."
+    try:
+        ts = datetime.strptime(ev["timestamp"], TIMESTAMP_FORMAT)
+    except ValueError:
+        return False, f"Ungültiger Zeitstempel: {ev['timestamp']}"
+
+    cur = conn.cursor()
+    try:
+        if ev["event_type"] == "stop":
+            # Suche das zuletzt eingefügte Start-Event desselben (User, Projekt)
+            # vor diesem Stop. Wir orientieren uns an ``id`` (Insertion Order),
+            # damit auch Pairs erkannt werden, deren Reihenfolge durch eine
+            # Bearbeitung verkehrt wurde (Stop-vor-Start temporär).
+            cur.execute(
+                """
+                SELECT e.timestamp FROM events e
+                JOIN users u ON u.id = e.user_id
+                WHERE u.name = ? AND e.project = ? AND e.event_type = 'start'
+                  AND e.id < ?
+                ORDER BY e.id DESC LIMIT 1
+                """,
+                (ev["user"], ev["project"], event_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return True, "Kein zugehöriger Start gefunden — geprüft."
+            try:
+                start_ts = datetime.strptime(row[0], TIMESTAMP_FORMAT)
+            except ValueError:
+                return True, ""
+            if ts < start_ts:
+                return False, f"Stop ({ts}) liegt vor zugehörigem Start ({start_ts})."
+            return True, ""
+        else:  # start
+            # Nachfolgender Stop desselben (User, Projekt) per Insertion Order.
+            cur.execute(
+                """
+                SELECT e.timestamp FROM events e
+                JOIN users u ON u.id = e.user_id
+                WHERE u.name = ? AND e.project = ? AND e.event_type = 'stop'
+                  AND e.id > ?
+                ORDER BY e.id ASC LIMIT 1
+                """,
+                (ev["user"], ev["project"], event_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return True, "Kein zugehöriger Stop gefunden — offene Session."
+            try:
+                stop_ts = datetime.strptime(row[0], TIMESTAMP_FORMAT)
+            except ValueError:
+                return True, ""
+            if ts > stop_ts:
+                return False, f"Start ({ts}) liegt nach zugehörigem Stop ({stop_ts})."
+            return True, ""
+    finally:
+        cur.close()
+
+
+def migrate_repair_dates(conn: sqlite3.Connection | None) -> int:
+    """Repariert ``events.date``-Werte, die vom Zeitstempel abweichen.
+
+    Wird einmalig pro Datenbank ausgeführt (Marker in ``migration_log``).
+    Gibt die Anzahl reparierter Zeilen zurück.
+    """
+    if not conn:
+        return 0
+    marker = "repair_dates_v1"
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """CREATE TABLE IF NOT EXISTS migration_log (
+                table_name TEXT PRIMARY KEY,
+                migrated_at DATETIME NOT NULL
+            )"""
+        )
+        cur.execute("SELECT 1 FROM migration_log WHERE table_name = ?", (marker,))
+        if cur.fetchone() is not None:
+            return 0
+        # In der DB ist ``timestamp`` als ``YYYY-MM-DD HH:MM:SS`` gespeichert,
+        # ``date`` als ``DD-MM-YYYY``. Berechne erwarteten Wert per substr().
+        derived_expr = "substr(timestamp,9,2) || '-' || substr(timestamp,6,2) || '-' || substr(timestamp,1,4)"
+        with conn:
+            cur.execute(f"UPDATE events SET date = {derived_expr} WHERE date IS NULL OR date != {derived_expr}")
+            repaired = cur.rowcount
+            cur.execute(
+                "INSERT INTO migration_log (table_name, migrated_at) VALUES (?, ?)",
+                (marker, datetime.now().strftime(TIMESTAMP_FORMAT)),
+            )
+        if repaired:
+            logger.info("migrate_repair_dates: %d Zeilen repariert.", repaired)
+        return repaired
+    except Error as e:
+        logger.error("migrate_repair_dates fehlgeschlagen: %s", e)
+        return 0
 
 
 def delete_event(conn: sqlite3.Connection | None, event_id: int) -> bool:

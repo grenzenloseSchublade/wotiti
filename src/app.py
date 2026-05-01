@@ -26,6 +26,7 @@ from tkinter import (
     Listbox,
     Scrollbar,
     Spinbox,
+    StringVar,
     Text,
     Toplevel,
     W,
@@ -61,7 +62,9 @@ from db_helper import (
     log_stop,
     migrate_legacy_user_tables,
     migrate_projects_to_table,
+    migrate_repair_dates,
     update_event,
+    validate_event_pair,
 )
 from utils import (
     APP_AUTHOR,
@@ -502,6 +505,7 @@ class App:
                 check_user(self.db_conn, default_user)
                 migrate_legacy_user_tables(self.db_conn)
                 migrate_projects_to_table(self.db_conn)
+                migrate_repair_dates(self.db_conn)
                 self._refresh_comboboxes(force=True)
                 self.name_entry.set(default_user)
                 default_project = self.config.get("default_project", "1")
@@ -868,15 +872,10 @@ class App:
     # ----- Settings Window -----
     def open_settings(self):
         """Open the settings/configuration window."""
-        # Block if any session is active
-        active = [k for k, v in self.session_active.items() if v]
-        if active:
-            messagebox.showwarning(
-                "Session aktiv",
-                "Bitte alle laufenden Sessions stoppen, bevor die Einstellungen geöffnet werden.",
-                parent=self.master,
-            )
-            return
+        # Phase 2.1: Settings sind jederzeit öffenbar; nur DB-Sektion wird
+        # bei laufender Session ausgegraut, weil ein DB-Wechsel mitten in
+        # einer Session den State korrumpieren würde.
+        sessions_active = any(self.session_active.values())
 
         win = Toplevel(self.master)
         win.title("Einstellungen")
@@ -982,6 +981,22 @@ class App:
         ).pack(side="left")
 
         db_frame.grid_columnconfigure(1, weight=1)
+
+        # Phase 2.1: DB-Sektion sperren, solange eine Session läuft.
+        if sessions_active:
+            db_var.config(state="disabled")
+            for child in btn_row.winfo_children():
+                with contextlib.suppress(Exception):
+                    child.config(state="disabled")
+            Label(
+                db_frame,
+                text="Bitte alle laufenden Sessions stoppen, um den DB-Pfad zu ändern.",
+                bg="#C0C0C0",
+                fg="#B00020",
+                font=("MS Sans Serif", 9, "italic"),
+                wraplength=480,
+                justify="left",
+            ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
         # ── Benutzer ──
         user_frame = LabelFrame(
@@ -1271,6 +1286,14 @@ class App:
         def _save():
             new_db = db_var.get().strip()
             new_port = port_var.get().strip()
+            # Phase 2.1: Bei laufender Session DB-Pfad-Wechsel hart ablehnen.
+            if sessions_active and new_db and new_db != self._db_path:
+                messagebox.showwarning(
+                    "Session aktiv",
+                    "DB-Pfad kann nicht gewechselt werden, solange Sessions laufen.",
+                    parent=win,
+                )
+                return
             if not new_port.isdigit() or not (1024 <= int(new_port) <= 65535):
                 messagebox.showwarning("Ungültiger Port", "Port muss zwischen 1024 und 65535 liegen.", parent=win)
                 return
@@ -1349,6 +1372,7 @@ class App:
                         create_break_events_table(self.db_conn)
                         migrate_legacy_user_tables(self.db_conn)
                         migrate_projects_to_table(self.db_conn)
+                        migrate_repair_dates(self.db_conn)
                     self.write(f"Datenbank gewechselt: {self._db_path}")
                     logger.info("Datenbank gewechselt: %s → %s", old_path, self._db_path)
                 except Exception as e:
@@ -1369,6 +1393,9 @@ class App:
         Button(action_frame, text="Speichern", command=_save, **btn).pack(side="left", padx=(0, 10))
         Button(action_frame, text="Abbrechen", command=win.destroy, **btn).pack(side="left")
         Button(action_frame, text="Über WoTITI", command=lambda: self._open_about(win), **btn).pack(side="right")
+
+        # Phase 2.6: Esc = Abbrechen.
+        win.bind("<Escape>", lambda _e: win.destroy())
 
     # ----- About Dialog -----
     def _open_about(self, parent=None):
@@ -1459,13 +1486,15 @@ class App:
                 return
             project = self.get_project()
             name = self.get_name()
-            date = self.get_date()
-            if project is not None and name and date:
+            if project is not None and name:
                 if self.session_active.get((name, project), False):
                     self.write("Session bereits gestartet. Bitte zuerst stoppen.", error=True)
                 else:
-                    logger.info("Session gestartet: user=%s, project=%s, date=%s", name, project, date)
-                    log_start(project=project, name=name, date=date, conn=self.db_conn)
+                    # Phase 1.3: ``date`` wird in der DB-Schicht aus dem realen
+                    # Zeitstempel (datetime.now) abgeleitet — UI-Datumsfeld
+                    # ist hier nur Anzeige/Filter und nicht Schreib-Quelle.
+                    logger.info("Session gestartet: user=%s, project=%s", name, project)
+                    log_start(project=project, name=name, conn=self.db_conn)
                     self._mark_dirty()
                     self.session_active[(name, project)] = True
                     self.timer_running = True
@@ -1488,14 +1517,16 @@ class App:
             return
         project = self.get_project()
         name = self.get_name()
-        date = self.get_date()
         if project is not None and name:
             if not self.session_active.get((name, project), False):
                 # Session may already be closed (e.g. manual break closed it).
                 self._set_button_state_idle()
                 return
+            # Phase 1.3: Datum wird in der DB-Schicht aus dem aktuellen
+            # Zeitstempel abgeleitet, damit Sessions über Mitternacht den
+            # Stop am realen Tag des Stops verbuchen.
             logger.info("Session gestoppt: user=%s, project=%s", name, project)
-            log_stop(project=project, name=name, date=date, conn=self.db_conn)
+            log_stop(project=project, name=name, conn=self.db_conn)
             self._mark_dirty()
             self.session_active[(name, project)] = False
             self.timer_running = False
@@ -1782,11 +1813,30 @@ class App:
         threading.Thread(target=_worker, daemon=True).start()
 
     def _resolve_sound_path(self, configured_path: str) -> str:
-        """Resolve relative sound paths against data directory for source and EXE mode."""
+        """Resolve relative sound paths against data directory for source and EXE mode.
+
+        Phase 4.10: Im PyInstaller-Bundle (``sys._MEIPASS``) liegen die Assets
+        in einem temporären Ordner. Wir suchen den ersten existierenden
+        Kandidaten in dieser Reihenfolge:
+        1. absoluter Pfad (unverändert)
+        2. ``data/<rel>`` (Standardfall in der Source-Installation)
+        3. ``<MEIPASS>/data/<rel>`` (PyInstaller --add-data data:data)
+        4. ``<MEIPASS>/<rel>`` (PyInstaller --add-data sounds:sounds)
+        Findet sich keiner, wird Variante 2 zurückgegeben (für sinnvolle
+        Fehlermeldungen weiter oben).
+        """
         candidate = (configured_path or "sounds/StartupSound.wav").strip().replace("\\", "/")
         if os.path.isabs(candidate):
             return candidate
-        return os.path.join(PATH_TO_DATA, candidate)
+        primary = os.path.join(PATH_TO_DATA, candidate)
+        if os.path.isfile(primary):
+            return primary
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            for variant in (os.path.join(meipass, "data", candidate), os.path.join(meipass, candidate)):
+                if os.path.isfile(variant):
+                    return variant
+        return primary
 
     def update_duration(self):
         if self.db_conn:
@@ -1997,7 +2047,17 @@ class App:
             suffix = "" if self._is_viewing_today() else "  (nicht heute)"
             self._status_date_label.config(text=f"Ansicht: {view_date}{suffix}")
             current_name = self.name_entry.get().strip()
+            limit = 500
             if current_name:
+                cursor.execute(
+                    """
+                    SELECT COUNT(*) FROM events e
+                    JOIN users u ON u.id = e.user_id
+                    WHERE u.name = ? AND e.date = ?
+                    """,
+                    (current_name, view_date),
+                )
+                total_count = cursor.fetchone()[0]
                 cursor.execute(
                     """
                     SELECT e.id, u.name, e.project, e.event_type, e.timestamp
@@ -2005,11 +2065,20 @@ class App:
                     JOIN users u ON u.id = e.user_id
                     WHERE u.name = ? AND e.date = ?
                     ORDER BY e.timestamp
-                    LIMIT 500
+                    LIMIT ?
                 """,
-                    (current_name, view_date),
+                    (current_name, view_date, limit),
                 )
             else:
+                cursor.execute(
+                    """
+                    SELECT COUNT(*) FROM events e
+                    JOIN users u ON u.id = e.user_id
+                    WHERE e.date = ?
+                    """,
+                    (view_date,),
+                )
+                total_count = cursor.fetchone()[0]
                 cursor.execute(
                     """
                     SELECT e.id, u.name, e.project, e.event_type, e.timestamp
@@ -2017,9 +2086,9 @@ class App:
                     JOIN users u ON u.id = e.user_id
                     WHERE e.date = ?
                     ORDER BY u.name, e.timestamp
-                    LIMIT 500
+                    LIMIT ?
                 """,
-                    (view_date,),
+                    (view_date, limit),
                 )
             events = cursor.fetchall()
             self.db_content_listbox.insert(END, f"── {view_date} ──")
@@ -2032,6 +2101,12 @@ class App:
                     self._event_ids.append(None)
                 self.db_content_listbox.insert(END, f"  Projekt {project}: {event_type} at {timestamp}")
                 self._event_ids.append(event_id)
+            # Phase 2.4: Hinweis, wenn das Listenlimit greift.
+            if total_count > limit:
+                self.db_content_listbox.insert(
+                    END, f"… {total_count - limit} weitere Einträge ausgeblendet (Limit {limit})"
+                )
+                self._event_ids.append(None)
 
     def _edit_event(self, event=None):
         """Open edit dialog for the selected event (double-click handler)."""
@@ -2050,10 +2125,25 @@ class App:
             self.write("Eintrag nicht gefunden.", error=True)
             return
 
+        # Phase 2.2: Warnen, wenn dieser Eintrag zu einer aktiven Session
+        # gehört (offener Start ohne Stop). Bearbeiten ist möglich, aber
+        # potenziell verwirrend.
+        is_active_open_start = ev["event_type"] == "start" and self.session_active.get(
+            (ev["user"], ev["project"]), False
+        )
+        if is_active_open_start and not messagebox.askyesno(
+            "Aktive Session",
+            "Dieser Eintrag gehört zu einer laufenden Session.\n\n"
+            "Änderungen am Zeitstempel können die Live-Anzeige verfälschen.\n"
+            "Empfehlung: Session zuerst stoppen.\n\nTrotzdem bearbeiten?",
+            parent=self.master,
+        ):
+            return
+
         win = Toplevel(self.master)
         win.title("Eintrag bearbeiten")
         win.configure(bg="#C0C0C0")
-        w, h = 420, 220
+        w, h = 460, 240
         x = self.master.winfo_x() + (self.master.winfo_width() - w) // 2
         y = self.master.winfo_y() + (self.master.winfo_height() - h) // 2
         win.geometry(f"{w}x{h}+{x}+{y}")
@@ -2082,49 +2172,86 @@ class App:
         proj_combo["values"] = self.project_entry["values"]
         proj_combo.set(ev["project"])
         proj_combo.grid(row=1, column=1, padx=8, pady=4, sticky="ew")
+        if is_active_open_start:
+            proj_combo.config(state="disabled")
 
-        # Row 2: Date
-        Label(win, text="Datum (TT-MM-JJJJ):", **lbl_cfg).grid(row=2, column=0, padx=8, pady=4, sticky="w")
-        date_entry = Entry(win, **entry_cfg, width=30)
-        date_entry.insert(0, ev["date"])
-        date_entry.grid(row=2, column=1, padx=8, pady=4, sticky="ew")
+        # Row 2: Timestamp (Single Source of Truth — Datum wird daraus abgeleitet)
+        Label(win, text="Zeitstempel:", **lbl_cfg).grid(row=2, column=0, padx=8, pady=4, sticky="w")
+        ts_var = StringVar(value=ev["timestamp"])
+        ts_entry = Entry(win, textvariable=ts_var, **entry_cfg, width=30)
+        ts_entry.grid(row=2, column=1, padx=8, pady=4, sticky="ew")
+        if is_active_open_start:
+            ts_entry.config(state="readonly")
 
-        # Row 3: Timestamp
-        Label(win, text="Zeitstempel:", **lbl_cfg).grid(row=3, column=0, padx=8, pady=4, sticky="w")
-        ts_entry = Entry(win, **entry_cfg, width=30)
-        ts_entry.insert(0, ev["timestamp"])
-        ts_entry.grid(row=3, column=1, padx=8, pady=4, sticky="ew")
+        # Row 3: Date (read-only, live aus Zeitstempel berechnet)
+        Label(win, text="Datum (auto):", **lbl_cfg).grid(row=3, column=0, padx=8, pady=4, sticky="w")
+        date_var = StringVar(value=ev["date"])
+        date_entry = Entry(
+            win,
+            textvariable=date_var,
+            font=("MS Sans Serif", 10),
+            bg="#E8E8E8",
+            fg="#333333",
+            relief="sunken",
+            borderwidth=2,
+            width=30,
+            state="readonly",
+        )
+        date_entry.grid(row=3, column=1, padx=8, pady=4, sticky="ew")
+
+        # Row 4: Hinweis
+        Label(
+            win,
+            text="Datum wird automatisch aus dem Zeitstempel abgeleitet.",
+            bg="#C0C0C0",
+            fg="#555555",
+            font=("MS Sans Serif", 9, "italic"),
+        ).grid(row=4, column=0, columnspan=2, padx=8, pady=(0, 4), sticky="w")
+
+        def _sync_date_from_ts(*_args):
+            raw = ts_var.get().strip()
+            try:
+                parsed = datetime.strptime(raw, TIMESTAMP_FORMAT)
+            except ValueError:
+                date_var.set("— ungültig —")
+                return
+            date_var.set(parsed.strftime("%d-%m-%Y"))
+
+        ts_var.trace_add("write", _sync_date_from_ts)
 
         win.grid_columnconfigure(1, weight=1)
 
         # Buttons
         btn_cfg = {"bg": "#D4D0C8", "fg": "black", "font": ("MS Sans Serif", 10), "relief": "raised", "borderwidth": 2}
         btn_frame = Frame(win, bg="#C0C0C0")
-        btn_frame.grid(row=4, column=0, columnspan=2, pady=10)
+        btn_frame.grid(row=5, column=0, columnspan=2, pady=10)
 
         def _save():
             new_project = proj_combo.get().strip()
-            new_date = date_entry.get().strip()
-            new_ts = ts_entry.get().strip()
+            new_ts = ts_var.get().strip()
             if not new_project:
                 messagebox.showwarning("Fehler", "Projekt darf nicht leer sein.", parent=win)
                 return
-            if not new_date:
-                messagebox.showwarning("Fehler", "Datum darf nicht leer sein.", parent=win)
-                return
             try:
-                datetime.strptime(new_date, "%d-%m-%Y")
-            except ValueError:
-                messagebox.showwarning("Fehler", f"Ungültiges Datum: '{new_date}'.\nErwartet: TT-MM-JJJJ", parent=win)
-                return
-            try:
-                datetime.strptime(new_ts, TIMESTAMP_FORMAT)
+                parsed_ts = datetime.strptime(new_ts, TIMESTAMP_FORMAT)
             except ValueError:
                 messagebox.showwarning(
-                    "Fehler", f"Ungültiger Zeitstempel: '{new_ts}'.\nErwartet: JJJJ-MM-TT HH:MM:SS", parent=win
+                    "Fehler",
+                    f"Ungültiger Zeitstempel: '{new_ts}'.\nErwartet: JJJJ-MM-TT HH:MM:SS",
+                    parent=win,
                 )
                 return
+            new_date = parsed_ts.strftime("%d-%m-%Y")
+
             if update_event(self.db_conn, event_id, new_project, new_ts, new_date):
+                # Phase 3.2: Plausi-Check Start↔Stop nach dem Update.
+                ok, msg = validate_event_pair(self.db_conn, event_id)
+                if not ok:
+                    messagebox.showwarning(
+                        "Plausibilität",
+                        f"Eintrag gespeichert, aber Reihenfolge prüfen:\n{msg}",
+                        parent=win,
+                    )
                 logger.info("Event %s bearbeitet.", event_id)
                 self.write(f"Eintrag {event_id} aktualisiert.")
                 self._combobox_dirty = True
@@ -2166,6 +2293,10 @@ class App:
             borderwidth=2,
         ).pack(side="left", padx=5)
         Button(btn_frame, text="Abbrechen", command=win.destroy, **btn_cfg).pack(side="left", padx=5)
+
+        # Esc = Abbrechen, Return = Speichern (Phase 2.6).
+        win.bind("<Escape>", lambda _e: win.destroy())
+        win.bind("<Return>", lambda _e: _save())
 
     def update_timer_realtime(self):
         """Update the timer label with the elapsed time."""

@@ -84,6 +84,41 @@ DEFAULT_CONFIG = {
 }
 
 
+def _validate_config(cfg: dict) -> dict:
+    """Validiert geladene Konfiguration und ersetzt ungültige Werte durch Defaults.
+
+    Phase 4.6: Schützt vor Tippfehlern in ``config.json`` und vor
+    Typ-Drift (z. B. Strings statt Integern bei Pomodoro-Werten).
+    """
+    out = dict(cfg)
+    int_fields = {
+        "dashboard_port": (1024, 65535, 8052),
+        "pomodoro_work_minutes": (1, 240, 25),
+        "pomodoro_break_minutes": (1, 60, 5),
+        "pomodoro_long_break_minutes": (1, 240, 15),
+        "pomodoro_long_break_every": (2, 12, 4),
+    }
+    for key, (lo, hi, default) in int_fields.items():
+        try:
+            v = int(out.get(key, default))
+            if not (lo <= v <= hi):
+                raise ValueError
+            out[key] = v
+        except (TypeError, ValueError):
+            logger.warning("Config: '%s' ungültig (%r) — verwende Default %s.", key, out.get(key), default)
+            out[key] = default
+    bool_fields = ["pomodoro_enabled", "pomodoro_auto_break", "pomodoro_sound_enabled"]
+    for key in bool_fields:
+        if not isinstance(out.get(key), bool):
+            out[key] = bool(DEFAULT_CONFIG[key])
+    if out.get("theme") not in THEMES:
+        out["theme"] = "Modern"
+    for key in ("default_user", "default_project", "pomodoro_sound_local_path"):
+        if not isinstance(out.get(key), str) or not out[key].strip():
+            out[key] = DEFAULT_CONFIG[key]
+    return out
+
+
 def load_config() -> dict:
     """Lädt die Konfiguration aus config.json oder gibt Defaults zurück."""
     os.makedirs(PATH_TO_DATA, exist_ok=True)
@@ -95,19 +130,23 @@ def load_config() -> dict:
             # Fehlende Schlüssel mit Defaults auffüllen
             for key, value in DEFAULT_CONFIG.items():
                 cfg.setdefault(key, value)
-
-            return cfg
-        except (json.JSONDecodeError, OSError):
-            pass
+            return _validate_config(cfg)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("config.json konnte nicht gelesen werden (%s) — Defaults.", e)
     return dict(DEFAULT_CONFIG)
 
 
 def save_config(config: dict) -> None:
     """Speichert die Konfiguration in config.json (atomar via tmp + rename)."""
+    import contextlib
+
     os.makedirs(PATH_TO_DATA, exist_ok=True)
     tmp_path = CONFIG_PATH + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=4, ensure_ascii=False)
+        f.flush()
+        with contextlib.suppress(OSError):
+            os.fsync(f.fileno())
     os.replace(tmp_path, CONFIG_PATH)
 
 
@@ -147,8 +186,20 @@ def convert_timestamp_format(timestamp_str: str | None) -> datetime | None:
         return None
 
 
-def read_database(db_path: str) -> pl.DataFrame:
-    """Liest die Datenbank (events-Schema) und konvertiert Timestamps in datetime-Objekte."""
+def read_database(
+    db_path: str,
+    from_date: datetime | None = None,
+    to_date: datetime | None = None,
+    user: str | None = None,
+) -> pl.DataFrame:
+    """Liest die Datenbank (events-Schema) und konvertiert Timestamps.
+
+    Optionale Filter (Phase 3.5) reduzieren die übertragene Datenmenge bereits
+    in SQL — wichtig bei großen Datenbanken, da das Stats-Dashboard sonst
+    bei jedem Refresh die gesamte Tabelle materialisiert. ``from_date`` und
+    ``to_date`` werden gegen ``events.timestamp`` geprüft (ISO-Präfix); der
+    User-Filter ist eine exakte Namens-Übereinstimmung.
+    """
     try:
         with sqlite3.connect(db_path) as conn:
             cursor = conn.cursor()
@@ -156,12 +207,25 @@ def read_database(db_path: str) -> pl.DataFrame:
             if cursor.fetchone() is None:
                 return pl.DataFrame()
 
-            query = """
+            base_query = """
                 SELECT u.name AS user, e.project, e.event_type, e.timestamp, e.date
                 FROM events e
                 JOIN users u ON u.id = e.user_id
             """
-            cursor.execute(query)
+            clauses: list[str] = []
+            params: list = []
+            if from_date is not None:
+                clauses.append("e.timestamp >= ?")
+                params.append(from_date.strftime("%Y-%m-%d %H:%M:%S"))
+            if to_date is not None:
+                clauses.append("e.timestamp <= ?")
+                params.append(to_date.strftime("%Y-%m-%d %H:%M:%S"))
+            if user:
+                clauses.append("u.name = ?")
+                params.append(user)
+            if clauses:
+                base_query += " WHERE " + " AND ".join(clauses)
+            cursor.execute(base_query, params)
             rows = cursor.fetchall()
             columns = [desc[0] for desc in cursor.description]
             combined_data = pl.DataFrame(rows, schema=columns, orient="row")

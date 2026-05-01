@@ -3,7 +3,7 @@ import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 from db_helper import (
     calculate_duration,
     check_project,
@@ -21,6 +21,7 @@ from db_helper import (
 
 TEST_DB_PATH = "tests/test_database.db"
 
+
 @pytest.fixture
 def db_conn():
     """Fixture to create a database connection for testing."""
@@ -33,9 +34,11 @@ def db_conn():
     if os.path.exists(TEST_DB_PATH):
         os.remove(TEST_DB_PATH)
 
+
 def test_create_connection(db_conn):
     """Test creating a database connection."""
     assert db_conn is not None
+
 
 def test_create_main_table(db_conn):
     """Test creating the main table."""
@@ -44,6 +47,7 @@ def test_create_main_table(db_conn):
     table = cursor.fetchone()
     assert table is not None
 
+
 def test_events_table_created(db_conn):
     """Test creating the events table."""
     cursor = db_conn.cursor()
@@ -51,10 +55,12 @@ def test_events_table_created(db_conn):
     table = cursor.fetchone()
     assert table is not None
 
+
 def test_check_user(db_conn):
     """Test checking and inserting a user into the main table."""
     user_id = check_user(db_conn, "test_user")
     assert user_id is not None
+
 
 def test_log_start(db_conn):
     """Test logging the start time of a session."""
@@ -64,6 +70,7 @@ def test_log_start(db_conn):
     cursor.execute("SELECT * FROM events WHERE event_type='start' AND user_id = ?;", (user_id,))
     event = cursor.fetchone()
     assert event is not None
+
 
 def test_log_stop(db_conn):
     """Test logging the stop time of a session."""
@@ -75,6 +82,7 @@ def test_log_stop(db_conn):
     event = cursor.fetchone()
     assert event is not None
 
+
 def test_log_start_without_user(db_conn):
     """Test logging the start time without creating a user."""
     log_start(project=1, name="non_existent_user", date="2023-10-01", conn=db_conn)
@@ -84,11 +92,13 @@ def test_log_start_without_user(db_conn):
     event = cursor.fetchone()
     assert event is not None
 
+
 def test_check_user_existing(db_conn):
     """Test checking an existing user."""
     check_user(db_conn, "test_user")
     user_id = check_user(db_conn, "test_user")
     assert user_id is not None
+
 
 def test_calculate_duration(db_conn):
     """Test calculating duration from events."""
@@ -98,6 +108,7 @@ def test_calculate_duration(db_conn):
     duration = calculate_duration(project=1, name="test_user", conn=db_conn)
     assert duration >= 0
 
+
 def test_get_all_users(db_conn):
     """Test getting all users."""
     check_user(db_conn, "alice")
@@ -106,10 +117,12 @@ def test_get_all_users(db_conn):
     assert "alice" in users
     assert "bob" in users
 
+
 def test_get_all_users_empty(db_conn):
     """Test getting all users when table is empty."""
     users = get_all_users(db_conn)
     assert isinstance(users, list)
+
 
 def test_get_all_projects(db_conn):
     """Test getting all projects."""
@@ -119,6 +132,7 @@ def test_get_all_projects(db_conn):
     projects = get_all_projects(db_conn)
     assert "proj_a" in projects
     assert "proj_b" in projects
+
 
 def test_check_user_no_spam(db_conn, capsys):
     """Test that check_user does not print 'already exists' for existing users."""
@@ -130,6 +144,7 @@ def test_check_user_no_spam(db_conn, capsys):
     captured = capsys.readouterr()
     assert "already exists" not in captured.out
 
+
 def test_projects_table_created(db_conn):
     """Test that the projects table is created by create_main_table."""
     cursor = db_conn.cursor()
@@ -137,16 +152,19 @@ def test_projects_table_created(db_conn):
     table = cursor.fetchone()
     assert table is not None
 
+
 def test_check_project(db_conn):
     """Test creating a new project."""
     project_id = check_project(db_conn, "my_project")
     assert project_id is not None
+
 
 def test_check_project_existing(db_conn):
     """Test that check_project returns same id for existing project."""
     id1 = check_project(db_conn, "my_project")
     id2 = check_project(db_conn, "my_project")
     assert id1 == id2
+
 
 def test_get_all_projects_from_table(db_conn):
     """Test that get_all_projects reads from the projects table."""
@@ -155,6 +173,7 @@ def test_get_all_projects_from_table(db_conn):
     projects = get_all_projects(db_conn)
     assert "alpha" in projects
     assert "beta" in projects
+
 
 def test_migrate_projects_to_table(db_conn):
     """Test migrating existing projects from events to projects table."""
@@ -165,6 +184,7 @@ def test_migrate_projects_to_table(db_conn):
     projects = get_all_projects(db_conn)
     assert "proj_x" in projects
     assert "proj_y" in projects
+
 
 def test_log_event_creates_project(db_conn):
     """Test that logging an event auto-creates the project in projects table."""
@@ -177,6 +197,7 @@ def test_log_event_creates_project(db_conn):
 def test_get_event_by_id(db_conn):
     """Test retrieving a single event by its ID."""
     from db_helper import create_events_table
+
     create_events_table(db_conn)
     check_user(db_conn, "test_user")
     log_start(project="proj1", name="test_user", date="01-01-2025", conn=db_conn)
@@ -196,6 +217,7 @@ def test_get_event_by_id(db_conn):
 def test_get_event_by_id_not_found(db_conn):
     """Test that get_event_by_id returns None for non-existent ID."""
     from db_helper import create_events_table
+
     create_events_table(db_conn)
     assert get_event_by_id(db_conn, 99999) is None
 
@@ -203,6 +225,7 @@ def test_get_event_by_id_not_found(db_conn):
 def test_update_event(db_conn):
     """Test updating an existing event's project, timestamp, and date."""
     from db_helper import create_events_table
+
     create_events_table(db_conn)
     check_user(db_conn, "test_user")
     log_start(project="old_proj", name="test_user", date="01-01-2025", conn=db_conn)
@@ -223,6 +246,7 @@ def test_update_event(db_conn):
 def test_update_event_invalid_timestamp(db_conn):
     """Test that update_event rejects invalid timestamp format."""
     from db_helper import create_events_table
+
     create_events_table(db_conn)
     check_user(db_conn, "test_user")
     log_start(project="proj1", name="test_user", date="01-01-2025", conn=db_conn)
@@ -238,6 +262,7 @@ def test_update_event_invalid_timestamp(db_conn):
 def test_delete_event(db_conn):
     """Test deleting an event by ID."""
     from db_helper import create_events_table
+
     create_events_table(db_conn)
     check_user(db_conn, "test_user")
     log_start(project="proj1", name="test_user", date="01-01-2025", conn=db_conn)
@@ -254,6 +279,140 @@ def test_delete_event(db_conn):
 def test_delete_event_not_found(db_conn):
     """Test that deleting a non-existent event returns False."""
     from db_helper import create_events_table
+
     create_events_table(db_conn)
     assert delete_event(db_conn, 99999) is False
 
+
+# -----------------------------------------------------------------------------
+# Bugfix-Regression: Tag-Zuordnung (Phase 1)
+# -----------------------------------------------------------------------------
+
+
+def _seed_user_and_event(db_conn, ts_str, date_str):
+    """Hilfsfunktion: legt User+Event direkt per SQL an (umgeht Validierung)."""
+    from db_helper import check_user, create_events_table
+
+    create_events_table(db_conn)
+    user_id = check_user(db_conn, "u1")
+    cur = db_conn.cursor()
+    cur.execute(
+        "INSERT INTO events (user_id, project, event_type, timestamp, date) VALUES (?, ?, ?, ?, ?)",
+        (user_id, "p1", "start", ts_str, date_str),
+    )
+    db_conn.commit()
+    event_id = cur.lastrowid
+    cur.close()
+    return event_id
+
+
+def test_update_event_derives_date_from_timestamp(db_conn):
+    """update_event ignoriert ein abweichendes ``date`` und leitet es ab."""
+    event_id = _seed_user_and_event(db_conn, "2025-04-29 10:00:00", "29-04-2025")
+    # User schickt neuen Zeitstempel auf 30-04-2025, vergisst Datums-Sync.
+    ok = update_event(db_conn, event_id, "p1", "2025-04-30 14:00:00", "29-04-2025")
+    assert ok is True
+    ev = get_event_by_id(db_conn, event_id)
+    assert ev["date"] == "30-04-2025"
+    assert ev["timestamp"] == "2025-04-30 14:00:00"
+
+
+def test_update_event_accepts_consistent_date(db_conn):
+    event_id = _seed_user_and_event(db_conn, "2025-04-29 10:00:00", "29-04-2025")
+    ok = update_event(db_conn, event_id, "p1", "2025-04-30 14:00:00", "30-04-2025")
+    assert ok is True
+    assert get_event_by_id(db_conn, event_id)["date"] == "30-04-2025"
+
+
+def test_log_event_derives_date_when_none(db_conn):
+    """log_start ohne ``date`` darf trotzdem schreiben."""
+    from datetime import datetime as _dt
+
+    from db_helper import create_events_table
+
+    create_events_table(db_conn)
+    check_user(db_conn, "u1")
+    ts = _dt(2025, 4, 30, 12, 0, 0)
+    ok = log_start(project="p1", name="u1", timestamp=ts, conn=db_conn)
+    assert ok is True
+    cur = db_conn.cursor()
+    cur.execute("SELECT timestamp, date FROM events ORDER BY id DESC LIMIT 1")
+    ts_str, date_str = cur.fetchone()
+    cur.close()
+    assert ts_str == "2025-04-30 12:00:00"
+    assert date_str == "30-04-2025"
+
+
+def test_migrate_repair_dates_fixes_drift(db_conn):
+    """Migration repariert events.date, das vom Zeitstempel abweicht."""
+    from db_helper import create_events_table, migrate_repair_dates
+
+    create_events_table(db_conn)
+    check_user(db_conn, "u1")
+    cur = db_conn.cursor()
+    cur.execute(
+        "INSERT INTO events (user_id, project, event_type, timestamp, date) "
+        "VALUES (1, 'p', 'start', '2025-04-30 14:00:00', '29-04-2025')"
+    )
+    cur.execute(
+        "INSERT INTO events (user_id, project, event_type, timestamp, date) "
+        "VALUES (1, 'p', 'stop', '2025-04-30 15:00:00', '30-04-2025')"
+    )
+    db_conn.commit()
+    repaired = migrate_repair_dates(db_conn)
+    assert repaired == 1
+    cur.execute("SELECT timestamp, date FROM events ORDER BY id")
+    rows = cur.fetchall()
+    cur.close()
+    assert rows[0] == ("2025-04-30 14:00:00", "30-04-2025")
+    assert rows[1] == ("2025-04-30 15:00:00", "30-04-2025")
+    # Zweiter Aufruf darf nicht erneut anlegen / ändern.
+    assert migrate_repair_dates(db_conn) == 0
+
+
+def test_validate_event_pair_detects_negative_duration(db_conn):
+    """validate_event_pair erkennt Stop-vor-Start-Paare."""
+    from datetime import datetime as _dt
+
+    from db_helper import (
+        create_events_table,
+        log_start,
+        log_stop,
+        validate_event_pair,
+    )
+
+    create_events_table(db_conn)
+    check_user(db_conn, "u1")
+    log_start(project="p", name="u1", timestamp=_dt(2025, 4, 30, 14, 0), conn=db_conn)
+    log_stop(project="p", name="u1", timestamp=_dt(2025, 4, 30, 13, 0), conn=db_conn)
+    cur = db_conn.cursor()
+    cur.execute("SELECT id FROM events WHERE event_type = 'stop'")
+    stop_id = cur.fetchone()[0]
+    cur.close()
+    ok, msg = validate_event_pair(db_conn, stop_id)
+    assert ok is False
+    assert "vor" in msg.lower() or "before" in msg.lower()
+
+
+def test_calculate_daily_duration_splits_midnight(db_conn):
+    """calculate_daily_duration verteilt Sessions über Mitternacht anteilig."""
+    from datetime import datetime as _dt
+
+    from db_helper import (
+        calculate_daily_duration,
+        create_events_table,
+        log_start,
+        log_stop,
+    )
+
+    create_events_table(db_conn)
+    check_user(db_conn, "u1")
+    # Session 23:50 → 00:30 (40 min: 10 min am Tag A, 30 min am Tag B).
+    log_start(project="p", name="u1", timestamp=_dt(2025, 4, 30, 23, 50), conn=db_conn)
+    log_stop(project="p", name="u1", timestamp=_dt(2025, 5, 1, 0, 30), conn=db_conn)
+
+    sec_a = calculate_daily_duration(project="p", name="u1", date="30-04-2025", conn=db_conn)
+    sec_b = calculate_daily_duration(project="p", name="u1", date="01-05-2025", conn=db_conn)
+    # Toleranz für Sekunden-Bruchteile.
+    assert abs(sec_a - 600) < 2
+    assert abs(sec_b - 1800) < 2
