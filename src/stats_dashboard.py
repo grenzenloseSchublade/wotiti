@@ -7,7 +7,7 @@ import dash
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 
-#from dash_extensions.enrich import Dash, Output, Input
+# from dash_extensions.enrich import Dash, Output, Input
 import polars as pl
 from dash import MATCH, Dash, Input, Output, State, dcc, html
 
@@ -56,38 +56,20 @@ logger = logging.getLogger(__name__)
 _colors, _sequence = get_theme_colors()
 
 # Gemeinsame Stil-Definitionen
-CARD_STYLE = {
-    'backgroundColor': _colors['secondary'],
-    'color': _colors['text']
-}
+CARD_STYLE = {"backgroundColor": _colors["secondary"], "color": _colors["text"]}
 
-GRAPH_STYLE = {
-    'backgroundColor': _colors['background']
-}
+GRAPH_STYLE = {"backgroundColor": _colors["background"]}
 
-GRAPH_LAYOUT = {
-    'plot_bgcolor': _colors['background'],
-    'paper_bgcolor': _colors['background']
-}
+GRAPH_LAYOUT = {"plot_bgcolor": _colors["background"], "paper_bgcolor": _colors["background"]}
 
-DROPDOWN_STYLE = {
-    'color': _colors['text'],
-    'backgroundColor': _colors['secondary']
-}
+DROPDOWN_STYLE = {"color": _colors["text"], "backgroundColor": _colors["secondary"]}
 
 # Dash App — serve_locally=False so plotly.min.js loads from CDN
 # (avoids ERR_CONTENT_LENGTH_MISMATCH in devcontainer port forwarding)
-app = Dash(__name__,
-           external_stylesheets=[dbc.themes.DARKLY],
-           suppress_callback_exceptions=True,
-           serve_locally=False)
+app = Dash(__name__, external_stylesheets=[dbc.themes.DARKLY], suppress_callback_exceptions=True, serve_locally=False)
 
-_DATA_CACHE = {
-    "db_path": None,
-    "db_mtime": None,
-    "data": None,
-    "stats": {}
-}
+_DATA_CACHE = {"db_path": None, "db_mtime": None, "data": None, "stats": {}}
+
 
 def get_cached_data(db_path, force=False):
     """Loads and caches DB data for reuse across callbacks."""
@@ -121,333 +103,546 @@ def get_cached_data(db_path, force=False):
 
     return _DATA_CACHE["data"] if _DATA_CACHE["data"] is not None else pl.DataFrame()
 
+
 def get_cached_stat(key, compute_fn):
     """Caches expensive computations derived from DB data."""
     if key not in _DATA_CACHE["stats"]:
         _DATA_CACHE["stats"][key] = compute_fn()
     return _DATA_CACHE["stats"][key]
 
+
 def create_card(header_text, content, md_value=6):
     """Hilfsfunktion zum Erstellen einer einheitlichen Card mit Toggle-Funktion."""
     card_id = header_text.lower().replace(" ", "-")
-    return dbc.Col([
-        dbc.Card([
-            dbc.CardHeader([
-                html.Div([
-                    html.Span(header_text, style={'color': _colors['text'], 'fontWeight': '500'}),
-                    dbc.Button(
-                        "\u25BC",
-                        id={'type': 'toggle-card', 'index': card_id},
-                        color="link",
-                        size="sm",
-                        style={'float': 'right', 'color': _colors['text'], 'textDecoration': 'none',
-                               'fontSize': '12px', 'padding': '2px 8px', 'opacity': '0.7'}
-                    )
-                ], style={'display': 'flex', 'justifyContent': 'space-between', 'alignItems': 'center'})
-            ], style={'borderBottom': f"2px solid {_colors['primary']}"}),
-            dbc.Collapse(
-                dbc.CardBody(content),
-                id={'type': 'collapse-card', 'index': card_id},
-                is_open=True
+    return dbc.Col(
+        [
+            dbc.Card(
+                [
+                    dbc.CardHeader(
+                        [
+                            html.Div(
+                                [
+                                    html.Span(header_text, style={"color": _colors["text"], "fontWeight": "500"}),
+                                    dbc.Button(
+                                        "\u25bc",
+                                        id={"type": "toggle-card", "index": card_id},
+                                        color="link",
+                                        size="sm",
+                                        style={
+                                            "float": "right",
+                                            "color": _colors["text"],
+                                            "textDecoration": "none",
+                                            "fontSize": "12px",
+                                            "padding": "2px 8px",
+                                            "opacity": "0.7",
+                                        },
+                                    ),
+                                ],
+                                style={"display": "flex", "justifyContent": "space-between", "alignItems": "center"},
+                            )
+                        ],
+                        style={"borderBottom": f"2px solid {_colors['primary']}"},
+                    ),
+                    dbc.Collapse(dbc.CardBody(content), id={"type": "collapse-card", "index": card_id}, is_open=True),
+                ],
+                className="mb-3 shadow-sm",
+                style={**CARD_STYLE, "border": "none", "borderRadius": "8px"},
             )
-        ], className="mb-3 shadow-sm", style={**CARD_STYLE, 'border': 'none', 'borderRadius': '8px'})
-    ], md=md_value)
+        ],
+        md=md_value,
+    )
 
-app.layout = dbc.Container([
-    # Modern header with gradient accent
-    html.Div([
-        html.H1("WoTiTi Stats", style={
-            'textAlign': 'center', 'color': _colors['text'],
-            'fontWeight': '300', 'letterSpacing': '2px', 'marginBottom': '5px'
-        }),
-        html.P("Work Time Tracking & Insights Dashboard", style={
-            'textAlign': 'center', 'color': _colors['primary'],
-            'fontSize': '14px', 'marginBottom': '0'
-        }),
-    ], style={'paddingTop': '20px', 'paddingBottom': '10px',
-             'borderBottom': f"2px solid {_colors['primary']}", 'marginBottom': '20px'}),
 
-    # Verzeichnisauswahl
-    dbc.Row([
-        dbc.Col([
-            dbc.Row([
-                dbc.Col([
-                    dbc.ButtonGroup([
-                        dbc.Button('\U0001F4C1 Verzeichnis', id='browse-button', n_clicks=0,
-                                   color="primary", className="mb-3", size="sm"),
-                        dbc.Button('\U0001F4CA Beispieldaten', id='example-button', n_clicks=0,
-                                   color="outline-primary", className="mb-3", size="sm"),
-                        dbc.Button('\U0001F504 Aktualisieren', id='refresh-button', n_clicks=0,
-                                   color="outline-info", className="mb-3", size="sm"),
-                    ]),
-                ], width="auto"),
-                dbc.Col([
-                    dbc.Progress(
-                        id="progress",
-                        value=0,
-                        animated=False,
-                        striped=True,
-                        color="info",
-                        className="mb-3",
-                        style={
-                            'height': '30px',
-                            'width': '100%',
-                            'display': 'flex',
-                            'alignItems': 'center',
-                            'justifyContent': 'center',
-                            'fontSize': '14px',
-                            'fontWeight': 'bold',
-                            'backgroundColor': _colors['secondary'],
-                        },
-                        children="Verzeichnis auswählen"
-                    ),
-                    dbc.Badge(
-                        "Datenquelle: -",
-                        id="data-source-badge",
-                        color="secondary",
-                        className="mt-2",
-                    ),
-                ], md=8),
-            ], align="center"),
-            dcc.Store(id='db-path', data=None),
-            dcc.Store(id='param-path', data=None),
-            dcc.Interval(id='appdb-autoload', interval=1000, n_intervals=0, max_intervals=1),
-            html.Div(id='parameters-table')
-        ], md=12),
-    ]),
-
-    dbc.Tabs([
-        dbc.Tab([
-            html.H2("Grundlegende Statistiken",
-                    style={'textAlign': 'center', 'color': _colors['text'], 'marginTop': '30px'}),
-            html.P("Vergleich der Arbeitszeiten zwischen Benutzern und Projekten",
-                   style={'textAlign': 'center', 'color': _colors['text'], 'marginBottom': '20px'}),
-            dbc.Row([
-                create_card("Stunden pro Projekt (1)", [
-                    dcc.Dropdown(
-                        id='left-user-dropdown',
-                        placeholder="Benutzer auswählen",
-                        style=DROPDOWN_STYLE,
-                        className='dropdown-custom'
-                    ),
-                    dbc.Spinner(dcc.Graph(id='left-pie-chart', style=GRAPH_STYLE), size="sm")
-                ]),
-                create_card("Stunden pro Projekt (2)", [
-                    dcc.Dropdown(
-                        id='right-user-dropdown',
-                        placeholder="Benutzer auswählen",
-                        style=DROPDOWN_STYLE,
-                        className='dropdown-custom'
-                    ),
-                    dbc.Spinner(dcc.Graph(
-                        id='right-pie-chart',
-                        style=GRAPH_STYLE,
-                        figure=go.Figure(layout=GRAPH_LAYOUT)
-                    ), size="sm")
-                ])
-            ]),
-            html.H2("Zeitanalyse",
-                    style={'textAlign': 'center', 'color': _colors['text'], 'marginTop': '30px'}),
-            html.P("Analyse der Arbeitszeiten über verschiedene Zeiträume",
-                   style={'textAlign': 'center', 'color': _colors['text'], 'marginBottom': '20px'}),
-            dbc.Row([
-                create_card(
-                    "Gesamtstunden pro Benutzer",
-                    [
-                        html.P("Gesamtarbeitszeit pro Benutzer über den gesamten Zeitraum",
-                               style={'color': _colors['text']}),
-                        dbc.Spinner(dcc.Graph(id='total-hours-chart', style=GRAPH_STYLE), size="sm")
-                    ]
+app.layout = dbc.Container(
+    [
+        # Modern header with gradient accent
+        html.Div(
+            [
+                html.H1(
+                    "WoTiTi Stats",
+                    style={
+                        "textAlign": "center",
+                        "color": _colors["text"],
+                        "fontWeight": "300",
+                        "letterSpacing": "2px",
+                        "marginBottom": "5px",
+                    },
                 ),
-                create_card(
-                    "Durchschnittliche Stunden pro Tag",
-                    [
-                        html.P("Durchschnittliche tägliche Arbeitszeit pro Benutzer",
-                               style={'color': _colors['text']}),
-                        dbc.Spinner(dcc.Graph(id='average-hours-per-user-chart', style=GRAPH_STYLE), size="sm")
-                    ]
-                )
-            ]),
-            dbc.Row([
-                create_card(
-                    "Durchschnitt pro Zeitraum",
-                    [
-                        html.P("Durchschnittliche Arbeitszeit pro benutzerdefiniertem Zeitraum",
-                               style={'color': _colors['text']}),
-                        dbc.InputGroup([
-                            dbc.Input(id='period-days-input', type='number', value=7, min=1, max=365,
-                                      style={'backgroundColor': _colors['secondary'], 'color': _colors['text'],
-                                             'border': f"1px solid {_colors['primary']}"}),
-                            dbc.InputGroupText("Tage"),
-                            dbc.Button("Berechnen", id='update-period-button', n_clicks=0, color="primary", size="sm"),
-                        ], className="mb-3"),
-                        dbc.Spinner(dcc.Graph(id='average-hours-per-period-chart', style=GRAPH_STYLE), size="sm")
-                    ],
-                    md_value=12
-                )
-            ]),
-        ], label="Grundlagen"),
-        dbc.Tab([
-            html.H2("Projektanalyse",
-                    style={'textAlign': 'center', 'color': _colors['text'], 'marginTop': '30px'}),
-            html.P("Detaillierte Analyse der Projektzeiten und Wechsel",
-                   style={'textAlign': 'center', 'color': _colors['text'], 'marginBottom': '20px'}),
-            dbc.Row([
-                create_card(
-                    "Projektzeit-Statistiken",
-                    [
-                        html.P("Durchschnittliche, minimale und maximale Arbeitsdauer pro Projekt",
-                               style={'color': _colors['text']}),
-                        dbc.Spinner(dcc.Graph(id='project-stats-chart', style=GRAPH_STYLE), size="sm")
-                    ],
-                    md_value=12
-                )
-            ]),
-            dbc.Row([
-                create_card(
-                    "Tägliche Projektstunden",
-                    [
-                        html.P("Tägliche Arbeitszeit aufgeschlüsselt nach Projekten",
-                               style={'color': _colors['text']}),
-                        dbc.Spinner(dcc.Graph(id='daily-hours-chart', style=GRAPH_STYLE), size="sm")
-                    ]
+                html.P(
+                    "Work Time Tracking & Insights Dashboard",
+                    style={"textAlign": "center", "color": _colors["primary"], "fontSize": "14px", "marginBottom": "0"},
                 ),
-                create_card(
-                    "Projektwechsel",
+            ],
+            style={
+                "paddingTop": "20px",
+                "paddingBottom": "10px",
+                "borderBottom": f"2px solid {_colors['primary']}",
+                "marginBottom": "20px",
+            },
+        ),
+        # Verzeichnisauswahl
+        dbc.Row(
+            [
+                dbc.Col(
                     [
-                        html.P("Analyse der Projektwechsel und Pausen zwischen Projekten",
-                               style={'color': _colors['text']}),
-                        dbc.Spinner(dcc.Graph(id='project-switches-chart', style=GRAPH_STYLE), size="sm")
-                    ]
-                )
-            ]),
-            html.H2("Arbeitsmuster",
-                    style={'textAlign': 'center', 'color': _colors['text'], 'marginTop': '30px'}),
-            html.P("Analyse der individuellen Arbeitszeitmuster",
-                   style={'textAlign': 'center', 'color': _colors['text'], 'marginBottom': '20px'}),
-            dbc.Row([
-                create_card(
-                    "Arbeitsmuster",
-                    [
-                        html.P("Tageszeitliche Arbeitsmuster: Frühe Starter (vor 8 Uhr), Kernzeitarbeiter (9-17 Uhr), Spätarbeiter (nach 17 Uhr)",
-                               style={'color': _colors['text']}),
-                        dbc.Row([
-                            dbc.Col([
-                                dcc.Dropdown(
-                                    id='pattern-user-dropdown',
-                                    placeholder="Benutzer zum Vergleich auswählen",
-                                    multi=True,
-                                    style=DROPDOWN_STYLE,
-                                    className='dropdown-custom'
+                        dbc.Row(
+                            [
+                                dbc.Col(
+                                    [
+                                        dbc.ButtonGroup(
+                                            [
+                                                dbc.Button(
+                                                    "\U0001f4c1 Verzeichnis",
+                                                    id="browse-button",
+                                                    n_clicks=0,
+                                                    color="primary",
+                                                    className="mb-3",
+                                                    size="sm",
+                                                ),
+                                                dbc.Button(
+                                                    "\U0001f4ca Beispieldaten",
+                                                    id="example-button",
+                                                    n_clicks=0,
+                                                    color="outline-primary",
+                                                    className="mb-3",
+                                                    size="sm",
+                                                ),
+                                                dbc.Button(
+                                                    "\U0001f504 Aktualisieren",
+                                                    id="refresh-button",
+                                                    n_clicks=0,
+                                                    color="outline-info",
+                                                    className="mb-3",
+                                                    size="sm",
+                                                ),
+                                            ]
+                                        ),
+                                    ],
+                                    width="auto",
                                 ),
-                            ], width=6),
-                        ], className="mb-3"),
-                        dbc.Spinner(dcc.Graph(
-                            id='daily-patterns-chart',
-                            style=GRAPH_STYLE,
-                            figure=go.Figure(layout=GRAPH_LAYOUT)
-                        ), size="sm")
+                                dbc.Col(
+                                    [
+                                        dbc.Progress(
+                                            id="progress",
+                                            value=0,
+                                            animated=False,
+                                            striped=True,
+                                            color="info",
+                                            className="mb-3",
+                                            style={
+                                                "height": "30px",
+                                                "width": "100%",
+                                                "display": "flex",
+                                                "alignItems": "center",
+                                                "justifyContent": "center",
+                                                "fontSize": "14px",
+                                                "fontWeight": "bold",
+                                                "backgroundColor": _colors["secondary"],
+                                            },
+                                            children="Verzeichnis auswählen",
+                                        ),
+                                        dbc.Badge(
+                                            "Datenquelle: -",
+                                            id="data-source-badge",
+                                            color="secondary",
+                                            className="mt-2",
+                                        ),
+                                    ],
+                                    md=8,
+                                ),
+                            ],
+                            align="center",
+                        ),
+                        dcc.Store(id="db-path", data=None),
+                        dcc.Store(id="param-path", data=None),
+                        dcc.Interval(id="appdb-autoload", interval=1000, n_intervals=0, max_intervals=1),
+                        html.Div(id="parameters-table"),
                     ],
-                    md_value=12
-                )
-            ]),
-        ], label="Projekte & Muster"),
-        dbc.Tab([
-            html.H2("Zeitreihen & Trends",
-                    style={'textAlign': 'center', 'color': _colors['text'], 'marginTop': '30px'}),
-            html.P("Analyse der Arbeitszeiten über verschiedene Zeiträume",
-                   style={'textAlign': 'center', 'color': _colors['text'], 'marginBottom': '20px'}),
-            dbc.Row([
-                create_card(
-                    "Täglicher Arbeitsstunden-Trend",
-                    dbc.Spinner(dcc.Graph(
-                        id='daily-trend-chart',
-                        style=GRAPH_STYLE,
-                        figure=go.Figure(layout=GRAPH_LAYOUT)
-                    ), size="sm"),
-                    md_value=12
-                )
-            ]),
-            dbc.Row([
-                create_card(
-                    "Wöchentliche Durchschnittsstunden",
-                    dbc.Spinner(dcc.Graph(
-                        id='weekly-trend-chart',
-                        style=GRAPH_STYLE,
-                        figure=go.Figure(layout=GRAPH_LAYOUT)
-                    ), size="sm")
+                    md=12,
                 ),
-                create_card(
-                    "Wochentags-Muster",
-                    dbc.Spinner(dcc.Graph(
-                        id='weekday-pattern-chart',
-                        style=GRAPH_STYLE,
-                        figure=go.Figure(layout=GRAPH_LAYOUT)
-                    ), size="sm")
-                )
-            ]),
-        ], label="Zeitreihen"),
-        dbc.Tab([
-            html.H2("Erweiterte Analysen",
-                    style={'textAlign': 'center', 'color': _colors['text'], 'marginTop': '30px'}),
-            dbc.Row([
-                create_card(
-                    "Benutzer-Cluster Übersicht",
-                    dbc.Spinner(dcc.Graph(
-                        id='cluster-overview-chart',
-                        style=GRAPH_STYLE,
-                        figure=go.Figure(layout=GRAPH_LAYOUT)
-                    ), size="sm")
+            ]
+        ),
+        dbc.Tabs(
+            [
+                dbc.Tab(
+                    [
+                        html.H2(
+                            "Grundlegende Statistiken",
+                            style={"textAlign": "center", "color": _colors["text"], "marginTop": "30px"},
+                        ),
+                        html.P(
+                            "Vergleich der Arbeitszeiten zwischen Benutzern und Projekten",
+                            style={"textAlign": "center", "color": _colors["text"], "marginBottom": "20px"},
+                        ),
+                        dbc.Row(
+                            [
+                                create_card(
+                                    "Stunden pro Projekt (1)",
+                                    [
+                                        dcc.Dropdown(
+                                            id="left-user-dropdown",
+                                            placeholder="Benutzer auswählen",
+                                            style=DROPDOWN_STYLE,
+                                            className="dropdown-custom",
+                                        ),
+                                        dbc.Spinner(dcc.Graph(id="left-pie-chart", style=GRAPH_STYLE), size="sm"),
+                                    ],
+                                ),
+                                create_card(
+                                    "Stunden pro Projekt (2)",
+                                    [
+                                        dcc.Dropdown(
+                                            id="right-user-dropdown",
+                                            placeholder="Benutzer auswählen",
+                                            style=DROPDOWN_STYLE,
+                                            className="dropdown-custom",
+                                        ),
+                                        dbc.Spinner(
+                                            dcc.Graph(
+                                                id="right-pie-chart",
+                                                style=GRAPH_STYLE,
+                                                figure=go.Figure(layout=GRAPH_LAYOUT),
+                                            ),
+                                            size="sm",
+                                        ),
+                                    ],
+                                ),
+                            ]
+                        ),
+                        html.H2(
+                            "Zeitanalyse", style={"textAlign": "center", "color": _colors["text"], "marginTop": "30px"}
+                        ),
+                        html.P(
+                            "Analyse der Arbeitszeiten über verschiedene Zeiträume",
+                            style={"textAlign": "center", "color": _colors["text"], "marginBottom": "20px"},
+                        ),
+                        dbc.Row(
+                            [
+                                create_card(
+                                    "Gesamtstunden pro Benutzer",
+                                    [
+                                        html.P(
+                                            "Gesamtarbeitszeit pro Benutzer über den gesamten Zeitraum",
+                                            style={"color": _colors["text"]},
+                                        ),
+                                        dbc.Spinner(dcc.Graph(id="total-hours-chart", style=GRAPH_STYLE), size="sm"),
+                                    ],
+                                ),
+                                create_card(
+                                    "Durchschnittliche Stunden pro Tag",
+                                    [
+                                        html.P(
+                                            "Durchschnittliche tägliche Arbeitszeit pro Benutzer",
+                                            style={"color": _colors["text"]},
+                                        ),
+                                        dbc.Spinner(
+                                            dcc.Graph(id="average-hours-per-user-chart", style=GRAPH_STYLE), size="sm"
+                                        ),
+                                    ],
+                                ),
+                            ]
+                        ),
+                        dbc.Row(
+                            [
+                                create_card(
+                                    "Durchschnitt pro Zeitraum",
+                                    [
+                                        html.P(
+                                            "Durchschnittliche Arbeitszeit pro benutzerdefiniertem Zeitraum",
+                                            style={"color": _colors["text"]},
+                                        ),
+                                        dbc.InputGroup(
+                                            [
+                                                dbc.Input(
+                                                    id="period-days-input",
+                                                    type="number",
+                                                    value=7,
+                                                    min=1,
+                                                    max=365,
+                                                    style={
+                                                        "backgroundColor": _colors["secondary"],
+                                                        "color": _colors["text"],
+                                                        "border": f"1px solid {_colors['primary']}",
+                                                    },
+                                                ),
+                                                dbc.InputGroupText("Tage"),
+                                                dbc.Button(
+                                                    "Berechnen",
+                                                    id="update-period-button",
+                                                    n_clicks=0,
+                                                    color="primary",
+                                                    size="sm",
+                                                ),
+                                            ],
+                                            className="mb-3",
+                                        ),
+                                        dbc.Spinner(
+                                            dcc.Graph(id="average-hours-per-period-chart", style=GRAPH_STYLE), size="sm"
+                                        ),
+                                    ],
+                                    md_value=12,
+                                )
+                            ]
+                        ),
+                    ],
+                    label="Grundlagen",
                 ),
-                create_card(
-                    "Cluster-Profile",
-                    dbc.Spinner(dcc.Graph(
-                        id='cluster-profile-chart',
-                        style=GRAPH_STYLE,
-                        figure=go.Figure(layout=GRAPH_LAYOUT)
-                    ), size="sm")
-                )
-            ]),
-            dbc.Row([
-                create_card(
-                    "Dauer-Prädiktoren",
-                    dbc.Spinner(dcc.Graph(
-                        id='regression-importance-chart',
-                        style=GRAPH_STYLE,
-                        figure=go.Figure(layout=GRAPH_LAYOUT)
-                    ), size="sm")
+                dbc.Tab(
+                    [
+                        html.H2(
+                            "Projektanalyse",
+                            style={"textAlign": "center", "color": _colors["text"], "marginTop": "30px"},
+                        ),
+                        html.P(
+                            "Detaillierte Analyse der Projektzeiten und Wechsel",
+                            style={"textAlign": "center", "color": _colors["text"], "marginBottom": "20px"},
+                        ),
+                        dbc.Row(
+                            [
+                                create_card(
+                                    "Projektzeit-Statistiken",
+                                    [
+                                        html.P(
+                                            "Durchschnittliche, minimale und maximale Arbeitsdauer pro Projekt",
+                                            style={"color": _colors["text"]},
+                                        ),
+                                        dbc.Spinner(dcc.Graph(id="project-stats-chart", style=GRAPH_STYLE), size="sm"),
+                                    ],
+                                    md_value=12,
+                                )
+                            ]
+                        ),
+                        dbc.Row(
+                            [
+                                create_card(
+                                    "Tägliche Projektstunden",
+                                    [
+                                        html.P(
+                                            "Tägliche Arbeitszeit aufgeschlüsselt nach Projekten",
+                                            style={"color": _colors["text"]},
+                                        ),
+                                        dbc.Spinner(dcc.Graph(id="daily-hours-chart", style=GRAPH_STYLE), size="sm"),
+                                    ],
+                                ),
+                                create_card(
+                                    "Projektwechsel",
+                                    [
+                                        html.P(
+                                            "Analyse der Projektwechsel und Pausen zwischen Projekten",
+                                            style={"color": _colors["text"]},
+                                        ),
+                                        dbc.Spinner(
+                                            dcc.Graph(id="project-switches-chart", style=GRAPH_STYLE), size="sm"
+                                        ),
+                                    ],
+                                ),
+                            ]
+                        ),
+                        html.H2(
+                            "Arbeitsmuster",
+                            style={"textAlign": "center", "color": _colors["text"], "marginTop": "30px"},
+                        ),
+                        html.P(
+                            "Analyse der individuellen Arbeitszeitmuster",
+                            style={"textAlign": "center", "color": _colors["text"], "marginBottom": "20px"},
+                        ),
+                        dbc.Row(
+                            [
+                                create_card(
+                                    "Arbeitsmuster",
+                                    [
+                                        html.P(
+                                            "Tageszeitliche Arbeitsmuster: Frühe Starter (vor 8 Uhr), Kernzeitarbeiter (9-17 Uhr), Spätarbeiter (nach 17 Uhr)",
+                                            style={"color": _colors["text"]},
+                                        ),
+                                        dbc.Row(
+                                            [
+                                                dbc.Col(
+                                                    [
+                                                        dcc.Dropdown(
+                                                            id="pattern-user-dropdown",
+                                                            placeholder="Benutzer zum Vergleich auswählen",
+                                                            multi=True,
+                                                            style=DROPDOWN_STYLE,
+                                                            className="dropdown-custom",
+                                                        ),
+                                                    ],
+                                                    width=6,
+                                                ),
+                                            ],
+                                            className="mb-3",
+                                        ),
+                                        dbc.Spinner(
+                                            dcc.Graph(
+                                                id="daily-patterns-chart",
+                                                style=GRAPH_STYLE,
+                                                figure=go.Figure(layout=GRAPH_LAYOUT),
+                                            ),
+                                            size="sm",
+                                        ),
+                                    ],
+                                    md_value=12,
+                                )
+                            ]
+                        ),
+                    ],
+                    label="Projekte & Muster",
                 ),
-                create_card(
-                    "Vorhersagegenauigkeit",
-                    dbc.Spinner(dcc.Graph(
-                        id='regression-accuracy-chart',
-                        style=GRAPH_STYLE,
-                        figure=go.Figure(layout=GRAPH_LAYOUT)
-                    ), size="sm")
-                )
-            ]),
-            dbc.Row([
-                create_card(
-                    "Benutzer-Unterschiede",
-                    dbc.Spinner(dcc.Graph(
-                        id='anova-user-chart',
-                        style=GRAPH_STYLE,
-                        figure=go.Figure(layout=GRAPH_LAYOUT)
-                    ), size="sm")
+                dbc.Tab(
+                    [
+                        html.H2(
+                            "Zeitreihen & Trends",
+                            style={"textAlign": "center", "color": _colors["text"], "marginTop": "30px"},
+                        ),
+                        html.P(
+                            "Analyse der Arbeitszeiten über verschiedene Zeiträume",
+                            style={"textAlign": "center", "color": _colors["text"], "marginBottom": "20px"},
+                        ),
+                        dbc.Row(
+                            [
+                                create_card(
+                                    "Täglicher Arbeitsstunden-Trend",
+                                    dbc.Spinner(
+                                        dcc.Graph(
+                                            id="daily-trend-chart",
+                                            style=GRAPH_STYLE,
+                                            figure=go.Figure(layout=GRAPH_LAYOUT),
+                                        ),
+                                        size="sm",
+                                    ),
+                                    md_value=12,
+                                )
+                            ]
+                        ),
+                        dbc.Row(
+                            [
+                                create_card(
+                                    "Wöchentliche Durchschnittsstunden",
+                                    dbc.Spinner(
+                                        dcc.Graph(
+                                            id="weekly-trend-chart",
+                                            style=GRAPH_STYLE,
+                                            figure=go.Figure(layout=GRAPH_LAYOUT),
+                                        ),
+                                        size="sm",
+                                    ),
+                                ),
+                                create_card(
+                                    "Wochentags-Muster",
+                                    dbc.Spinner(
+                                        dcc.Graph(
+                                            id="weekday-pattern-chart",
+                                            style=GRAPH_STYLE,
+                                            figure=go.Figure(layout=GRAPH_LAYOUT),
+                                        ),
+                                        size="sm",
+                                    ),
+                                ),
+                            ]
+                        ),
+                    ],
+                    label="Zeitreihen",
                 ),
-                create_card(
-                    "Projekt-Unterschiede",
-                    dbc.Spinner(dcc.Graph(
-                        id='anova-project-chart',
-                        style=GRAPH_STYLE,
-                        figure=go.Figure(layout=GRAPH_LAYOUT)
-                    ), size="sm")
-                )
-            ]),
-        ], label="Erweitert"),
-    ], className="mt-4")
-], fluid=True, style={'backgroundColor': _colors['background'], 'color': _colors['text'],
-                       'padding': '20px 30px', 'minHeight': '100vh'})
+                dbc.Tab(
+                    [
+                        html.H2(
+                            "Erweiterte Analysen",
+                            style={"textAlign": "center", "color": _colors["text"], "marginTop": "30px"},
+                        ),
+                        dbc.Row(
+                            [
+                                create_card(
+                                    "Benutzer-Cluster Übersicht",
+                                    dbc.Spinner(
+                                        dcc.Graph(
+                                            id="cluster-overview-chart",
+                                            style=GRAPH_STYLE,
+                                            figure=go.Figure(layout=GRAPH_LAYOUT),
+                                        ),
+                                        size="sm",
+                                    ),
+                                ),
+                                create_card(
+                                    "Cluster-Profile",
+                                    dbc.Spinner(
+                                        dcc.Graph(
+                                            id="cluster-profile-chart",
+                                            style=GRAPH_STYLE,
+                                            figure=go.Figure(layout=GRAPH_LAYOUT),
+                                        ),
+                                        size="sm",
+                                    ),
+                                ),
+                            ]
+                        ),
+                        dbc.Row(
+                            [
+                                create_card(
+                                    "Dauer-Prädiktoren",
+                                    dbc.Spinner(
+                                        dcc.Graph(
+                                            id="regression-importance-chart",
+                                            style=GRAPH_STYLE,
+                                            figure=go.Figure(layout=GRAPH_LAYOUT),
+                                        ),
+                                        size="sm",
+                                    ),
+                                ),
+                                create_card(
+                                    "Vorhersagegenauigkeit",
+                                    dbc.Spinner(
+                                        dcc.Graph(
+                                            id="regression-accuracy-chart",
+                                            style=GRAPH_STYLE,
+                                            figure=go.Figure(layout=GRAPH_LAYOUT),
+                                        ),
+                                        size="sm",
+                                    ),
+                                ),
+                            ]
+                        ),
+                        dbc.Row(
+                            [
+                                create_card(
+                                    "Benutzer-Unterschiede",
+                                    dbc.Spinner(
+                                        dcc.Graph(
+                                            id="anova-user-chart",
+                                            style=GRAPH_STYLE,
+                                            figure=go.Figure(layout=GRAPH_LAYOUT),
+                                        ),
+                                        size="sm",
+                                    ),
+                                ),
+                                create_card(
+                                    "Projekt-Unterschiede",
+                                    dbc.Spinner(
+                                        dcc.Graph(
+                                            id="anova-project-chart",
+                                            style=GRAPH_STYLE,
+                                            figure=go.Figure(layout=GRAPH_LAYOUT),
+                                        ),
+                                        size="sm",
+                                    ),
+                                ),
+                            ]
+                        ),
+                    ],
+                    label="Erweitert",
+                ),
+            ],
+            className="mt-4",
+        ),
+    ],
+    fluid=True,
+    style={
+        "backgroundColor": _colors["background"],
+        "color": _colors["text"],
+        "padding": "20px 30px",
+        "minHeight": "100vh",
+    },
+)
+
 
 def _load_dashboard_data(db_path, param_path, label, params_required=True):
     def update_progress(value, text, animated=True, striped=True):
@@ -466,30 +661,39 @@ def _load_dashboard_data(db_path, param_path, label, params_required=True):
     progress_values = update_progress(30, "Datenbank geladen")
 
     progress_values = update_progress(90, "Bereite Benutzeroptionen vor...")
-    users = [user for user in data.select(pl.col("user").unique()).to_series().to_list() if user != "users"] if not data.is_empty() else []
-    left_user = 'user_1' if 'user_1' in users else users[0] if len(users) > 0 else None
-    right_user = 'user_2' if 'user_2' in users else users[1] if len(users) > 1 else None
-    options = [{'label': user, 'value': user} for user in users]
+    users = (
+        [user for user in data.select(pl.col("user").unique()).to_series().to_list() if user != "users"]
+        if not data.is_empty()
+        else []
+    )
+    left_user = "user_1" if "user_1" in users else users[0] if len(users) > 0 else None
+    right_user = "user_2" if "user_2" in users else users[1] if len(users) > 1 else None
+    options = [{"label": user, "value": user} for user in users]
 
     progress_values = update_progress(100, f"Fertig: {label}", animated=False, striped=True)
     return db_path, param_path, data_source, *progress_values, options, left_user, options, right_user
 
+
 @app.callback(
-    [Output('db-path', 'data'),
-     Output('param-path', 'data'),
-     Output('data-source-badge', 'children'),
-     Output('progress', 'value'),
-     Output('progress', 'animated'),
-     Output('progress', 'striped'),
-     Output('progress', 'children'),
-     Output('left-user-dropdown', 'options'),
-     Output('left-user-dropdown', 'value'),
-     Output('right-user-dropdown', 'options'),
-     Output('right-user-dropdown', 'value')],
-    [Input('browse-button', 'n_clicks'),
-     Input('example-button', 'n_clicks'),
-     Input('refresh-button', 'n_clicks'),
-     Input('appdb-autoload', 'n_intervals')]
+    [
+        Output("db-path", "data"),
+        Output("param-path", "data"),
+        Output("data-source-badge", "children"),
+        Output("progress", "value"),
+        Output("progress", "animated"),
+        Output("progress", "striped"),
+        Output("progress", "children"),
+        Output("left-user-dropdown", "options"),
+        Output("left-user-dropdown", "value"),
+        Output("right-user-dropdown", "options"),
+        Output("right-user-dropdown", "value"),
+    ],
+    [
+        Input("browse-button", "n_clicks"),
+        Input("example-button", "n_clicks"),
+        Input("refresh-button", "n_clicks"),
+        Input("appdb-autoload", "n_intervals"),
+    ],
 )
 def update_paths(browse_clicks, example_clicks, refresh_clicks, autoload_intervals):
     """Updates database and parameter paths based on selected source."""
@@ -529,10 +733,8 @@ def update_paths(browse_clicks, example_clicks, refresh_clicks, autoload_interva
 
     return None, None, "Datenquelle: -", 0, False, False, "Verzeichnis auswählen", [], None, [], None
 
-@app.callback(
-    Output('parameters-table', 'children'),
-    [Input('param-path', 'data')]
-)
+
+@app.callback(Output("parameters-table", "children"), [Input("param-path", "data")])
 def update_parameters_table(param_path):
     """Updates parameters table based on selected parameter file."""
     if param_path:
@@ -540,109 +742,145 @@ def update_parameters_table(param_path):
         if parameters:
             # Stil-Definitionen
             table_style = {
-                'width': '100%',
-                'border': '1px solid black',
-                'border-collapse': 'collapse',
-                'margin-bottom': '10px',
-                'color': _colors['text'],
-                'background-color': _colors['background'],
-                'font-size': '0.9em'  # Kleinere Schriftgröße
+                "width": "100%",
+                "border": "1px solid black",
+                "border-collapse": "collapse",
+                "margin-bottom": "10px",
+                "color": _colors["text"],
+                "background-color": _colors["background"],
+                "font-size": "0.9em",  # Kleinere Schriftgröße
             }
             header_style = {
-                'backgroundColor': _colors['secondary'],
-                'color': _colors['text'],
-                'padding': '4px 6px',  # Reduziertes Padding
-                'font-weight': 'bold',
-                'text-align': 'center',
-                'border': f"1px solid {_colors['accent']}"
+                "backgroundColor": _colors["secondary"],
+                "color": _colors["text"],
+                "padding": "4px 6px",  # Reduziertes Padding
+                "font-weight": "bold",
+                "text-align": "center",
+                "border": f"1px solid {_colors['accent']}",
             }
             cell_style = {
-                'border': f"1px solid {_colors['secondary']}",
-                'padding': '3px 6px',  # Reduziertes Padding
-                'text-align': 'center'
+                "border": f"1px solid {_colors['secondary']}",
+                "padding": "3px 6px",  # Reduziertes Padding
+                "text-align": "center",
             }
 
             # Container mit Flex-Layout
-            return html.Div([
-                # Kompakter Header mit Dropdown für Details
-                dbc.Row([
-                    dbc.Col([
-                        html.H4("Generierungsparameter", style={
-                            'color': _colors['text'],
-                            'margin': '5px 0',
-                            'display': 'inline-block'
-                        }),
-                        dbc.Button(
-                            "Details ein/ausblenden",
-                            id="toggle-params",
-                            color="secondary",
-                            size="sm",
-                            className="ml-2",
-                            style={'margin-left': '10px'}
-                        )
-                    ])
-                ], className="mb-2"),
+            return html.Div(
+                [
+                    # Kompakter Header mit Dropdown für Details
+                    dbc.Row(
+                        [
+                            dbc.Col(
+                                [
+                                    html.H4(
+                                        "Generierungsparameter",
+                                        style={"color": _colors["text"], "margin": "5px 0", "display": "inline-block"},
+                                    ),
+                                    dbc.Button(
+                                        "Details ein/ausblenden",
+                                        id="toggle-params",
+                                        color="secondary",
+                                        size="sm",
+                                        className="ml-2",
+                                        style={"margin-left": "10px"},
+                                    ),
+                                ]
+                            )
+                        ],
+                        className="mb-2",
+                    ),
+                    # Collapse-Container für die Tabellen
+                    dbc.Collapse(
+                        [
+                            # Zwei-Spalten-Layout für die Tabellen
+                            dbc.Row(
+                                [
+                                    # Linke Spalte: General Parameters
+                                    dbc.Col(
+                                        [
+                                            html.Table(
+                                                [
+                                                    html.Tr(
+                                                        [
+                                                            html.Th(key.replace("_", " ").title(), style=header_style)
+                                                            for key in parameters.get("user_specific_params", {}).get(
+                                                                "user_1", {}
+                                                            )
+                                                        ]
+                                                    ),
+                                                    html.Tr(
+                                                        [
+                                                            html.Td(str(value), style=cell_style)
+                                                            for value in [
+                                                                parameters.get("num_users"),
+                                                                parameters.get("storage_type"),
+                                                                parameters.get("start_date"),
+                                                                parameters.get("end_date"),
+                                                            ]
+                                                        ]
+                                                    ),
+                                                ],
+                                                style=table_style,
+                                            )
+                                        ],
+                                        md=12,
+                                        lg=12,
+                                    ),
+                                    # Rechte Spalte: User Parameters
+                                    dbc.Col(
+                                        [
+                                            html.Table(
+                                                [
+                                                    # Header
+                                                    html.Tr(
+                                                        [
+                                                            html.Th("User", style=header_style),
+                                                            *[
+                                                                html.Th(
+                                                                    key.replace("_", " ").title(), style=header_style
+                                                                )
+                                                                for key in parameters.get(
+                                                                    "user_specific_params", {}
+                                                                ).get("user_1", {})
+                                                            ],
+                                                        ]
+                                                    ),
+                                                    # User Zeilen
+                                                    *[
+                                                        html.Tr(
+                                                            [
+                                                                html.Th(
+                                                                    user, style={**header_style, "font-size": "0.9em"}
+                                                                ),
+                                                                *[
+                                                                    html.Td(str(config[key]), style=cell_style)
+                                                                    for key in config
+                                                                ],
+                                                            ]
+                                                        )
+                                                        for user, config in parameters.get(
+                                                            "user_specific_params", {}
+                                                        ).items()
+                                                    ],
+                                                ],
+                                                style=table_style,
+                                            )
+                                        ],
+                                        md=12,
+                                        lg=12,
+                                    ),
+                                ]
+                            )
+                        ],
+                        id="collapse-params",
+                        is_open=True,
+                    ),
+                ]
+            )
 
-                # Collapse-Container für die Tabellen
-                dbc.Collapse(
-                    [
-                        # Zwei-Spalten-Layout für die Tabellen
-                        dbc.Row([
-                            # Linke Spalte: General Parameters
-                            dbc.Col([
-                                html.Table(
-                                    [
-                                        html.Tr([
-                                            html.Th(key.replace('_', ' ').title(), style=header_style)
-                                            for key in parameters.get('user_specific_params', {}).get('user_1', {})
-                                        ]),
-                                        html.Tr([
-                                            html.Td(str(value), style=cell_style)
-                                            for value in [
-                                                parameters.get('num_users'),
-                                                parameters.get('storage_type'),
-                                                parameters.get('start_date'),
-                                                parameters.get('end_date')
-                                            ]
-                                        ])
-                                    ],
-                                    style=table_style
-                                )
-                            ], md=12, lg=12),
+        return html.Div("No parameters found.", style={"color": _colors["text"]})
+    return html.Div("Select a directory to load parameters.", style={"color": _colors["text"]})
 
-                            # Rechte Spalte: User Parameters
-                            dbc.Col([
-                                html.Table(
-                                    [
-                                        # Header
-                                        html.Tr([
-                                            html.Th("User", style=header_style),
-                                            *[html.Th(
-                                                key.replace('_', ' ').title(),
-                                                style=header_style
-                                            ) for key in parameters.get('user_specific_params', {}).get('user_1', {})]
-                                        ]),
-                                        # User Zeilen
-                                        *[html.Tr([
-                                            html.Th(user, style={**header_style, 'font-size': '0.9em'}),
-                                            *[html.Td(
-                                                str(config[key]),
-                                                style=cell_style
-                                            ) for key in config]
-                                        ]) for user, config in parameters.get('user_specific_params', {}).items()]
-                                    ],
-                                    style=table_style
-                                )
-                            ], md=12, lg=12)
-                        ])
-                    ],
-                    id="collapse-params",
-                    is_open=True
-                )
-            ])
-
-        return html.Div("No parameters found.", style={'color': _colors['text']})
-    return html.Div("Select a directory to load parameters.", style={'color': _colors['text']})
 
 # Callback für Toggle-Button
 @app.callback(
@@ -655,11 +893,8 @@ def toggle_collapse(n, is_open):
         return not is_open
     return is_open
 
-@app.callback(
-    Output('left-pie-chart', 'figure'),
-    [Input('left-user-dropdown', 'value'),
-     Input('db-path', 'data')]
-)
+
+@app.callback(Output("left-pie-chart", "figure"), [Input("left-user-dropdown", "value"), Input("db-path", "data")])
 def update_left_pie_chart(selected_user, db_path):
     """Updates the left pie chart based on the selected user."""
     if db_path and selected_user:
@@ -668,13 +903,10 @@ def update_left_pie_chart(selected_user, db_path):
         left_pie_chart = plot_hours_per_project(hours, selected_user)
         return left_pie_chart
     else:
-        return go.Figure(layout=go.Layout(plot_bgcolor=_colors['background'], paper_bgcolor=_colors['background']))
+        return go.Figure(layout=go.Layout(plot_bgcolor=_colors["background"], paper_bgcolor=_colors["background"]))
 
-@app.callback(
-    Output('right-pie-chart', 'figure'),
-    [Input('right-user-dropdown', 'value'),
-     Input('db-path', 'data')]
-)
+
+@app.callback(Output("right-pie-chart", "figure"), [Input("right-user-dropdown", "value"), Input("db-path", "data")])
 def update_right_pie_chart(selected_user, db_path):
     """Updates the right pie chart based on the selected user."""
     if db_path and selected_user:
@@ -683,13 +915,10 @@ def update_right_pie_chart(selected_user, db_path):
         right_pie_chart = plot_hours_per_project(hours, selected_user)
         return right_pie_chart
     else:
-        return go.Figure(layout=go.Layout(plot_bgcolor=_colors['background'], paper_bgcolor=_colors['background']))
+        return go.Figure(layout=go.Layout(plot_bgcolor=_colors["background"], paper_bgcolor=_colors["background"]))
 
-@app.callback(
-    Output('total-hours-chart', 'figure'),
-    [Input('total-hours-chart', 'id'),
-     Input('db-path', 'data')]
-)
+
+@app.callback(Output("total-hours-chart", "figure"), [Input("total-hours-chart", "id"), Input("db-path", "data")])
 def update_total_hours_chart(_, db_path):
     """Updates the total hours chart."""
     if db_path:
@@ -698,12 +927,12 @@ def update_total_hours_chart(_, db_path):
         total_hours_chart = plot_total_hours_per_user(total_hours, date_range)
         return total_hours_chart
     else:
-        return go.Figure(layout=go.Layout(plot_bgcolor=_colors['background'], paper_bgcolor=_colors['background']))
+        return go.Figure(layout=go.Layout(plot_bgcolor=_colors["background"], paper_bgcolor=_colors["background"]))
+
 
 @app.callback(
-    Output('average-hours-per-user-chart', 'figure'),
-    [Input('average-hours-per-user-chart', 'id'),
-     Input('db-path', 'data')]
+    Output("average-hours-per-user-chart", "figure"),
+    [Input("average-hours-per-user-chart", "id"), Input("db-path", "data")],
 )
 def update_average_hours_per_user_chart(_, db_path):
     """Updates the average hours per user chart."""
@@ -712,22 +941,29 @@ def update_average_hours_per_user_chart(_, db_path):
         average_hours = get_cached_stat("average_hours_per_user", lambda: calculate_average_hours_per_user(data))
         return plot_average_hours_per_user(average_hours)
     else:
-        return go.Figure(layout=go.Layout(plot_bgcolor=_colors['background'], paper_bgcolor=_colors['background']))
+        return go.Figure(layout=go.Layout(plot_bgcolor=_colors["background"], paper_bgcolor=_colors["background"]))
+
 
 @app.callback(
-    Output('average-hours-per-period-chart', 'figure'),
-    [Input('db-path', 'data'),
-     Input('update-period-button', 'n_clicks')],
-    [State('period-days-input', 'value')]
+    Output("average-hours-per-period-chart", "figure"),
+    [Input("db-path", "data"), Input("update-period-button", "n_clicks")],
+    [State("period-days-input", "value")],
 )
 def update_average_hours_per_period_chart(db_path, n_clicks, period_days):
     """Updates the average hours per period chart."""
     try:
         period_days = int(period_days)
         if period_days <= 0:
-            return go.Figure(layout=go.Layout(title='Ungültiger Zeitraum: Bitte einen Wert größer als 0 eingeben',
-                                  xaxis_title='Benutzer', yaxis_title='Durchschn. Stunden',
-                                  plot_bgcolor=_colors['background'], paper_bgcolor=_colors['background'], font_color=_colors['text']))
+            return go.Figure(
+                layout=go.Layout(
+                    title="Ungültiger Zeitraum: Bitte einen Wert größer als 0 eingeben",
+                    xaxis_title="Benutzer",
+                    yaxis_title="Durchschn. Stunden",
+                    plot_bgcolor=_colors["background"],
+                    paper_bgcolor=_colors["background"],
+                    font_color=_colors["text"],
+                )
+            )
         if db_path:
             data = get_cached_data(db_path)
             key = f"average_hours_per_period_{period_days}"
@@ -735,17 +971,25 @@ def update_average_hours_per_period_chart(db_path, n_clicks, period_days):
             fig = plot_average_hours_per_period(avg_period, period_days)
             return fig
         else:
-            return go.Figure(layout=go.Layout(plot_bgcolor=_colors['background'], paper_bgcolor=_colors['background']))
+            return go.Figure(layout=go.Layout(plot_bgcolor=_colors["background"], paper_bgcolor=_colors["background"]))
     except ValueError:
-        return go.Figure(layout=go.Layout(title='Ungültiger Zeitraum: Bitte eine gültige Zahl eingeben',
-                              xaxis_title='Benutzer', yaxis_title='Durchschn. Stunden',
-                              plot_bgcolor=_colors['background'], paper_bgcolor=_colors['background'], font_color=_colors['text']))
+        return go.Figure(
+            layout=go.Layout(
+                title="Ungültiger Zeitraum: Bitte eine gültige Zahl eingeben",
+                xaxis_title="Benutzer",
+                yaxis_title="Durchschn. Stunden",
+                plot_bgcolor=_colors["background"],
+                paper_bgcolor=_colors["background"],
+                font_color=_colors["text"],
+            )
+        )
+
 
 # Callback für alle Card-Toggles
 @app.callback(
-    Output({'type': 'collapse-card', 'index': MATCH}, 'is_open'),
-    Input({'type': 'toggle-card', 'index': MATCH}, 'n_clicks'),
-    State({'type': 'collapse-card', 'index': MATCH}, 'is_open'),
+    Output({"type": "collapse-card", "index": MATCH}, "is_open"),
+    Input({"type": "toggle-card", "index": MATCH}, "n_clicks"),
+    State({"type": "collapse-card", "index": MATCH}, "is_open"),
 )
 def toggle_card(n_clicks, is_open):
     """Toggle die Sichtbarkeit einer Card."""
@@ -753,12 +997,15 @@ def toggle_card(n_clicks, is_open):
         return not is_open
     return is_open
 
+
 @app.callback(
-    [Output('project-stats-chart', 'figure'),
-     Output('daily-hours-chart', 'figure'),
-     Output('project-switches-chart', 'figure'),
-     Output('pattern-user-dropdown', 'options')],
-    [Input('db-path', 'data')]
+    [
+        Output("project-stats-chart", "figure"),
+        Output("daily-hours-chart", "figure"),
+        Output("project-switches-chart", "figure"),
+        Output("pattern-user-dropdown", "options"),
+    ],
+    [Input("db-path", "data")],
 )
 def update_advanced_stats(db_path):
     """Aktualisiert die erweiterten Statistik-Visualisierungen."""
@@ -784,9 +1031,11 @@ def update_advanced_stats(db_path):
         switches_fig = plot_project_switches(switches)
 
         # User-Optionen für Dropdown
-        users = [{'label': user, 'value': user}
-                 for user in data.select(pl.col("user").unique()).to_series().to_list()
-                 if user != 'users']
+        users = [
+            {"label": user, "value": user}
+            for user in data.select(pl.col("user").unique()).to_series().to_list()
+            if user != "users"
+        ]
 
         return stats_fig, daily_fig, switches_fig, users
 
@@ -794,10 +1043,9 @@ def update_advanced_stats(db_path):
         logger.error("Fehler beim Laden der erweiterten Statistiken: %s", e)
         return empty_fig, empty_fig, empty_fig, empty_options
 
+
 @app.callback(
-    Output('daily-patterns-chart', 'figure'),
-    [Input('db-path', 'data'),
-     Input('pattern-user-dropdown', 'value')]
+    Output("daily-patterns-chart", "figure"), [Input("db-path", "data"), Input("pattern-user-dropdown", "value")]
 )
 def update_daily_patterns(db_path, selected_users):
     """Aktualisiert die Visualisierung der tageszeitlichen Muster."""
@@ -816,11 +1064,14 @@ def update_daily_patterns(db_path, selected_users):
 
     return go.Figure(layout=GRAPH_LAYOUT)
 
+
 @app.callback(
-    [Output('daily-trend-chart', 'figure'),
-     Output('weekly-trend-chart', 'figure'),
-     Output('weekday-pattern-chart', 'figure')],
-    [Input('db-path', 'data')]
+    [
+        Output("daily-trend-chart", "figure"),
+        Output("weekly-trend-chart", "figure"),
+        Output("weekday-pattern-chart", "figure"),
+    ],
+    [Input("db-path", "data")],
 )
 def update_time_series_analysis(db_path):
     """Aktualisiert die Zeitreihenanalyse-Visualisierungen."""
@@ -832,19 +1083,16 @@ def update_time_series_analysis(db_path):
     try:
         data = get_cached_data(db_path)
         daily_df, weekly_avg, weekday_avg = get_cached_stat("time_series", lambda: analyze_time_series(data))
-        daily_fig, weekly_fig, weekday_fig = plot_time_series_analysis(
-            daily_df, weekly_avg, weekday_avg
-        )
+        daily_fig, weekly_fig, weekday_fig = plot_time_series_analysis(daily_df, weekly_avg, weekday_avg)
         return daily_fig, weekly_fig, weekday_fig
 
     except Exception as e:
         logger.error("Fehler bei der Zeitreihenanalyse: %s", e)
         return empty_fig, empty_fig, empty_fig
 
+
 @app.callback(
-    [Output('cluster-overview-chart', 'figure'),
-     Output('cluster-profile-chart', 'figure')],
-    [Input('db-path', 'data')]
+    [Output("cluster-overview-chart", "figure"), Output("cluster-profile-chart", "figure")], [Input("db-path", "data")]
 )
 def update_cluster_analysis(db_path):
     """Aktualisiert die Cluster-Analyse Visualisierungen."""
@@ -865,10 +1113,10 @@ def update_cluster_analysis(db_path):
         logger.error("Fehler bei der Cluster-Analyse: %s", e)
         return empty_fig, empty_fig
 
+
 @app.callback(
-    [Output('regression-importance-chart', 'figure'),
-     Output('regression-accuracy-chart', 'figure')],
-    [Input('db-path', 'data')]
+    [Output("regression-importance-chart", "figure"), Output("regression-accuracy-chart", "figure")],
+    [Input("db-path", "data")],
 )
 def update_regression_analysis(db_path):
     """Aktualisiert die Regressions-Analyse Visualisierungen."""
@@ -889,10 +1137,9 @@ def update_regression_analysis(db_path):
         logger.error("Fehler bei der Regressions-Analyse: %s", e)
         return empty_fig, empty_fig
 
+
 @app.callback(
-    [Output('anova-user-chart', 'figure'),
-     Output('anova-project-chart', 'figure')],
-    [Input('db-path', 'data')]
+    [Output("anova-user-chart", "figure"), Output("anova-project-chart", "figure")], [Input("db-path", "data")]
 )
 def update_anova_analysis(db_path):
     """Aktualisiert die ANOVA-Analyse Visualisierungen."""
@@ -913,6 +1160,7 @@ def update_anova_analysis(db_path):
         logger.error("Fehler bei der ANOVA-Analyse: %s", e)
         return empty_fig, empty_fig
 
+
 def _find_available_port(start_port):
     for port in range(start_port, start_port + 20):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -921,7 +1169,8 @@ def _find_available_port(start_port):
                 return port
     return start_port
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     debug_mode = os.getenv("DASH_DEBUG", "0") == "1"
     base_port = int(os.getenv("DASH_PORT", "8052"))
     port = _find_available_port(base_port)

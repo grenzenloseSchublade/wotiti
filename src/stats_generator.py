@@ -13,7 +13,7 @@ from utils import PATH_TO_DATA, save_to_csv
 
 logger = logging.getLogger(__name__)
 
-TIMESTAMP_FORMAT = "%d-%m-%Y %H:%M:%S"
+TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 DEFAULT_NUM_DAYS = 90
 DEFAULT_NUM_USERS = 10
 
@@ -24,59 +24,59 @@ DEFAULT_NUM_USERS = 10
 ARCHETYPES = {
     "fruehaufsteher": {
         "label": "Frühaufsteher",
-        "window_start": (6, 0),    # 06:00
-        "window_end":   (14, 0),   # 14:00
-        "daily_hours":  (6.5, 8.0),
-        "block_min":    40,
-        "block_max":    180,
-        "switch_rate":  0.15,      # low — focused, few project switches
+        "window_start": (6, 0),  # 06:00
+        "window_end": (14, 0),  # 14:00
+        "daily_hours": (6.5, 8.0),
+        "block_min": 40,
+        "block_max": 180,
+        "switch_rate": 0.15,  # low — focused, few project switches
         "project_count": 2,
-        "lunch_hour":   11,
+        "lunch_hour": 11,
     },
     "kernzeit": {
         "label": "Kernzeit-Arbeiter",
         "window_start": (9, 0),
-        "window_end":   (17, 0),
-        "daily_hours":  (7.0, 8.5),
-        "block_min":    30,
-        "block_max":    150,
-        "switch_rate":  0.30,
+        "window_end": (17, 0),
+        "daily_hours": (7.0, 8.5),
+        "block_min": 30,
+        "block_max": 150,
+        "switch_rate": 0.30,
         "project_count": 3,
-        "lunch_hour":   12,
+        "lunch_hour": 12,
     },
     "spaetarbeiter": {
         "label": "Spätarbeiter",
         "window_start": (11, 0),
-        "window_end":   (19, 30),
-        "daily_hours":  (7.0, 9.0),
-        "block_min":    20,
-        "block_max":    90,
-        "switch_rate":  0.50,      # high — many short blocks, frequent switches
+        "window_end": (19, 30),
+        "daily_hours": (7.0, 9.0),
+        "block_min": 20,
+        "block_max": 90,
+        "switch_rate": 0.50,  # high — many short blocks, frequent switches
         "project_count": 4,
-        "lunch_hour":   14,
+        "lunch_hour": 14,
     },
     "teilzeit": {
         "label": "Teilzeit",
         "window_start": (8, 0),
-        "window_end":   (13, 0),
-        "daily_hours":  (3.5, 5.5),
-        "block_min":    30,
-        "block_max":    120,
-        "switch_rate":  0.10,
+        "window_end": (13, 0),
+        "daily_hours": (3.5, 5.5),
+        "block_min": 30,
+        "block_max": 120,
+        "switch_rate": 0.10,
         "project_count": 2,
-        "lunch_hour":   None,      # no lunch — too short
+        "lunch_hour": None,  # no lunch — too short
     },
     "flexibel": {
         "label": "Flexibler Arbeiter",
-        "window_start": (7, 0),    # varies ±90min per day
-        "window_end":   (18, 0),
-        "daily_hours":  (6.0, 9.0),
-        "block_min":    15,
-        "block_max":    100,
-        "switch_rate":  0.60,      # very high — context switcher
+        "window_start": (7, 0),  # varies ±90min per day
+        "window_end": (18, 0),
+        "daily_hours": (6.0, 9.0),
+        "block_min": 15,
+        "block_max": 100,
+        "switch_rate": 0.60,  # very high — context switcher
         "project_count": 5,
-        "lunch_hour":   12,
-        "start_jitter_min": 90,    # unique: random start offset ±90min
+        "lunch_hour": 12,
+        "start_jitter_min": 90,  # unique: random start offset ±90min
     },
 }
 
@@ -161,7 +161,9 @@ def _is_sick_day():
 
 def _generate_day_events(date, user_id, config, day_mult):
     """Generate all start/stop events for one user on one day."""
-    date_str = date.strftime("%Y-%m-%d")
+    # ``events.date`` ist DD-MM-YYYY (UI-Konvention) — muss zum Zeitstempel
+    # passen, sonst werden Einträge unter dem falschen Tag angezeigt.
+    date_str = date.strftime("%d-%m-%Y")
     events = []
 
     base_min = config["daily_hours_min"] * 60
@@ -234,6 +236,7 @@ def _generate_day_events(date, user_id, config, day_mult):
 
 # ─── Public API ──────────────────────────────────────────────────────────────
 
+
 def generate_random_sample_data():
     """Generate sample data with archetype-based user profiles (90 days, 10 users)."""
     storage_type = "both"
@@ -260,10 +263,7 @@ def generate_random_sample_data():
     # JSON-serializable params (tuples → lists)
     serializable = {}
     for uname, uconf in user_params.items():
-        serializable[uname] = {
-            k: list(v) if isinstance(v, tuple) else v
-            for k, v in uconf.items()
-        }
+        serializable[uname] = {k: list(v) if isinstance(v, tuple) else v for k, v in uconf.items()}
 
     params = {
         "num_users": len(user_params),
@@ -325,8 +325,9 @@ def generate_sample_data(storage_type, start_date, end_date, path_to_save=PATH_T
         end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
         num_days = (end_date_obj - start_date_obj).days + 1
 
-        logger.info("Starte Datengenerierung: %d User, %d Tage (%s – %s)",
-                     len(user_params), num_days, start_date, end_date)
+        logger.info(
+            "Starte Datengenerierung: %d User, %d Tage (%s – %s)", len(user_params), num_days, start_date, end_date
+        )
 
         # Pre-create users and projects
         user_ids = {}
@@ -373,8 +374,13 @@ def generate_sample_data(storage_type, start_date, end_date, path_to_save=PATH_T
         if storage_type in ["csv", "both"]:
             id_to_name = {uid: name for name, uid in user_ids.items()}
             csv_rows = [
-                {"user": id_to_name[row[0]], "project": row[1],
-                 "event_type": row[2], "timestamp": row[3], "date": row[4]}
+                {
+                    "user": id_to_name[row[0]],
+                    "project": row[1],
+                    "event_type": row[2],
+                    "timestamp": row[3],
+                    "date": row[4],
+                }
                 for row in all_events
             ]
             df = pl.DataFrame(csv_rows)

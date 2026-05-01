@@ -32,6 +32,11 @@ _log_fmt = logging.Formatter(
 _file_handler = logging.handlers.RotatingFileHandler(_log_file, encoding="utf-8", maxBytes=1_000_000, backupCount=3)
 _file_handler.setFormatter(_log_fmt)
 
+# Phase 4.5: Logdatei-Rechte einschränken (POSIX). Auf Windows wirkungslos.
+with contextlib.suppress(OSError, AttributeError, NotImplementedError):
+    if hasattr(os, "chmod") and not sys.platform.startswith("win"):
+        os.chmod(_log_file, 0o600)
+
 if getattr(sys, "frozen", False) and sys.__stdout__ is None:
     # Frozen --noconsole: file-only logging; give streams a safe target
     logging.basicConfig(level=logging.INFO, handlers=[_file_handler])
