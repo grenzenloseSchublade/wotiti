@@ -10,6 +10,7 @@ Die Funktionen erwarten Zeitstempel im Format 'dd-mm-yyyy HH:MM:SS' und
 arbeiten mit pandas DataFrames für effiziente Datenverarbeitung.
 """
 
+import logging
 from datetime import datetime
 
 import numpy as np
@@ -18,6 +19,10 @@ from scipy import stats
 from sklearn.cluster import KMeans
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
+
+from utils import is_non_workday, load_config
+
+logger = logging.getLogger(__name__)
 
 # Konstanten für Zeitkonvertierung
 TIMESTAMP_FORMAT = "%d-%m-%Y %H:%M:%S"
@@ -32,9 +37,88 @@ def _paired_durations_hours(group):
     starts = group.filter(pl.col("event_type") == "start").select("timestamp").to_series().to_list()
     stops = group.filter(pl.col("event_type") == "stop").select("timestamp").to_series().to_list()
     min_length = min(len(starts), len(stops))
+    if len(starts) != len(stops):
+        logger.debug(
+            "_paired_durations_hours: ungepaarte Events (%d Start / %d Stop) — %d Paare gezählt.",
+            len(starts),
+            len(stops),
+            min_length,
+        )
     if min_length == 0:
         return []
-    return [(stops[i] - starts[i]).total_seconds() / 3600 for i in range(min_length)]
+    durations = []
+    neg_count = 0
+    for i in range(min_length):
+        hours = (stops[i] - starts[i]).total_seconds() / 3600
+        if hours < 0:
+            neg_count += 1
+            hours = 0.0
+        durations.append(hours)
+    if neg_count:
+        logger.debug(
+            "_paired_durations_hours: %d negative Dauern auf 0 gesetzt (von %d Paaren).",
+            neg_count,
+            min_length,
+        )
+    return durations
+
+
+# ---------------------------------------------------------------------------
+# Wochenend-/Feiertags-Filter für Durchschnitts- & Trendberechnungen.
+# Summen, Pies und Daily-Breakdown bleiben unverändert.
+# ---------------------------------------------------------------------------
+
+
+def _filter_workdays(
+    data: pl.DataFrame,
+    *,
+    country: str = "DE",
+    subdiv: str | None = None,
+    include_holidays: bool = True,
+    count_weekend_work: bool = False,
+) -> pl.DataFrame:
+    """Filtert Events auf Werktage. ``count_weekend_work=True`` umgeht den Filter."""
+    if data.is_empty() or count_weekend_work:
+        return data
+    try:
+        timestamps = data.select("timestamp").to_series().to_list()
+    except Exception:  # noqa: BLE001
+        return data
+    keep_mask = [
+        not is_non_workday(ts, country=country, subdiv=subdiv, include_holidays=include_holidays) for ts in timestamps
+    ]
+    return data.filter(pl.Series(keep_mask))
+
+
+def _workday_settings() -> dict:
+    """Liest Workday-Einstellungen aus der Config (mit Defaults)."""
+    cfg = load_config()
+    return {
+        "country": cfg.get("holiday_country", "DE") or "DE",
+        "subdiv": (cfg.get("holiday_subdiv") or "") or None,
+        "include_holidays": bool(cfg.get("include_holidays_in_exclusion", True)),
+        "count_weekend_work": bool(cfg.get("count_weekend_work", False)),
+        "exclude_weekends_in_averages": bool(cfg.get("exclude_weekends_in_averages", True)),
+    }
+
+
+def _apply_workday_filter(data: pl.DataFrame, override_count_weekend_work: bool | None = None) -> pl.DataFrame:
+    """Wendet den Workday-Filter gemäß Config an. ``override_count_weekend_work``
+    erlaubt der UI (Checkbox), die Config zur Laufzeit zu übersteuern.
+    """
+    s = _workday_settings()
+    if not s["exclude_weekends_in_averages"]:
+        return data
+    count_weekend = (
+        bool(override_count_weekend_work) if override_count_weekend_work is not None else s["count_weekend_work"]
+    )
+    return _filter_workdays(
+        data,
+        country=s["country"],
+        subdiv=s["subdiv"],
+        include_holidays=s["include_holidays"],
+        count_weekend_work=count_weekend,
+    )
 
 
 def calculate_hours_per_project(data):
@@ -73,7 +157,7 @@ def calculate_total_hours_per_user(data):
     return pl.DataFrame(total_hours), date_range
 
 
-def calculate_average_hours_per_user(data):
+def calculate_average_hours_per_user(data, count_weekend_work: bool | None = None):
     """Calculates average hours per user."""
     if data.is_empty():
         return pl.DataFrame()
@@ -96,7 +180,7 @@ def calculate_average_hours_per_user(data):
     return pl.DataFrame(average_hours)
 
 
-def calculate_average_hours_per_period(data, period_days):
+def calculate_average_hours_per_period(data, period_days, count_weekend_work: bool | None = None):
     """Calculates average hours per user for a given period in days."""
     if data.is_empty():
         return pl.DataFrame()
@@ -332,7 +416,7 @@ def analyze_daily_patterns(data):
     return pl.DataFrame(patterns)
 
 
-def analyze_time_series(data):
+def analyze_time_series(data, count_weekend_work: bool | None = None):
     """Analysiert Zeitreihen-Muster in den Arbeitsdaten."""
     if data.is_empty():
         return pl.DataFrame(), pl.DataFrame(), pl.DataFrame()
@@ -358,11 +442,12 @@ def analyze_time_series(data):
             print(f"Warnung: Datum '{date}' konnte nicht geparst werden")
             continue
 
+        _WDAY_DE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
         daily_hours.append(
             {
                 "user": user,
-                "date": date,
-                "weekday": date_obj.strftime("%A"),
+                "date": date_obj.strftime("%Y-%m-%d"),
+                "weekday": _WDAY_DE[date_obj.weekday()],
                 "week": date_obj.isocalendar().week,
                 "hours": total_hours,
             }
@@ -374,15 +459,7 @@ def analyze_time_series(data):
 
     weekly_avg = daily_df.group_by(["user", "week"]).agg(pl.col("hours").mean().alias("hours")).sort(["user", "week"])
     weekday_avg = daily_df.group_by(["user", "weekday"]).agg(pl.col("hours").mean().alias("hours"))
-    weekday_order = {
-        "Monday": 1,
-        "Tuesday": 2,
-        "Wednesday": 3,
-        "Thursday": 4,
-        "Friday": 5,
-        "Saturday": 6,
-        "Sunday": 7,
-    }
+    weekday_order = {"Mo": 1, "Di": 2, "Mi": 3, "Do": 4, "Fr": 5, "Sa": 6, "So": 7}
     weekday_avg = (
         weekday_avg.with_columns(
             pl.col("weekday").map_elements(lambda d: weekday_order.get(d, 999)).alias("weekday_order")
@@ -671,3 +748,100 @@ def perform_anova_analysis(data):
     except Exception as e:
         print(f"Fehler in ANOVA-Analyse: {str(e)}")
         return None
+
+
+# ---------------------------------------------------------------------------
+# Übersichts-Berechnung für den neuen Dashboard-Tab "Übersicht".
+# Liefert einen reinen Daten-Dict — keine Plotly-Abhängigkeit hier.
+# ---------------------------------------------------------------------------
+
+
+def calculate_overview(data: pl.DataFrame) -> dict:
+    """Aggregiert Eckdaten über alle Events für die Übersichts-Seite.
+
+    Gibt Felder zurück:
+        projects, users, total_hours, date_min, date_max,
+        n_workdays_with_entries, n_sessions, data_quality{
+            open_sessions, weekend_entries, holiday_entries
+        }
+    """
+    empty = {
+        "projects": [],
+        "users": [],
+        "total_hours": 0.0,
+        "date_min": "",
+        "date_max": "",
+        "n_workdays_with_entries": 0,
+        "n_sessions": 0,
+        "data_quality": {"open_sessions": 0, "weekend_entries": 0, "holiday_entries": 0},
+    }
+    if data is None or data.is_empty():
+        return empty
+
+    s = _workday_settings()
+
+    # Projekte & Benutzer (defensiver Filter gegen "users"-Header).
+    projects = sorted(p for p in _unique_list(data, "project") if p)
+    users = sorted(u for u in _unique_list(data, "user") if u and u != "users")
+
+    # Gesamtstunden + Sessions (gepaart) und ungepaarte Starts (open sessions).
+    total_hours = 0.0
+    n_sessions = 0
+    open_sessions = 0
+    for (user, _project), group in data.partition_by(["user", "project"], as_dict=True).items():
+        if user == "users":
+            continue
+        starts = group.filter(pl.col("event_type") == "start").height
+        stops = group.filter(pl.col("event_type") == "stop").height
+        n_sessions += min(starts, stops)
+        open_sessions += max(0, starts - stops)
+        durations = _paired_durations_hours(group)
+        total_hours += float(sum(durations)) if durations else 0.0
+
+    # Zeitraum.
+    try:
+        min_ts = data.select(pl.col("timestamp").min()).to_series()[0]
+        max_ts = data.select(pl.col("timestamp").max()).to_series()[0]
+        date_min = min_ts.strftime("%d-%m-%Y") if min_ts else ""
+        date_max = max_ts.strftime("%d-%m-%Y") if max_ts else ""
+    except Exception:  # noqa: BLE001
+        date_min, date_max = "", ""
+
+    # Arbeitstage = unique Datums-Spalten-Einträge.
+    try:
+        n_days = data.select(pl.col("date").unique()).height
+    except Exception:  # noqa: BLE001
+        n_days = 0
+
+    # Wochenend-/Feiertags-Eintragszahl auf timestamp-Ebene.
+    weekend_entries = 0
+    holiday_entries = 0
+    try:
+        timestamps = data.select("timestamp").to_series().to_list()
+        for ts in timestamps:
+            if ts is None:
+                continue
+            if hasattr(ts, "weekday") and ts.weekday() >= 5:
+                weekend_entries += 1
+            else:
+                from utils import is_holiday  # lokal, vermeidet Zirkular-Import oben
+
+                if is_holiday(ts, country=s["country"], subdiv=s["subdiv"]):
+                    holiday_entries += 1
+    except Exception:  # noqa: BLE001
+        pass
+
+    return {
+        "projects": projects,
+        "users": users,
+        "total_hours": round(total_hours, 2),
+        "date_min": date_min,
+        "date_max": date_max,
+        "n_workdays_with_entries": int(n_days),
+        "n_sessions": int(n_sessions),
+        "data_quality": {
+            "open_sessions": int(open_sessions),
+            "weekend_entries": int(weekend_entries),
+            "holiday_entries": int(holiday_entries),
+        },
+    }

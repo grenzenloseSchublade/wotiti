@@ -30,6 +30,8 @@ def build_plotly_template(colors: dict[str, str], sequence: list[str]) -> go.lay
                 zerolinecolor=colors["secondary"],
                 title_font=dict(size=12),
                 automargin=True,
+                tickformat=".2f",
+                hoverformat=".2f",
             ),
             legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=11)),
             margin=dict(l=60, r=30, t=60, b=50),
@@ -77,6 +79,62 @@ def _empty_figure(title: str = "") -> go.Figure:
     return fig
 
 
+def _parse_date(d):
+    """Parse a date value (str, datetime, date) into a date object."""
+    from datetime import datetime as _dt
+
+    if isinstance(d, str):
+        for fmt in ("%Y-%m-%d", "%d-%m-%Y"):
+            try:
+                return _dt.strptime(d, fmt).date()
+            except ValueError:
+                continue
+    elif hasattr(d, "date") and callable(d.date):
+        return d.date()
+    elif hasattr(d, "weekday"):
+        return d
+    return None
+
+
+def _add_weekend_bands(fig: go.Figure, dates, *, weekend_included: bool = True) -> None:
+    """Adds visible gray vertical bands with Sa/So labels for weekends.
+
+    Only shown when ``weekend_included`` is True (toggle ON).
+    Bands cover the full date range including gaps.
+    """
+    from datetime import timedelta
+
+    if not weekend_included or not dates:
+        return
+    parsed = [p for d in dates if (p := _parse_date(d)) is not None]
+    if not parsed:
+        return
+    d_min, d_max = min(parsed), max(parsed)
+    _WD_LABEL = {5: "Sa", 6: "So"}
+    cursor = d_min
+    while cursor <= d_max:
+        wd = cursor.weekday()
+        if wd >= 5:
+            fig.add_vrect(
+                x0=cursor - timedelta(hours=12),
+                x1=cursor + timedelta(hours=12),
+                fillcolor="rgba(220,30,30,0.18)",
+                line=dict(width=2, color="rgba(255,0,0,0.5)"),
+                layer="below",
+            )
+            fig.add_annotation(
+                x=cursor.isoformat(),
+                y=1.0,
+                yref="paper",
+                text=_WD_LABEL[wd],
+                showarrow=False,
+                font=dict(size=10, color="rgba(255,80,80,0.9)", family="Arial"),
+                yanchor="bottom",
+                xanchor="center",
+            )
+        cursor += timedelta(days=1)
+
+
 def plot_hours_per_project(hours: pl.DataFrame | None, user: str) -> go.Figure:
     """Plots a pie chart of hours per project for a specific user."""
     if _is_empty(hours):
@@ -86,8 +144,9 @@ def plot_hours_per_project(hours: pl.DataFrame | None, user: str) -> go.Figure:
         data=[
             go.Pie(
                 labels=user_data["project"].to_list(),
-                values=user_data["total_hours"].to_list(),
+                values=[round(v, 2) for v in user_data["total_hours"].to_list()],
                 marker_colors=_sequence[:3],
+                hovertemplate="%{label}: %{value:.2f} h<extra></extra>",
             )
         ],
         layout=go.Layout(
@@ -118,10 +177,15 @@ def plot_total_hours_per_user(total_hours: pl.DataFrame | None, date_range: str)
     total_hours = total_hours.with_columns(
         pl.col("total_hours").cast(pl.Float64, strict=False).alias("total_hours")
     ).drop_nulls("total_hours")
+    vals = total_hours["total_hours"].to_list()
     fig = go.Figure(
         data=[
             go.Bar(
-                x=total_hours["user"].to_list(), y=total_hours["total_hours"].to_list(), marker_color=_colors["accent"]
+                x=total_hours["user"].to_list(),
+                y=vals,
+                marker_color=_colors["accent"],
+                text=[f"{v:.1f}" for v in vals],
+                textposition="auto",
             )
         ],
         layout=go.Layout(
@@ -154,10 +218,15 @@ def plot_average_hours_per_user(average_hours: pl.DataFrame | None) -> go.Figure
     average_hours = average_hours.with_columns(
         pl.col("average_hours").cast(pl.Float64, strict=False).alias("average_hours")
     ).drop_nulls("average_hours")
+    vals = average_hours["average_hours"].to_list()
     fig = go.Figure(
         data=[
             go.Bar(
-                x=average_hours["user"].to_list(), y=average_hours["average_hours"].to_list(), marker_color=_sequence[1]
+                x=average_hours["user"].to_list(),
+                y=vals,
+                marker_color=_sequence[1],
+                text=[f"{v:.2f}" for v in vals],
+                textposition="auto",
             ),
         ],
         layout=go.Layout(
@@ -177,10 +246,15 @@ def plot_average_hours_per_period(average_hours: pl.DataFrame | None, period_day
     """Plots a bar chart of average hours per user for a given period in days."""
     if _is_empty(average_hours):
         return _empty_figure(f"Durchschn. Stunden ({period_days}-Tage-Zeiträume)")
+    vals = average_hours["average_hours"].to_list()
     fig = go.Figure(
         data=[
             go.Bar(
-                x=average_hours["user"].to_list(), y=average_hours["average_hours"].to_list(), marker_color=_sequence[0]
+                x=average_hours["user"].to_list(),
+                y=vals,
+                marker_color=_sequence[0],
+                text=[f"{v:.2f}" for v in vals],
+                textposition="auto",
             ),
         ],
         layout=go.Layout(
@@ -228,7 +302,7 @@ def plot_project_time_stats(stats: pl.DataFrame | None) -> go.Figure:
     return fig
 
 
-def plot_daily_project_hours(daily_hours: pl.DataFrame | None) -> go.Figure:
+def plot_daily_project_hours(daily_hours: pl.DataFrame | None, *, weekend_included: bool = False) -> go.Figure:
     """Visualisiert tägliche Projektarbeitszeiten."""
     fig = go.Figure()
 
@@ -245,18 +319,23 @@ def plot_daily_project_hours(daily_hours: pl.DataFrame | None) -> go.Figure:
                 mode="lines+markers",
                 name=user,
                 text=user_data["project"].to_list(),
-                hovertemplate="%{text}<br>%{y:.1f} Stunden",
+                hovertemplate="%{x|%a %d.%m.%Y} — %{text}<br>%{y:.2f} h<extra>%{fullData.name}</extra>",
             )
         )
 
     fig.update_layout(
         title="Tägliche Projektstunden",
         xaxis_title="Datum",
+        xaxis_tickformat="%a %d.%m",
+        xaxis_dtick=86400000,
+        xaxis_tickangle=-45,
         yaxis_title="Stunden",
         plot_bgcolor=_colors["background"],
         paper_bgcolor=_colors["background"],
         font_color=_colors["text"],
     )
+
+    _add_weekend_bands(fig, daily_hours["date"].to_list(), weekend_included=weekend_included)
 
     return fig
 
@@ -319,7 +398,11 @@ def plot_daily_patterns(patterns: pl.DataFrame | None) -> go.Figure:
 
 
 def plot_time_series_analysis(
-    daily_df: pl.DataFrame | None, weekly_avg: pl.DataFrame | None, weekday_avg: pl.DataFrame | None
+    daily_df: pl.DataFrame | None,
+    weekly_avg: pl.DataFrame | None,
+    weekday_avg: pl.DataFrame | None,
+    *,
+    weekend_included: bool = False,
 ) -> tuple[go.Figure, go.Figure, go.Figure]:
     """Erstellt Visualisierungen für die Zeitreihenanalyse."""
     # Täglicher Trend
@@ -329,17 +412,26 @@ def plot_time_series_analysis(
             user_data = daily_df.filter(pl.col("user") == user)
             daily_fig.add_trace(
                 go.Scatter(
-                    x=user_data["date"].to_list(), y=user_data["hours"].to_list(), name=user, mode="lines+markers"
+                    x=user_data["date"].to_list(),
+                    y=user_data["hours"].to_list(),
+                    name=user,
+                    mode="lines+markers",
+                    hovertemplate="%{x|%a %d.%m.%Y}<br>%{y:.2f} h<extra>%{fullData.name}</extra>",
                 )
             )
     daily_fig.update_layout(
         title="Täglicher Arbeitsstunden-Trend",
         xaxis_title="Datum",
+        xaxis_tickformat="%a %d.%m",
+        xaxis_dtick=86400000,
+        xaxis_tickangle=-45,
         yaxis_title="Stunden",
         plot_bgcolor=_colors["background"],
         paper_bgcolor=_colors["background"],
         font_color=_colors["text"],
     )
+    if not _is_empty(daily_df):
+        _add_weekend_bands(daily_fig, daily_df["date"].to_list(), weekend_included=weekend_included)
 
     # Wöchentlicher Trend
     weekly_fig = go.Figure()
@@ -354,6 +446,7 @@ def plot_time_series_analysis(
     weekly_fig.update_layout(
         title="Wöchentliche Durchschnittsstunden",
         xaxis_title="Kalenderwoche",
+        xaxis_tickprefix="KW ",
         yaxis_title="Durchschn. Stunden",
         plot_bgcolor=_colors["background"],
         paper_bgcolor=_colors["background"],
@@ -361,11 +454,24 @@ def plot_time_series_analysis(
     )
 
     # Wochentags-Muster
+    _WE_DAYS = {"Sa", "So"}
     weekday_fig = go.Figure()
     if not _is_empty(weekday_avg):
         for user in weekday_avg["user"].unique().to_list():
             user_data = weekday_avg.filter(pl.col("user") == user)
-            weekday_fig.add_trace(go.Bar(x=user_data["weekday"].to_list(), y=user_data["hours"].to_list(), name=user))
+            days = user_data["weekday"].to_list()
+            hrs = user_data["hours"].to_list()
+            has_weekend = any(d in _WE_DAYS for d in days)
+            bar_kwargs = dict(
+                x=days,
+                y=hrs,
+                name=user,
+                text=[f"{h:.2f}" for h in hrs],
+                textposition="auto",
+            )
+            if has_weekend:
+                bar_kwargs["marker_color"] = ["rgba(150,150,150,0.5)" if d in _WE_DAYS else _sequence[0] for d in days]
+            weekday_fig.add_trace(go.Bar(**bar_kwargs))
     weekday_fig.update_layout(
         title="Durchschnittliche Stunden nach Wochentag",
         xaxis_title="Wochentag",

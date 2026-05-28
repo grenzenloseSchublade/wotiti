@@ -19,6 +19,7 @@ from stats_calculations import (
     calculate_average_hours_per_user,
     calculate_daily_project_hours,
     calculate_hours_per_project,
+    calculate_overview,
     calculate_project_switches,
     calculate_project_time_stats,
     calculate_total_hours_per_user,
@@ -102,6 +103,27 @@ def get_cached_data(db_path, force=False):
         _DATA_CACHE["stats"] = {}
 
     return _DATA_CACHE["data"] if _DATA_CACHE["data"] is not None else pl.DataFrame()
+
+
+def _weekend_flag(weekend_include) -> bool:
+    """Konvertiert den Checklist-Wert in einen bool."""
+    return "include" in (weekend_include or [])
+
+
+def get_filtered_data(db_path, weekend_include):
+    """Gibt die DB-Daten zurück — gefiltert nach Wochenend-Schalter.
+
+    Wenn ``weekend_include`` leer ist (Standard), werden Sa/So + Feiertage
+    herausgefiltert. Sonst werden alle Daten unverändert zurückgegeben.
+    """
+    from stats_calculations import _apply_workday_filter
+
+    data = get_cached_data(db_path)
+    if data.is_empty():
+        return data
+    count_we = _weekend_flag(weekend_include)
+    # count_weekend_work=True → alles behalten; False → filtern
+    return _apply_workday_filter(data, override_count_weekend_work=count_we)
 
 
 def get_cached_stat(key, compute_fn):
@@ -220,6 +242,21 @@ app.layout = dbc.Container(
                                     ],
                                     width="auto",
                                 ),
+                                # Wochenend-Filter — global im Header, wirkt auf alle Tabs
+                                dbc.Col(
+                                    dbc.Checklist(
+                                        id="weekend-include",
+                                        options=[
+                                            {"label": " Wochenenden einbeziehen", "value": "include"},
+                                        ],
+                                        value=[],
+                                        switch=True,
+                                        style={"color": _colors["text"], "fontSize": "13px"},
+                                        className="mb-3",
+                                    ),
+                                    width="auto",
+                                    style={"display": "flex", "alignItems": "center", "paddingLeft": "15px"},
+                                ),
                                 dbc.Col(
                                     [
                                         dbc.Progress(
@@ -264,6 +301,20 @@ app.layout = dbc.Container(
         ),
         dbc.Tabs(
             [
+                dbc.Tab(
+                    [
+                        html.H2(
+                            "Übersicht",
+                            style={"textAlign": "center", "color": _colors["text"], "marginTop": "30px"},
+                        ),
+                        html.P(
+                            "Eckdaten der geladenen Datenbasis",
+                            style={"textAlign": "center", "color": _colors["text"], "marginBottom": "20px"},
+                        ),
+                        html.Div(id="overview-content"),
+                    ],
+                    label="Übersicht",
+                ),
                 dbc.Tab(
                     [
                         html.H2(
@@ -894,51 +945,65 @@ def toggle_collapse(n, is_open):
     return is_open
 
 
-@app.callback(Output("left-pie-chart", "figure"), [Input("left-user-dropdown", "value"), Input("db-path", "data")])
-def update_left_pie_chart(selected_user, db_path):
+@app.callback(
+    Output("left-pie-chart", "figure"),
+    [Input("left-user-dropdown", "value"), Input("db-path", "data"), Input("weekend-include", "value")],
+)
+def update_left_pie_chart(selected_user, db_path, weekend_include):
     """Updates the left pie chart based on the selected user."""
     if db_path and selected_user:
-        data = get_cached_data(db_path)
-        hours = get_cached_stat("hours_per_project", lambda: calculate_hours_per_project(data))
-        left_pie_chart = plot_hours_per_project(hours, selected_user)
-        return left_pie_chart
+        data = get_filtered_data(db_path, weekend_include)
+        we = _weekend_flag(weekend_include)
+        hours = get_cached_stat(f"hours_per_project_we={int(we)}", lambda: calculate_hours_per_project(data))
+        return plot_hours_per_project(hours, selected_user)
     else:
         return go.Figure(layout=go.Layout(plot_bgcolor=_colors["background"], paper_bgcolor=_colors["background"]))
 
 
-@app.callback(Output("right-pie-chart", "figure"), [Input("right-user-dropdown", "value"), Input("db-path", "data")])
-def update_right_pie_chart(selected_user, db_path):
+@app.callback(
+    Output("right-pie-chart", "figure"),
+    [Input("right-user-dropdown", "value"), Input("db-path", "data"), Input("weekend-include", "value")],
+)
+def update_right_pie_chart(selected_user, db_path, weekend_include):
     """Updates the right pie chart based on the selected user."""
     if db_path and selected_user:
-        data = get_cached_data(db_path)
-        hours = get_cached_stat("hours_per_project", lambda: calculate_hours_per_project(data))
-        right_pie_chart = plot_hours_per_project(hours, selected_user)
-        return right_pie_chart
+        data = get_filtered_data(db_path, weekend_include)
+        we = _weekend_flag(weekend_include)
+        hours = get_cached_stat(f"hours_per_project_we={int(we)}", lambda: calculate_hours_per_project(data))
+        return plot_hours_per_project(hours, selected_user)
     else:
         return go.Figure(layout=go.Layout(plot_bgcolor=_colors["background"], paper_bgcolor=_colors["background"]))
 
 
-@app.callback(Output("total-hours-chart", "figure"), [Input("total-hours-chart", "id"), Input("db-path", "data")])
-def update_total_hours_chart(_, db_path):
+@app.callback(
+    Output("total-hours-chart", "figure"),
+    [Input("total-hours-chart", "id"), Input("db-path", "data"), Input("weekend-include", "value")],
+)
+def update_total_hours_chart(_, db_path, weekend_include):
     """Updates the total hours chart."""
     if db_path:
-        data = get_cached_data(db_path)
-        total_hours, date_range = get_cached_stat("total_hours_per_user", lambda: calculate_total_hours_per_user(data))
-        total_hours_chart = plot_total_hours_per_user(total_hours, date_range)
-        return total_hours_chart
+        data = get_filtered_data(db_path, weekend_include)
+        we = _weekend_flag(weekend_include)
+        total_hours, date_range = get_cached_stat(
+            f"total_hours_per_user_we={int(we)}", lambda: calculate_total_hours_per_user(data)
+        )
+        return plot_total_hours_per_user(total_hours, date_range)
     else:
         return go.Figure(layout=go.Layout(plot_bgcolor=_colors["background"], paper_bgcolor=_colors["background"]))
 
 
 @app.callback(
     Output("average-hours-per-user-chart", "figure"),
-    [Input("average-hours-per-user-chart", "id"), Input("db-path", "data")],
+    [Input("average-hours-per-user-chart", "id"), Input("db-path", "data"), Input("weekend-include", "value")],
 )
-def update_average_hours_per_user_chart(_, db_path):
+def update_average_hours_per_user_chart(_, db_path, weekend_include):
     """Updates the average hours per user chart."""
     if db_path:
-        data = get_cached_data(db_path)
-        average_hours = get_cached_stat("average_hours_per_user", lambda: calculate_average_hours_per_user(data))
+        data = get_filtered_data(db_path, weekend_include)
+        we = _weekend_flag(weekend_include)
+        average_hours = get_cached_stat(
+            f"average_hours_per_user_we={int(we)}", lambda: calculate_average_hours_per_user(data)
+        )
         return plot_average_hours_per_user(average_hours)
     else:
         return go.Figure(layout=go.Layout(plot_bgcolor=_colors["background"], paper_bgcolor=_colors["background"]))
@@ -946,10 +1011,10 @@ def update_average_hours_per_user_chart(_, db_path):
 
 @app.callback(
     Output("average-hours-per-period-chart", "figure"),
-    [Input("db-path", "data"), Input("update-period-button", "n_clicks")],
+    [Input("db-path", "data"), Input("update-period-button", "n_clicks"), Input("weekend-include", "value")],
     [State("period-days-input", "value")],
 )
-def update_average_hours_per_period_chart(db_path, n_clicks, period_days):
+def update_average_hours_per_period_chart(db_path, n_clicks, weekend_include, period_days):
     """Updates the average hours per period chart."""
     try:
         period_days = int(period_days)
@@ -965,11 +1030,11 @@ def update_average_hours_per_period_chart(db_path, n_clicks, period_days):
                 )
             )
         if db_path:
-            data = get_cached_data(db_path)
-            key = f"average_hours_per_period_{period_days}"
+            data = get_filtered_data(db_path, weekend_include)
+            we = _weekend_flag(weekend_include)
+            key = f"average_hours_per_period_{period_days}_we={int(we)}"
             avg_period = get_cached_stat(key, lambda: calculate_average_hours_per_period(data, period_days))
-            fig = plot_average_hours_per_period(avg_period, period_days)
-            return fig
+            return plot_average_hours_per_period(avg_period, period_days)
         else:
             return go.Figure(layout=go.Layout(plot_bgcolor=_colors["background"], paper_bgcolor=_colors["background"]))
     except ValueError:
@@ -1005,9 +1070,9 @@ def toggle_card(n_clicks, is_open):
         Output("project-switches-chart", "figure"),
         Output("pattern-user-dropdown", "options"),
     ],
-    [Input("db-path", "data")],
+    [Input("db-path", "data"), Input("weekend-include", "value")],
 )
-def update_advanced_stats(db_path):
+def update_advanced_stats(db_path, weekend_include):
     """Aktualisiert die erweiterten Statistik-Visualisierungen."""
     empty_fig = go.Figure(layout=GRAPH_LAYOUT)
     empty_options = []
@@ -1016,18 +1081,19 @@ def update_advanced_stats(db_path):
         return empty_fig, empty_fig, empty_fig, empty_options
 
     try:
-        data = get_cached_data(db_path)
+        data = get_filtered_data(db_path, weekend_include)
+        we = _weekend_flag(weekend_include)
 
         # Projekt-Zeitstatistiken
-        stats = get_cached_stat("project_time_stats", lambda: calculate_project_time_stats(data))
+        stats = get_cached_stat(f"project_time_stats_we={int(we)}", lambda: calculate_project_time_stats(data))
         stats_fig = plot_project_time_stats(stats)
 
         # Tägliche Projektstunden
-        daily_hours = get_cached_stat("daily_project_hours", lambda: calculate_daily_project_hours(data))
-        daily_fig = plot_daily_project_hours(daily_hours)
+        daily_hours = get_cached_stat(f"daily_project_hours_we={int(we)}", lambda: calculate_daily_project_hours(data))
+        daily_fig = plot_daily_project_hours(daily_hours, weekend_included=we)
 
         # Projektwechsel
-        switches = get_cached_stat("project_switches", lambda: calculate_project_switches(data))
+        switches = get_cached_stat(f"project_switches_we={int(we)}", lambda: calculate_project_switches(data))
         switches_fig = plot_project_switches(switches)
 
         # User-Optionen für Dropdown
@@ -1045,13 +1111,14 @@ def update_advanced_stats(db_path):
 
 
 @app.callback(
-    Output("daily-patterns-chart", "figure"), [Input("db-path", "data"), Input("pattern-user-dropdown", "value")]
+    Output("daily-patterns-chart", "figure"),
+    [Input("db-path", "data"), Input("pattern-user-dropdown", "value"), Input("weekend-include", "value")],
 )
-def update_daily_patterns(db_path, selected_users):
+def update_daily_patterns(db_path, selected_users, weekend_include):
     """Aktualisiert die Visualisierung der tageszeitlichen Muster."""
     if db_path and selected_users:
         try:
-            data = get_cached_data(db_path)
+            data = get_filtered_data(db_path, weekend_include)
             if selected_users:
                 data = data.filter(pl.col("user").is_in(selected_users))
 
@@ -1071,9 +1138,9 @@ def update_daily_patterns(db_path, selected_users):
         Output("weekly-trend-chart", "figure"),
         Output("weekday-pattern-chart", "figure"),
     ],
-    [Input("db-path", "data")],
+    [Input("db-path", "data"), Input("weekend-include", "value")],
 )
-def update_time_series_analysis(db_path):
+def update_time_series_analysis(db_path, weekend_include):
     """Aktualisiert die Zeitreihenanalyse-Visualisierungen."""
     empty_fig = go.Figure(layout=GRAPH_LAYOUT)
 
@@ -1081,9 +1148,14 @@ def update_time_series_analysis(db_path):
         return empty_fig, empty_fig, empty_fig
 
     try:
-        data = get_cached_data(db_path)
-        daily_df, weekly_avg, weekday_avg = get_cached_stat("time_series", lambda: analyze_time_series(data))
-        daily_fig, weekly_fig, weekday_fig = plot_time_series_analysis(daily_df, weekly_avg, weekday_avg)
+        data = get_filtered_data(db_path, weekend_include)
+        we = _weekend_flag(weekend_include)
+        daily_df, weekly_avg, weekday_avg = get_cached_stat(
+            f"time_series_we={int(we)}", lambda: analyze_time_series(data)
+        )
+        daily_fig, weekly_fig, weekday_fig = plot_time_series_analysis(
+            daily_df, weekly_avg, weekday_avg, weekend_included=we
+        )
         return daily_fig, weekly_fig, weekday_fig
 
     except Exception as e:
@@ -1092,9 +1164,10 @@ def update_time_series_analysis(db_path):
 
 
 @app.callback(
-    [Output("cluster-overview-chart", "figure"), Output("cluster-profile-chart", "figure")], [Input("db-path", "data")]
+    [Output("cluster-overview-chart", "figure"), Output("cluster-profile-chart", "figure")],
+    [Input("db-path", "data"), Input("weekend-include", "value")],
 )
-def update_cluster_analysis(db_path):
+def update_cluster_analysis(db_path, weekend_include):
     """Aktualisiert die Cluster-Analyse Visualisierungen."""
     empty_fig = go.Figure(layout=GRAPH_LAYOUT)
 
@@ -1102,8 +1175,11 @@ def update_cluster_analysis(db_path):
         return empty_fig, empty_fig
 
     try:
-        data = get_cached_data(db_path)
-        features_df, cluster_profiles = get_cached_stat("cluster_analysis", lambda: perform_cluster_analysis(data))
+        data = get_filtered_data(db_path, weekend_include)
+        we = _weekend_flag(weekend_include)
+        features_df, cluster_profiles = get_cached_stat(
+            f"cluster_analysis_we={int(we)}", lambda: perform_cluster_analysis(data)
+        )
         if features_df is None or features_df.is_empty():
             return empty_fig, empty_fig
         overview_fig, profile_fig = plot_cluster_analysis(features_df, cluster_profiles)
@@ -1116,9 +1192,9 @@ def update_cluster_analysis(db_path):
 
 @app.callback(
     [Output("regression-importance-chart", "figure"), Output("regression-accuracy-chart", "figure")],
-    [Input("db-path", "data")],
+    [Input("db-path", "data"), Input("weekend-include", "value")],
 )
-def update_regression_analysis(db_path):
+def update_regression_analysis(db_path, weekend_include):
     """Aktualisiert die Regressions-Analyse Visualisierungen."""
     empty_fig = go.Figure(layout=GRAPH_LAYOUT)
 
@@ -1126,8 +1202,11 @@ def update_regression_analysis(db_path):
         return empty_fig, empty_fig
 
     try:
-        data = get_cached_data(db_path)
-        regression_results = get_cached_stat("regression_analysis", lambda: perform_regression_analysis(data))
+        data = get_filtered_data(db_path, weekend_include)
+        we = _weekend_flag(weekend_include)
+        regression_results = get_cached_stat(
+            f"regression_analysis_we={int(we)}", lambda: perform_regression_analysis(data)
+        )
         if not regression_results:
             return empty_fig, empty_fig
         importance_fig, accuracy_fig = plot_regression_analysis(regression_results)
@@ -1139,9 +1218,10 @@ def update_regression_analysis(db_path):
 
 
 @app.callback(
-    [Output("anova-user-chart", "figure"), Output("anova-project-chart", "figure")], [Input("db-path", "data")]
+    [Output("anova-user-chart", "figure"), Output("anova-project-chart", "figure")],
+    [Input("db-path", "data"), Input("weekend-include", "value")],
 )
-def update_anova_analysis(db_path):
+def update_anova_analysis(db_path, weekend_include):
     """Aktualisiert die ANOVA-Analyse Visualisierungen."""
     empty_fig = go.Figure(layout=GRAPH_LAYOUT)
 
@@ -1149,8 +1229,9 @@ def update_anova_analysis(db_path):
         return empty_fig, empty_fig
 
     try:
-        data = get_cached_data(db_path)
-        anova_results = get_cached_stat("anova_analysis", lambda: perform_anova_analysis(data))
+        data = get_filtered_data(db_path, weekend_include)
+        we = _weekend_flag(weekend_include)
+        anova_results = get_cached_stat(f"anova_analysis_we={int(we)}", lambda: perform_anova_analysis(data))
         if not anova_results:
             return empty_fig, empty_fig
         user_fig, project_fig = plot_anova_results(anova_results)
@@ -1168,6 +1249,135 @@ def _find_available_port(start_port):
             if sock.connect_ex(("127.0.0.1", port)) != 0:
                 return port
     return start_port
+
+
+# ---------------------------------------------------------------------------
+# Übersichts-Tab Callback
+# ---------------------------------------------------------------------------
+
+
+def _badge_list(items, color="info"):
+    if not items:
+        return html.Span("—", style={"color": _colors["text"], "fontStyle": "italic"})
+    return [dbc.Badge(str(x), color=color, className="me-1 mb-1") for x in items]
+
+
+def _stat_card(title, value, sub=""):
+    return dbc.Col(
+        dbc.Card(
+            dbc.CardBody(
+                [
+                    html.Div(title, style={"color": _colors["text"], "fontSize": "12px", "opacity": "0.7"}),
+                    html.H3(
+                        str(value),
+                        style={"color": _colors["accent"], "marginTop": "4px", "marginBottom": "2px"},
+                    ),
+                    html.Div(sub, style={"color": _colors["text"], "fontSize": "11px", "opacity": "0.7"}),
+                ]
+            ),
+            style={**CARD_STYLE, "border": "none", "borderRadius": "8px"},
+        ),
+        md=4,
+        className="mb-3",
+    )
+
+
+@app.callback(Output("overview-content", "children"), [Input("db-path", "data")])
+def update_overview(db_path):
+    if not db_path:
+        return html.Div(
+            "Keine Datenbank geladen.", style={"color": _colors["text"], "textAlign": "center", "padding": "30px"}
+        )
+    data = get_cached_data(db_path)
+    ov = calculate_overview(data)
+    if not ov or not ov.get("users"):
+        return html.Div(
+            "Keine Daten in der Datenbank.",
+            style={"color": _colors["text"], "textAlign": "center", "padding": "30px"},
+        )
+
+    zeitraum = f"{ov['date_min']} – {ov['date_max']}" if ov["date_min"] else "—"
+    quality = ov["data_quality"]
+    open_color = "danger" if quality["open_sessions"] > 0 else "success"
+    we_color = "warning" if quality["weekend_entries"] > 0 else "secondary"
+    fy_color = "warning" if quality["holiday_entries"] > 0 else "secondary"
+
+    return [
+        dbc.Row(
+            [
+                _stat_card("Gesamtstunden", f"{ov['total_hours']:.2f} h"),
+                _stat_card("Zeitraum", zeitraum),
+                _stat_card("Arbeitstage (mit Einträgen)", ov["n_workdays_with_entries"]),
+            ]
+        ),
+        dbc.Row(
+            [
+                _stat_card("Sessions (gepaart)", ov["n_sessions"]),
+                _stat_card("Projekte", len(ov["projects"])),
+                _stat_card("Benutzer", len(ov["users"])),
+            ]
+        ),
+        dbc.Row(
+            [
+                dbc.Col(
+                    dbc.Card(
+                        dbc.CardBody(
+                            [
+                                html.H6("Projekte", style={"color": _colors["text"]}),
+                                html.Div(_badge_list(ov["projects"], "info")),
+                            ]
+                        ),
+                        style={**CARD_STYLE, "border": "none", "borderRadius": "8px"},
+                    ),
+                    md=6,
+                    className="mb-3",
+                ),
+                dbc.Col(
+                    dbc.Card(
+                        dbc.CardBody(
+                            [
+                                html.H6("Benutzer", style={"color": _colors["text"]}),
+                                html.Div(_badge_list(ov["users"], "primary")),
+                            ]
+                        ),
+                        style={**CARD_STYLE, "border": "none", "borderRadius": "8px"},
+                    ),
+                    md=6,
+                    className="mb-3",
+                ),
+            ]
+        ),
+        dbc.Row(
+            [
+                dbc.Col(
+                    dbc.Card(
+                        dbc.CardBody(
+                            [
+                                html.H6("Datenqualität", style={"color": _colors["text"]}),
+                                dbc.Badge(
+                                    f"Offene Sessions: {quality['open_sessions']}",
+                                    color=open_color,
+                                    className="me-2",
+                                ),
+                                dbc.Badge(
+                                    f"Wochenend-Einträge: {quality['weekend_entries']}",
+                                    color=we_color,
+                                    className="me-2",
+                                ),
+                                dbc.Badge(
+                                    f"Feiertags-Einträge: {quality['holiday_entries']}",
+                                    color=fy_color,
+                                ),
+                            ]
+                        ),
+                        style={**CARD_STYLE, "border": "none", "borderRadius": "8px"},
+                    ),
+                    md=12,
+                    className="mb-3",
+                ),
+            ]
+        ),
+    ]
 
 
 if __name__ == "__main__":

@@ -169,12 +169,28 @@ class App:
         master.title("WoTITI - Work Time Timer")
         master.configure(bg="#C0C0C0")
 
-        # Restore last window geometry when available, fallback to sensible size.
+        # Restore last window geometry when available, fallback to centered.
+        # Validate that saved position is within visible screen bounds.
         saved_geometry = str(self.config.get("window_geometry", "")).strip()
-        if re.match(r"^\d+x\d+\+\d+\+\d+$", saved_geometry):
-            master.geometry(saved_geometry)
+        geo_match = re.match(r"^(\d+)x(\d+)\+(\d+)\+(\d+)$", saved_geometry)
+        sx = master.winfo_screenwidth()
+        sy = master.winfo_screenheight()
+        if geo_match:
+            sw, sh, gx, gy = (int(g) for g in geo_match.groups())
+            # Accept if at least 100px of the window is visible on screen
+            if gx + 100 <= sx and gy + 100 <= sy:
+                master.geometry(saved_geometry)
+            else:
+                # Saved position is off-screen — center instead
+                w, h = sw, sh
+                x = max(0, (sx - w) // 2)
+                y = max(0, (sy - h) // 2)
+                master.geometry(f"{w}x{h}+{x}+{y}")
         else:
-            master.geometry("720x540")
+            w, h = 720, 540
+            x = max(0, (sx - w) // 2)
+            y = max(0, (sy - h) // 2)
+            master.geometry(f"{w}x{h}+{x}+{y}")
         master.minsize(640, 440)
 
         # Make the window resizable
@@ -257,9 +273,18 @@ class App:
         self.button_separator.grid(row=0, column=3, padx=2)
 
         self.calculate_button = Button(
-            self.button_frame, text="Aktualisieren", command=self.update_duration, **button_config
+            self.button_frame,
+            text="⟳",
+            command=self.update_duration,
+            bg="#D4D0C8",
+            fg="black",
+            font=("MS Sans Serif", 14),
+            relief="raised",
+            borderwidth=2,
+            width=2,
         )
         self.calculate_button.grid(row=0, column=4, pady=5, padx=3, sticky=W + E)
+        _ToolTip(self.calculate_button, "Anzeige aus der Datenbank neu laden")
 
         self.stats_button = Button(
             self.button_frame, text="Auswertung", command=self.open_stats_dashboard, **button_config
@@ -272,9 +297,7 @@ class App:
         )
         self.user_mgmt_button.grid(row=0, column=6, pady=5, padx=3, sticky=W + E)
 
-        self.settings_button = Button(
-            self.button_frame, text="\u2699 Einst.", command=self.open_settings, **button_config
-        )
+        self.settings_button = Button(self.button_frame, text="Einst.", command=self.open_settings, **button_config)
         self.settings_button.grid(row=0, column=7, pady=5, padx=3, sticky=W + E)
 
         self.mini_button = Button(
@@ -320,6 +343,12 @@ class App:
         self.heute_button = Button(self.entry_frame, text="Heute", command=self.set_today_date, **button_config)
         self.heute_button.grid(row=0, column=4, pady=5, padx=3, sticky="ew")
 
+        # "+"-Button: erzeugt einen 09:00 / 17:00-Eintrag für ein Vergangenheitsdatum.
+        # Initial versteckt, erscheint nur, wenn das Datum-Feld nicht "heute" ist.
+        self.add_event_button = Button(self.entry_frame, text="+", command=self.add_manual_event, **button_config)
+        # Wird in `_update_add_event_button_visibility` ein-/ausgeblendet.
+        _ToolTip(self.add_event_button, "Eintrag für dieses Datum anlegen (09:00–17:00, danach bearbeiten)")
+
         # Project label and combobox
         self.project_label = Label(self.entry_frame, text="Projekt:", **label_config)
         self.project_label.grid(row=0, column=5, pady=5, padx=3, sticky="w")
@@ -327,8 +356,13 @@ class App:
         self.project_entry.grid(row=0, column=6, pady=5, padx=3, sticky="ew")
         self.project_entry.set("1")
 
+        # "+"-Button rechts neben dem Projekt-Feld; wird nur bei Vergangenheits-
+        # datum sichtbar (siehe _update_add_event_button_visibility).
+        self.add_event_button.grid(row=0, column=7, pady=5, padx=3, sticky="w")
+        self.add_event_button.grid_remove()
+
         # Configure entry frame columns — ensure combobox/entry columns are flexible
-        for col in range(7):
+        for col in range(8):
             if col == 3:
                 self.entry_frame.grid_columnconfigure(col, weight=1, minsize=80)
             elif col in (1, 6):
@@ -337,10 +371,17 @@ class App:
                 self.entry_frame.grid_columnconfigure(col, weight=0)
 
         # =====================================================
-        # ROW 2: Timer display
+        # ROW 2: Timer / Wochenübersicht (umschaltbare Kachel)
         # =====================================================
-        self.timer_frame = Frame(self.frame, bg="#C0C0C0", border=2, relief="sunken", padx=5, pady=5)
-        self.timer_frame.grid(row=2, column=0, columnspan=6, pady=5, padx=5, sticky="ew")
+        # Container mit fester Höhe, damit Timer- und Wochen-Kachel gleich groß sind.
+        self.tile_container = Frame(self.frame, bg="#C0C0C0", height=140)
+        self.tile_container.grid(row=2, column=0, columnspan=6, pady=5, padx=5, sticky="ew")
+        self.tile_container.grid_propagate(False)
+        self.tile_container.grid_rowconfigure(0, weight=1)
+        self.tile_container.grid_columnconfigure(0, weight=1)
+
+        self.timer_frame = Frame(self.tile_container, bg="#C0C0C0", border=2, relief="sunken", padx=5, pady=5)
+        self.timer_frame.grid(row=0, column=0, sticky="nsew")
 
         self.timer_time_label = Label(
             self.timer_frame, text="00:00:00", bg="#C0C0C0", fg="red", font=("MS Sans Serif", 28, "bold")
@@ -381,6 +422,24 @@ class App:
 
         # Keep legacy reference for tests
         self.timer_label = self.timer_time_label
+
+        # Dezenter Umschalt-Link unter der Timer-Zeile, rechts.
+        self.toggle_view_button_timer = Button(
+            self.timer_frame,
+            text="Woche ›",
+            command=self._show_week_view,
+            bg="#C0C0C0",
+            fg="#666666",
+            font=("MS Sans Serif", 8),
+            relief="flat",
+            borderwidth=0,
+            cursor="hand2",
+        )
+        self.toggle_view_button_timer.grid(row=1, column=3, padx=4, pady=(0, 2), sticky="se")
+
+        # Wochen-Kachel — initial nicht angezeigt.
+        self._week_view_active = False
+        self._build_week_frame()
 
         # =====================================================
         # ROW 3: Database content listbox
@@ -749,11 +808,17 @@ class App:
         # Sync project selection back from mini to main
         self.project_entry.set(self._mini_project_combo.get().strip())
 
-        # Restore main window first, then hide mini Toplevel.
-        self.master.geometry(self._full_geometry)
-        self.master.deiconify()
-        self.master.lift()
+        # Hide mini first, then restore main — avoids WM focus confusion.
         self._mini_toplevel.withdraw()
+
+        # Restore main window geometry (guard against empty/invalid value).
+        if self._full_geometry and re.match(r"^\d+x\d+\+\d+\+\d+$", self._full_geometry):
+            self.master.geometry(self._full_geometry)
+        self.master.deiconify()
+        self.master.update_idletasks()
+        self.master.lift()
+        with contextlib.suppress(Exception):
+            self.master.focus_force()
 
     def _drag_start(self, event):
         """Record starting position for window drag."""
@@ -1047,6 +1112,18 @@ class App:
         theme_var.grid(row=1, column=1, padx=5, pady=2, sticky="w")
         theme_var.set(self.config.get("theme", "Modern"))
 
+        # Feiertage (wirken in den Auswertungen).
+        Label(dash_frame, text="Feiertagsland (ISO):", **lbl).grid(row=2, column=0, sticky="w", pady=2)
+        holiday_country_var = StringVar(value=str(self.config.get("holiday_country", "DE") or ""))
+        Entry(
+            dash_frame, textvariable=holiday_country_var, font=("MS Sans Serif", 10), width=10, bg="#FFFFFF", fg="black"
+        ).grid(row=2, column=1, padx=5, pady=2, sticky="w")
+        Label(dash_frame, text="Region (optional):", **lbl).grid(row=3, column=0, sticky="w", pady=2)
+        holiday_subdiv_var = StringVar(value=str(self.config.get("holiday_subdiv", "") or ""))
+        Entry(
+            dash_frame, textvariable=holiday_subdiv_var, font=("MS Sans Serif", 10), width=10, bg="#FFFFFF", fg="black"
+        ).grid(row=3, column=1, padx=5, pady=2, sticky="w")
+
         # ── Pomodoro ──
         pomodoro_frame = LabelFrame(
             win, text="Pomodoro & Pause", bg="#C0C0C0", fg="black", font=("MS Sans Serif", 10, "bold"), padx=8, pady=8
@@ -1337,6 +1414,8 @@ class App:
                 "pomodoro_auto_break": bool(pomodoro_auto_var.get()),
                 "pomodoro_sound_enabled": bool(pomodoro_sound_enabled_var.get()),
                 "pomodoro_sound_local_path": sound_path,
+                "holiday_country": holiday_country_var.get().strip() or "DE",
+                "holiday_subdiv": holiday_subdiv_var.get().strip(),
             }
             save_config(new_config)
             logger.info(
@@ -1917,8 +1996,224 @@ class App:
         key = self.date_entry.get().strip()
         if key == self._last_date_view_input_cache:
             self._update_date_entry_visual()
+            self._update_add_event_button_visibility()
             return
+        # Wenn das gewählte Datum nicht heute ist, während eine Session läuft:
+        # einmalig warnen — die laufende Session zählt weiter mit dem realen
+        # Zeitstempel, die Anzeige zeigt aber den ausgewählten Tag.
+        if any(self.session_active.values()) and not self._is_viewing_today_text(key):
+            self.write(
+                "Hinweis: Datum ≠ heute — laufende Session läuft mit Realzeit weiter.",
+            )
         self._force_date_refresh()
+        self._update_add_event_button_visibility()
+
+    def _is_viewing_today_text(self, text: str) -> bool:
+        try:
+            return datetime.strptime(text, "%d-%m-%Y").date() == datetime.today().date()
+        except ValueError:
+            return True  # ungültige Eingabe nicht als Vergangenheit deuten
+
+    def _update_add_event_button_visibility(self):
+        """Zeigt den "+"-Button nur bei einem Vergangenheitsdatum."""
+        try:
+            date_text = self.date_entry.get().strip()
+            d = datetime.strptime(date_text, "%d-%m-%Y").date()
+            if d < datetime.today().date():
+                self.add_event_button.grid()
+                return
+        except (ValueError, AttributeError):
+            pass
+        self.add_event_button.grid_remove()
+
+    def add_manual_event(self):
+        """Erzeugt ein 09:00/17:00-Paar am ausgewählten (vergangenen) Datum und
+        öffnet anschließend automatisch den Edit-Dialog auf das Start-Event,
+        damit der Nutzer die Zeiten justieren kann."""
+        from db_helper import log_event
+
+        date_text = self.date_entry.get().strip()
+        try:
+            d = datetime.strptime(date_text, "%d-%m-%Y").date()
+        except ValueError:
+            self.write("Ungültiges Datum für manuellen Eintrag.", error=True)
+            return
+        if d >= datetime.today().date():
+            self.write("Manueller Eintrag nur für Vergangenheitsdaten.", error=True)
+            return
+        name = self._get_name_silent()
+        project = self._get_project_silent()
+        if not name or not project:
+            self.write("Name und Projekt müssen gesetzt sein.", error=True)
+            return
+        if not self.db_conn:
+            self.write("Keine Datenbankverbindung.", error=True)
+            return
+
+        start_ts = datetime.combine(d, datetime.min.time()).replace(hour=9)
+        stop_ts = datetime.combine(d, datetime.min.time()).replace(hour=17)
+
+        ok_start = log_event(self.db_conn, project, name, "start", timestamp=start_ts)
+        ok_stop = log_event(self.db_conn, project, name, "stop", timestamp=stop_ts)
+        if not (ok_start and ok_stop):
+            self.write("Manueller Eintrag konnte nicht angelegt werden.", error=True)
+            return
+
+        self.write(f"Eintrag angelegt: {date_text} 09:00–17:00 — bitte anpassen.")
+        self._combobox_dirty = True
+        self._refresh_comboboxes()
+        self._force_date_refresh()
+        # Wochen-Kachel aktualisieren, falls aktiv.
+        if getattr(self, "_week_view_active", False):
+            self._refresh_week_view()
+
+        # Den eben angelegten Start-Eintrag im Edit-Dialog öffnen.
+        self._open_edit_for_latest_event(name, project, start_ts)
+
+    def _open_edit_for_latest_event(self, name: str, project: str, around_ts: datetime) -> None:
+        """Selektiert den passenden Listbox-Eintrag und öffnet `_edit_event`."""
+        try:
+            target_id = None
+            cur = self.db_conn.cursor()
+            cur.execute(
+                """
+                SELECT e.id FROM events e
+                JOIN users u ON u.id = e.user_id
+                WHERE u.name = ? AND e.project = ? AND e.event_type = 'start'
+                  AND e.timestamp = ?
+                ORDER BY e.id DESC LIMIT 1
+                """,
+                (name, project, around_ts.strftime(TIMESTAMP_FORMAT)),
+            )
+            row = cur.fetchone()
+            cur.close()
+            if not row:
+                return
+            target_id = row[0]
+            # Listbox-Index zum Event-ID finden.
+            for idx, ev_id in enumerate(self._event_ids):
+                if ev_id == target_id:
+                    self.db_content_listbox.selection_clear(0, END)
+                    self.db_content_listbox.selection_set(idx)
+                    self.db_content_listbox.see(idx)
+                    self._edit_event()
+                    return
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Auto-Edit nach manuellem Eintrag fehlgeschlagen: %s", e)
+
+    # ------------------------------------------------------------------
+    # Wochen-Kachel (alternative Ansicht zur Timer-Kachel)
+    # ------------------------------------------------------------------
+    def _build_week_frame(self) -> None:
+        """Baut die Wochen-Kachel parallel zur Timer-Kachel auf (initial verborgen)."""
+        self.week_frame = Frame(self.tile_container, bg="#C0C0C0", border=2, relief="sunken", padx=5, pady=5)
+        # Wird per grid()/grid_remove() ein- und ausgeblendet — gleicher Slot wie Timer.
+        self.week_frame.grid(row=0, column=0, sticky="nsew")
+        self.week_frame.grid_remove()
+
+        title = Label(
+            self.week_frame,
+            text="Letzte 7 Tage",
+            bg="#C0C0C0",
+            fg="#000080",
+            font=("MS Sans Serif", 10, "bold"),
+        )
+        title.grid(row=0, column=0, columnspan=7, sticky="w", padx=4, pady=(0, 2))
+
+        self.toggle_view_button_week = Button(
+            self.week_frame,
+            text="‹ Timer",
+            command=self._show_timer_view,
+            bg="#C0C0C0",
+            fg="#666666",
+            font=("MS Sans Serif", 8),
+            relief="flat",
+            borderwidth=0,
+            cursor="hand2",
+        )
+        self.toggle_view_button_week.grid(row=0, column=7, padx=4, pady=2, sticky="ne")
+
+        self._week_day_frames: list[Frame] = []
+        for col in range(7):
+            self.week_frame.grid_columnconfigure(col, weight=1, uniform="weekday")
+            cell = Frame(self.week_frame, bg="#C0C0C0")
+            cell.grid(row=1, column=col, sticky="nsew", padx=1)
+            self._week_day_frames.append(cell)
+        self.week_frame.grid_columnconfigure(7, weight=0)
+        self.week_frame.grid_rowconfigure(1, weight=1)
+
+    def _show_week_view(self) -> None:
+        self._week_view_active = True
+        self.timer_frame.grid_remove()
+        self.week_frame.grid()
+        self._refresh_week_view()
+
+    def _show_timer_view(self) -> None:
+        self._week_view_active = False
+        self.week_frame.grid_remove()
+        self.timer_frame.grid()
+
+    def _refresh_week_view(self) -> None:
+        """Berechnet die letzten 7 Tage Stunden und zeichnet vertikale Block-Balken."""
+        if not getattr(self, "week_frame", None):
+            return
+        # Vorherige Inhalte je Tag löschen.
+        for cell in self._week_day_frames:
+            for child in cell.winfo_children():
+                child.destroy()
+
+        if not self.db_conn:
+            return
+        name = self._get_name_silent()
+        project = self._get_project_silent()
+        if not name or not project:
+            return
+        try:
+            from db_helper import compute_last_n_days_hours
+
+            days = compute_last_n_days_hours(self.db_conn, name, project, n=7)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Wochenansicht konnte nicht berechnet werden: %s", e)
+            return
+
+        max_hours = max((h for _, h in days), default=0.0)
+        max_hours = max(max_hours, 1.0)
+        BAR_BLOCKS_MAX = 8
+
+        for cell, (iso_date, hours) in zip(self._week_day_frames, days, strict=False):
+            try:
+                d = datetime.strptime(iso_date, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            weekday = d.weekday()  # 0=Mo, 6=So
+            is_weekend = weekday >= 5
+            date_fg = "#888888" if is_weekend else "#000000"
+            bar_fg = "#A0A0A0" if is_weekend else "#000080"
+
+            n_blocks = int(round((hours / max_hours) * BAR_BLOCKS_MAX))
+            bar_text = "\n".join(["█"] * n_blocks) if n_blocks else " "
+            Label(
+                cell,
+                text=bar_text,
+                bg="#C0C0C0",
+                fg=bar_fg,
+                font=("Courier New", 7),
+            ).pack(side="top")
+            Label(
+                cell,
+                text=f"{hours:.2f} h",
+                bg="#C0C0C0",
+                fg=date_fg,
+                font=("MS Sans Serif", 8, "bold"),
+            ).pack(side="top")
+            _WDAY_DE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
+            Label(
+                cell,
+                text=f"{_WDAY_DE[weekday]} {d.strftime('%d.%m')}",
+                bg="#C0C0C0",
+                fg=date_fg,
+                font=("MS Sans Serif", 8),
+            ).pack(side="top")
 
     def _force_date_refresh(self):
         """Unconditionally refresh list, timer and totals from DB for the selected date."""
@@ -2175,49 +2470,28 @@ class App:
         if is_active_open_start:
             proj_combo.config(state="disabled")
 
-        # Row 2: Timestamp (Single Source of Truth — Datum wird daraus abgeleitet)
-        Label(win, text="Zeitstempel:", **lbl_cfg).grid(row=2, column=0, padx=8, pady=4, sticky="w")
-        ts_var = StringVar(value=ev["timestamp"])
-        ts_entry = Entry(win, textvariable=ts_var, **entry_cfg, width=30)
-        ts_entry.grid(row=2, column=1, padx=8, pady=4, sticky="ew")
+        # Row 2: Datum (TT-MM-JJJJ)
+        Label(win, text="Datum (TT-MM-JJJJ):", **lbl_cfg).grid(row=2, column=0, padx=8, pady=4, sticky="w")
+        try:
+            _initial_dt = datetime.strptime(ev["timestamp"], TIMESTAMP_FORMAT)
+            _initial_date = _initial_dt.strftime("%d-%m-%Y")
+            _initial_time = _initial_dt.strftime("%H:%M")
+        except (ValueError, KeyError):
+            _initial_date = ev.get("date", "")
+            _initial_time = "09:00"
+        date_var = StringVar(value=_initial_date)
+        date_entry_edit = Entry(win, textvariable=date_var, **entry_cfg, width=30)
+        date_entry_edit.grid(row=2, column=1, padx=8, pady=4, sticky="ew")
         if is_active_open_start:
-            ts_entry.config(state="readonly")
+            date_entry_edit.config(state="readonly")
 
-        # Row 3: Date (read-only, live aus Zeitstempel berechnet)
-        Label(win, text="Datum (auto):", **lbl_cfg).grid(row=3, column=0, padx=8, pady=4, sticky="w")
-        date_var = StringVar(value=ev["date"])
-        date_entry = Entry(
-            win,
-            textvariable=date_var,
-            font=("MS Sans Serif", 10),
-            bg="#E8E8E8",
-            fg="#333333",
-            relief="sunken",
-            borderwidth=2,
-            width=30,
-            state="readonly",
-        )
-        date_entry.grid(row=3, column=1, padx=8, pady=4, sticky="ew")
-
-        # Row 4: Hinweis
-        Label(
-            win,
-            text="Datum wird automatisch aus dem Zeitstempel abgeleitet.",
-            bg="#C0C0C0",
-            fg="#555555",
-            font=("MS Sans Serif", 9, "italic"),
-        ).grid(row=4, column=0, columnspan=2, padx=8, pady=(0, 4), sticky="w")
-
-        def _sync_date_from_ts(*_args):
-            raw = ts_var.get().strip()
-            try:
-                parsed = datetime.strptime(raw, TIMESTAMP_FORMAT)
-            except ValueError:
-                date_var.set("— ungültig —")
-                return
-            date_var.set(parsed.strftime("%d-%m-%Y"))
-
-        ts_var.trace_add("write", _sync_date_from_ts)
+        # Row 3: Uhrzeit (HH:MM)
+        Label(win, text="Uhrzeit (HH:MM):", **lbl_cfg).grid(row=3, column=0, padx=8, pady=4, sticky="w")
+        time_var = StringVar(value=_initial_time)
+        time_entry_edit = Entry(win, textvariable=time_var, **entry_cfg, width=30)
+        time_entry_edit.grid(row=3, column=1, padx=8, pady=4, sticky="ew")
+        if is_active_open_start:
+            time_entry_edit.config(state="readonly")
 
         win.grid_columnconfigure(1, weight=1)
 
@@ -2228,19 +2502,31 @@ class App:
 
         def _save():
             new_project = proj_combo.get().strip()
-            new_ts = ts_var.get().strip()
+            new_date_raw = date_var.get().strip()
+            new_time_raw = time_var.get().strip()
             if not new_project:
                 messagebox.showwarning("Fehler", "Projekt darf nicht leer sein.", parent=win)
                 return
             try:
-                parsed_ts = datetime.strptime(new_ts, TIMESTAMP_FORMAT)
+                d_part = datetime.strptime(new_date_raw, "%d-%m-%Y")
             except ValueError:
                 messagebox.showwarning(
                     "Fehler",
-                    f"Ungültiger Zeitstempel: '{new_ts}'.\nErwartet: JJJJ-MM-TT HH:MM:SS",
+                    f"Ungültiges Datum: '{new_date_raw}'.\nErwartet: TT-MM-JJJJ",
                     parent=win,
                 )
                 return
+            try:
+                t_part = datetime.strptime(new_time_raw, "%H:%M")
+            except ValueError:
+                messagebox.showwarning(
+                    "Fehler",
+                    f"Ungültige Uhrzeit: '{new_time_raw}'.\nErwartet: HH:MM",
+                    parent=win,
+                )
+                return
+            parsed_ts = d_part.replace(hour=t_part.hour, minute=t_part.minute, second=0)
+            new_ts = parsed_ts.strftime(TIMESTAMP_FORMAT)
             new_date = parsed_ts.strftime("%d-%m-%Y")
 
             if update_event(self.db_conn, event_id, new_project, new_ts, new_date):

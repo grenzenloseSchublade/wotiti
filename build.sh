@@ -7,18 +7,8 @@ cd "$REPO_ROOT"
 echo "Syncing dependencies (stats + dev)..."
 uv sync --extra stats --extra dev
 
-echo "Building onedir executable..."
-uv run pyinstaller \
-    --noconsole \
-    --onedir \
-    --name wotiti \
-    --icon "src/assets/wotiti.ico" \
-    --hidden-import=tkinter.filedialog \
-    --collect-submodules sklearn \
-    --collect-submodules scipy \
-    --exclude-module torch \
-    --add-data "src/assets:assets" \
-    src/main.py
+echo "Building onedir executable (using wotiti.spec)..."
+uv run pyinstaller --noconfirm wotiti.spec
 
 DIST_DIR="$REPO_ROOT/dist/wotiti"
 

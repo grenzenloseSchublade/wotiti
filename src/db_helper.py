@@ -191,11 +191,25 @@ def migrate_legacy_user_tables(conn: sqlite3.Connection | None) -> bool:
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%_events';")
         tables = [row[0] for row in cursor.fetchall()]
         pattern = re.compile(r"^[A-Za-z0-9_]+_events$")
+        # Tabellen, die zwar dem Pattern entsprechen, aber kein Legacy-User-Schema sind.
+        non_legacy_tables = {"events", "sqlite_sequence", "break_events"}
+        legacy_required_cols = {"project", "event_type", "timestamp", "date"}
 
         for table_name in tables:
-            if table_name in ("events", "sqlite_sequence"):
+            if table_name in non_legacy_tables:
                 continue
             if not pattern.match(table_name):
+                continue
+
+            # Defensiv: nur migrieren, wenn die Legacy-Spalten wirklich vorhanden sind.
+            cursor.execute(f'PRAGMA table_info("{table_name}")')
+            cols = {row[1] for row in cursor.fetchall()}
+            if not legacy_required_cols.issubset(cols):
+                logger.debug(
+                    "Skip Migration für %s: fehlende Spalten %s",
+                    table_name,
+                    legacy_required_cols - cols,
+                )
                 continue
 
             cursor.execute("SELECT 1 FROM migration_log WHERE table_name = ?;", (table_name,))
@@ -770,6 +784,34 @@ def get_last_start_date(conn: sqlite3.Connection | None, name: str, project: str
     except Error as e:
         logger.error("Error fetching last start date: %s", e)
         return None
+
+
+def compute_last_n_days_hours(
+    conn: sqlite3.Connection | None,
+    name: str,
+    project: str,
+    n: int = 7,
+) -> list[tuple[str, float]]:
+    """Berechnet die Arbeitsstunden pro Tag für die letzten ``n`` Tage (inkl. heute).
+
+    Liefert eine Liste der Länge ``n`` mit ``(YYYY-MM-DD, hours)`` — Tage ohne
+    Einträge erhalten ``0.0``. Sessions, die Mitternacht überspannen, werden
+    anteilig verbucht (über ``calculate_daily_duration``).
+    """
+    from datetime import timedelta as _td
+
+    if not conn or not name or not project or n <= 0:
+        return []
+
+    today = datetime.now().date()
+    result: list[tuple[str, float]] = []
+    for offset in range(n - 1, -1, -1):
+        day = today - _td(days=offset)
+        ui_date = day.strftime(UI_DATE_FORMAT)
+        seconds = calculate_daily_duration(project=project, name=name, date=ui_date, conn=conn)
+        hours = float(seconds) / 3600.0 if seconds else 0.0
+        result.append((day.strftime("%Y-%m-%d"), hours))
+    return result
 
 
 def close_stale_sessions(conn: sqlite3.Connection | None) -> int:

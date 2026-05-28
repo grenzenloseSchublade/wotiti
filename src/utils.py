@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import glob
 import json
 import logging
@@ -8,13 +9,14 @@ import sqlite3
 import sys
 from collections.abc import Callable
 from datetime import datetime
+from functools import lru_cache
 from tkinter import Tk, filedialog
 
 import polars as pl
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "1.2.6"
+APP_VERSION = "1.3.0"
 APP_AUTHOR = "grenzenloseSchublade"
 APP_LICENSE = "MIT"
 
@@ -81,7 +83,80 @@ DEFAULT_CONFIG = {
     "pomodoro_sound_enabled": True,
     "pomodoro_sound_local_path": "sounds/StartupSound.wav",
     "single_instance": True,
+    # Wochenend-/Feiertags-Filter für Durchschnitts- und Trend-Statistiken.
+    # Summen und Pies bleiben unangetastet.
+    "holiday_country": "DE",
+    "holiday_subdiv": "",
+    "exclude_weekends_in_averages": True,
+    "include_holidays_in_exclusion": True,
+    "count_weekend_work": False,
 }
+
+
+# ---------------------------------------------------------------------------
+# Wochenend-/Feiertags-Helper (für Stats-Filterung)
+# ---------------------------------------------------------------------------
+
+_HOLIDAYS_IMPORT_WARNED = False
+
+
+def _try_import_holidays():
+    """Liefert das ``holidays``-Modul oder ``None`` (mit Warnung einmalig)."""
+    global _HOLIDAYS_IMPORT_WARNED
+    try:
+        import holidays as _holidays_mod  # noqa: PLC0415
+
+        return _holidays_mod
+    except ImportError:
+        if not _HOLIDAYS_IMPORT_WARNED:
+            logger.warning("Optionales Paket 'holidays' nicht verfügbar — Feiertags-Filter wird ignoriert.")
+            _HOLIDAYS_IMPORT_WARNED = True
+        return None
+
+
+def is_weekend(d) -> bool:
+    """True, wenn ``d`` Samstag oder Sonntag ist. ``d`` ist ``date``/``datetime``."""
+    try:
+        return d.weekday() >= 5
+    except AttributeError:
+        return False
+
+
+def _holiday_set_for_year(country: str, subdiv: str | None, year: int):
+    """Gecachte Holiday-Lookup-Map für (country, subdiv, year). Leer bei Fehler."""
+    return _holiday_set_cached(country or "DE", (subdiv or None), int(year))
+
+
+@lru_cache(maxsize=128)
+def _holiday_set_cached(country: str, subdiv: str | None, year: int) -> frozenset:
+    mod = _try_import_holidays()
+    if mod is None:
+        return frozenset()
+    try:
+        kwargs: dict = {"years": [year]}
+        if subdiv:
+            kwargs["subdiv"] = subdiv
+        h = mod.country_holidays(country, **kwargs)
+        return frozenset(h.keys())
+    except (KeyError, NotImplementedError, Exception) as e:  # noqa: BLE001
+        logger.warning("Feiertags-Lookup für %s/%s/%s fehlgeschlagen: %s", country, subdiv, year, e)
+        return frozenset()
+
+
+def is_holiday(d, country: str = "DE", subdiv: str | None = None) -> bool:
+    """True, wenn ``d`` ein Feiertag in ``country``/``subdiv`` ist."""
+    # Normalisiere datetime -> date (holidays-Lib liefert date-Keys).
+    target = d.date() if hasattr(d, "date") and callable(d.date) else d
+    year = getattr(target, "year", None)
+    if year is None:
+        return False
+    holiday_dates = _holiday_set_cached(country or "DE", (subdiv or None), int(year))
+    return target in holiday_dates
+
+
+def is_non_workday(d, *, country: str = "DE", subdiv: str | None = None, include_holidays: bool = True) -> bool:
+    """True, wenn ``d`` Wochenende oder (optional) Feiertag ist."""
+    return is_weekend(d) or (include_holidays and is_holiday(d, country=country, subdiv=subdiv))
 
 
 def _validate_config(cfg: dict) -> dict:
@@ -116,6 +191,13 @@ def _validate_config(cfg: dict) -> dict:
     for key in ("default_user", "default_project", "pomodoro_sound_local_path"):
         if not isinstance(out.get(key), str) or not out[key].strip():
             out[key] = DEFAULT_CONFIG[key]
+    # Feiertags-/Wochenend-Felder.
+    for key in ("holiday_country", "holiday_subdiv"):
+        v = out.get(key, DEFAULT_CONFIG[key])
+        out[key] = str(v).strip() if isinstance(v, str) else DEFAULT_CONFIG[key]
+    for key in ("exclude_weekends_in_averages", "include_holidays_in_exclusion", "count_weekend_work"):
+        if not isinstance(out.get(key), bool):
+            out[key] = bool(DEFAULT_CONFIG[key])
     return out
 
 
@@ -138,8 +220,6 @@ def load_config() -> dict:
 
 def save_config(config: dict) -> None:
     """Speichert die Konfiguration in config.json (atomar via tmp + rename)."""
-    import contextlib
-
     os.makedirs(PATH_TO_DATA, exist_ok=True)
     tmp_path = CONFIG_PATH + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
@@ -264,11 +344,31 @@ def read_parameters(file_path: str) -> dict:
         return {}
 
 
-def browse_directory() -> str:
-    """Browses for a directory using a Tkinter dialog."""
+def browse_directory(parent=None) -> str:
+    """Browses for a directory using a Tkinter dialog.
+
+    Wenn ``parent`` gegeben ist, wird der Dialog *modal* und zuverlässig in den
+    Vordergrund gebracht (Topmost-Toggle). Andernfalls wird ein temporärer
+    Hidden-Root erstellt.
+    """
+    if parent is not None:
+        try:
+            parent.attributes("-topmost", True)
+            parent.lift()
+            parent.focus_force()
+            parent.update_idletasks()
+            directory = filedialog.askdirectory(parent=parent, initialdir=PATH_TO_DASHBOARD_DATA)
+        finally:
+            with contextlib.suppress(Exception):
+                parent.attributes("-topmost", False)
+        return directory
     root = Tk()
     root.withdraw()
-    directory = filedialog.askdirectory(initialdir=PATH_TO_DASHBOARD_DATA)
+    root.attributes("-topmost", True)
+    root.lift()
+    root.focus_force()
+    root.update_idletasks()
+    directory = filedialog.askdirectory(parent=root, initialdir=PATH_TO_DASHBOARD_DATA)
     root.destroy()
     return directory
 

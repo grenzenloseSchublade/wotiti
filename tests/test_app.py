@@ -1,3 +1,4 @@
+import contextlib
 import os
 import sys
 from datetime import datetime
@@ -17,7 +18,8 @@ def app_instance():
     app_instance = App(root)
     yield app_instance
     print(os.path.abspath(os.path.dirname(DATABASE_PATH)))
-    # os.remove(os.path.abspath(os.path.dirname(DATABASE_PATH)))
+    with contextlib.suppress(OSError):
+        os.remove(DATABASE_PATH)
     root.destroy()
 
 

@@ -9,8 +9,8 @@ Set-Location $RepoRoot
 Write-Host "Syncing dependencies (stats + dev)..."
 uv sync --extra stats --extra dev
 
-Write-Host "Building onedir executable..."
-uv run pyinstaller --noconsole --onedir --name wotiti --icon "src/assets/wotiti.ico" --hidden-import=tkinter.filedialog --hidden-import=winsound --hidden-import=single_instance --collect-submodules sklearn --collect-submodules scipy --exclude-module torch --add-data "src/assets;assets" src/main.py
+Write-Host "Building onedir executable (using wotiti.spec)..."
+uv run pyinstaller --noconfirm wotiti.spec
 
 Write-Host "Placing data/ next to EXE..."
 $distDir = Join-Path $RepoRoot "dist\wotiti"
