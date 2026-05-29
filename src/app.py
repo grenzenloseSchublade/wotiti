@@ -409,26 +409,17 @@ class App:
         )
         self.timer_subtitle_label.grid(row=0, column=1, pady=5, padx=10, sticky="w")
 
-        # Pause block: label + time stacked in a sub-frame (right side)
-        self._pause_frame = Frame(self.timer_frame, bg="#C0C0C0")
-        self._pause_frame.grid(row=0, column=2, pady=5, padx=10, sticky="e")
-        Label(self._pause_frame, text="Pause", bg="#C0C0C0", fg="#404040", font=("MS Sans Serif", 8)).pack(
-            side="top", anchor="e"
-        )
+        # Pause timer — directly in timer_frame, right-aligned below the toggle button
         self.break_time_label = Label(
-            self._pause_frame, text="--:--", bg="#C0C0C0", fg="#0000FF", font=("MS Sans Serif", 12, "bold")
+            self.timer_frame, text="--:--", bg="#C0C0C0", fg="#0000FF", font=("MS Sans Serif", 12, "bold")
         )
-        self.break_time_label.pack(side="top", anchor="e")
+        self.break_time_label.grid(row=0, column=2, pady=5, padx=10, sticky="e")
         _ToolTip(self.break_time_label, "Aktuelle Pause (Countdown oder Dauer)")
 
-        # Row 1: compact totals — unified style + sparkline in center
+        # Row 1: compact totals
         self.timer_total_label = Label(self.timer_frame, text="", bg="#C0C0C0", fg="#404040", font=("MS Sans Serif", 9))
-        self.timer_total_label.grid(row=1, column=0, padx=12, pady=(0, 2), sticky="sw")
+        self.timer_total_label.grid(row=1, column=0, columnspan=2, padx=12, pady=(0, 2), sticky="sw")
         _ToolTip(self.timer_total_label, "Gesamte Projektzeit (alle Tage)")
-
-        self._sparkline_label = Label(self.timer_frame, text="", bg="#C0C0C0", fg="#000080", font=("Courier New", 11))
-        self._sparkline_label.grid(row=1, column=1, padx=4, pady=(0, 2), sticky="s")
-        _ToolTip(self._sparkline_label, "Letzte 7 Tage")
 
         self.break_total_label = Label(self.timer_frame, text="", bg="#C0C0C0", fg="#404040", font=("MS Sans Serif", 9))
         self.break_total_label.grid(row=1, column=2, padx=12, pady=(0, 2), sticky="se")
@@ -2208,7 +2199,7 @@ class App:
         self._refresh_week_view()
 
     _TILE_HEIGHT_TIMER = 140
-    _TILE_HEIGHT_WEEK = 190
+    _TILE_HEIGHT_WEEK = 220
 
     def _show_week_view(self) -> None:
         self._week_view_active = True
@@ -2265,7 +2256,7 @@ class App:
         today = datetime.now().date()
         max_hours = max((h for _, h in days), default=0.0)
         max_hours = max(max_hours, 1.0)
-        BAR_BLOCKS_MAX = 10
+        BAR_BLOCKS_MAX = 14
 
         _WDAY_DE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
         for cell, (iso_date, hours) in zip(self._week_day_frames, days, strict=False):
@@ -2302,7 +2293,7 @@ class App:
                 cell_bg = "#C0C0C0"
                 cell.configure(bg=cell_bg, relief="flat", borderwidth=0)
 
-            n_blocks = int(round((hours / max_hours) * BAR_BLOCKS_MAX))
+            n_blocks = min(int((hours / max_hours) * BAR_BLOCKS_MAX), BAR_BLOCKS_MAX) if hours > 0 else 0
             bar_text = "\n".join(["\u2588"] * n_blocks) if n_blocks else " "
 
             # Wochentag (bold) und Datum als zwei Labels
@@ -2848,38 +2839,6 @@ class App:
             self.break_total_label.config(text=f"Pause: {b_hr:02}:{b_min:02}:{b_sec:02}")
         else:
             self.break_total_label.config(text="")
-
-        # Update sparkline
-        self._update_sparkline(name, project)
-
-    @staticmethod
-    def _render_sparkline(hours_list: list[float]) -> str:
-        """Convert a list of hour values to a sparkline string using Unicode block chars."""
-        blocks = " \u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
-        if not hours_list:
-            return ""
-        mx = max(hours_list)
-        if mx <= 0:
-            return " " * len(hours_list)
-        result = []
-        for h in hours_list:
-            idx = int(round((h / mx) * (len(blocks) - 1)))
-            result.append(blocks[idx])
-        return "".join(result)
-
-    def _update_sparkline(self, name: str, project: str) -> None:
-        """Refresh the 7-day sparkline in the timer tile."""
-        if not self.db_conn:
-            return
-        try:
-            from db_helper import compute_last_n_days_hours
-
-            days = compute_last_n_days_hours(self.db_conn, name, project, n=7)
-            hours_list = [h for _, h in days]
-            spark = self._render_sparkline(hours_list)
-            self._sparkline_label.config(text=spark)
-        except Exception:  # noqa: BLE001
-            self._sparkline_label.config(text="")
 
     def open_stats_dashboard(self):
         """Opens the statistics dashboard."""
