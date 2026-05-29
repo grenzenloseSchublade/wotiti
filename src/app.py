@@ -423,9 +423,14 @@ class App:
         # Keep legacy reference for tests
         self.timer_label = self.timer_time_label
 
-        # Dezenter Umschalt-Link unter der Timer-Zeile, rechts.
-        self.toggle_view_button_timer = Button(
-            self.timer_frame,
+        # Wochen-Kachel — initial nicht angezeigt.
+        self._week_view_active = False
+        self._build_week_frame()
+
+        # Dezenter Umschalt-Link — lebt per place() im tile_container mit
+        # absoluter Y-Koordinate, damit die Position beim Wechsel identisch bleibt.
+        self.toggle_view_button = Button(
+            self.tile_container,
             text="Woche ›",
             command=self._show_week_view,
             bg="#C0C0C0",
@@ -435,11 +440,8 @@ class App:
             borderwidth=0,
             cursor="hand2",
         )
-        self.toggle_view_button_timer.grid(row=1, column=3, padx=4, pady=(0, 2), sticky="se")
-
-        # Wochen-Kachel — initial nicht angezeigt.
-        self._week_view_active = False
-        self._build_week_frame()
+        self.toggle_view_button.place(relx=1.0, y=self._TILE_HEIGHT_TIMER - 4, anchor="se", x=-6)
+        self.toggle_view_button.lift()
 
         # =====================================================
         # ROW 3: Database content listbox
@@ -945,7 +947,7 @@ class App:
         win = Toplevel(self.master)
         win.title("Einstellungen")
         win.configure(bg="#C0C0C0")
-        w, h = 560, 780
+        w, h = 560, 820
         x = self.master.winfo_x() + (self.master.winfo_width() - w) // 2
         y = self.master.winfo_y() + (self.master.winfo_height() - h) // 2
         win.geometry(f"{w}x{h}+{x}+{y}")
@@ -2120,19 +2122,6 @@ class App:
         )
         title.grid(row=0, column=0, columnspan=7, sticky="w", padx=4, pady=(0, 2))
 
-        self.toggle_view_button_week = Button(
-            self.week_frame,
-            text="‹ Timer",
-            command=self._show_timer_view,
-            bg="#C0C0C0",
-            fg="#666666",
-            font=("MS Sans Serif", 8),
-            relief="flat",
-            borderwidth=0,
-            cursor="hand2",
-        )
-        self.toggle_view_button_week.grid(row=0, column=7, padx=4, pady=2, sticky="ne")
-
         self._week_day_frames: list[Frame] = []
         for col in range(7):
             self.week_frame.grid_columnconfigure(col, weight=1, uniform="weekday")
@@ -2142,16 +2131,25 @@ class App:
         self.week_frame.grid_columnconfigure(7, weight=0)
         self.week_frame.grid_rowconfigure(1, weight=1)
 
+    _TILE_HEIGHT_TIMER = 140
+    _TILE_HEIGHT_WEEK = 190
+
     def _show_week_view(self) -> None:
         self._week_view_active = True
         self.timer_frame.grid_remove()
+        self.tile_container.configure(height=self._TILE_HEIGHT_WEEK)
         self.week_frame.grid()
+        self.toggle_view_button.configure(text="‹ Timer", command=self._show_timer_view)
+        self.toggle_view_button.lift()
         self._refresh_week_view()
 
     def _show_timer_view(self) -> None:
         self._week_view_active = False
         self.week_frame.grid_remove()
+        self.tile_container.configure(height=self._TILE_HEIGHT_TIMER)
         self.timer_frame.grid()
+        self.toggle_view_button.configure(text="Woche ›", command=self._show_week_view)
+        self.toggle_view_button.lift()
 
     def _refresh_week_view(self) -> None:
         """Berechnet die letzten 7 Tage Stunden und zeichnet vertikale Block-Balken."""
@@ -2187,17 +2185,34 @@ class App:
                 continue
             weekday = d.weekday()  # 0=Mo, 6=So
             is_weekend = weekday >= 5
-            date_fg = "#888888" if is_weekend else "#000000"
-            bar_fg = "#A0A0A0" if is_weekend else "#000080"
+
+            # Feiertags-Erkennung aus Konfiguration.
+            from utils import is_holiday as _is_holiday
+
+            _h_country = self.config.get("holiday_country", "DE") or "DE"
+            _h_subdiv = self.config.get("holiday_subdiv", "") or None
+            _is_hol = _is_holiday(d, country=_h_country, subdiv=_h_subdiv)
+
+            if _is_hol:
+                date_fg = "#CC4444"
+                bar_fg = "#CC4444"
+            elif is_weekend:
+                date_fg = "#888888"
+                bar_fg = "#A0A0A0"
+            else:
+                date_fg = "#000000"
+                bar_fg = "#000080"
 
             n_blocks = int(round((hours / max_hours) * BAR_BLOCKS_MAX))
             bar_text = "\n".join(["█"] * n_blocks) if n_blocks else " "
+            # Text oben, Balken wachsen nach unten.
+            _WDAY_DE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
             Label(
                 cell,
-                text=bar_text,
+                text=f"{_WDAY_DE[weekday]} {d.strftime('%d.%m')}",
                 bg="#C0C0C0",
-                fg=bar_fg,
-                font=("Courier New", 7),
+                fg=date_fg,
+                font=("MS Sans Serif", 8),
             ).pack(side="top")
             Label(
                 cell,
@@ -2206,13 +2221,12 @@ class App:
                 fg=date_fg,
                 font=("MS Sans Serif", 8, "bold"),
             ).pack(side="top")
-            _WDAY_DE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
             Label(
                 cell,
-                text=f"{_WDAY_DE[weekday]} {d.strftime('%d.%m')}",
+                text=bar_text,
                 bg="#C0C0C0",
-                fg=date_fg,
-                font=("MS Sans Serif", 8),
+                fg=bar_fg,
+                font=("Courier New", 7),
             ).pack(side="top")
 
     def _force_date_refresh(self):

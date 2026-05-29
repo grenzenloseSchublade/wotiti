@@ -86,7 +86,7 @@ DEFAULT_CONFIG = {
     # Wochenend-/Feiertags-Filter für Durchschnitts- und Trend-Statistiken.
     # Summen und Pies bleiben unangetastet.
     "holiday_country": "DE",
-    "holiday_subdiv": "",
+    "holiday_subdiv": "NW",
     "exclude_weekends_in_averages": True,
     "include_holidays_in_exclusion": True,
     "count_weekend_work": False,
