@@ -389,7 +389,7 @@ class App:
         # =====================================================
         # ROW 2: Timer / Wochenübersicht (umschaltbare Kachel)
         # =====================================================
-        # Container mit fester Höhe, damit Timer- und Wochen-Kachel gleich groß sind.
+        # Container mit fester Höhe für die Timer-Kachel.
         self.tile_container = Frame(self.frame, bg="#C0C0C0", height=140)
         self.tile_container.grid(row=2, column=0, columnspan=6, pady=5, padx=5, sticky="ew")
         self.tile_container.grid_propagate(False)
@@ -432,15 +432,11 @@ class App:
         # Keep legacy reference for tests
         self.timer_label = self.timer_time_label
 
-        # Wochen-Kachel — initial nicht angezeigt.
+        # Wochen-Kachel wird erst nach db_content_frame gebaut (siehe unten).
         self._week_view_active = False
-        self._build_week_frame()
 
-        # Dezenter Umschalt-Link — lebt per place() im tile_container mit
-        # absoluter Y-Koordinate vom OBEREN Container-Rand. Da die Oberkante
-        # des Containers in der GUI fix ist (Row 2 wandert nicht), bleibt
-        # dieser Pixel-Offset auch beim Höhenwechsel (140↔190) stabil.
-        # Der Knopf darf sich in der GUI in y-Richtung NIEMALS verschieben.
+        # Dezenter Umschalt-Link — lebt per place() im tile_container.
+        # Feste Y-Position (y=4) vom oberen Rand, bewegt sich nie.
         self.toggle_view_button = Button(
             self.tile_container,
             text="Woche ›",
@@ -471,6 +467,9 @@ class App:
         )
         self.scrollbar_listbox.grid(row=0, column=1, sticky="ns")
         self.db_content_listbox["yscrollcommand"] = self.scrollbar_listbox.set
+
+        # Wochen-Kachel — überlagert die Listbox, nicht den Timer.
+        self._build_week_frame()
 
         # =====================================================
         # ROW 4: Console + Clear button
@@ -2128,10 +2127,10 @@ class App:
     # Wochen-Kachel (alternative Ansicht zur Timer-Kachel)
     # ------------------------------------------------------------------
     def _build_week_frame(self) -> None:
-        """Baut die Wochen-Kachel parallel zur Timer-Kachel auf (initial verborgen)."""
-        self.week_frame = Frame(self.tile_container, bg="#C0C0C0", border=2, relief="sunken", padx=5, pady=5)
-        # Wird per grid()/grid_remove() ein- und ausgeblendet — gleicher Slot wie Timer.
-        self.week_frame.grid(row=0, column=0, sticky="nsew")
+        """Baut die Wochen-Kachel im Listbox-Bereich auf (initial verborgen)."""
+        self.week_frame = Frame(self.db_content_frame, bg="#C0C0C0", border=2, relief="sunken", padx=5, pady=5)
+        # Überlagert die Listbox im gleichen Grid-Slot.
+        self.week_frame.grid(row=0, column=0, columnspan=2, sticky="nsew")
         self.week_frame.grid_remove()
 
         # Navigationszeile: ‹ Titel › (zentriert)
@@ -2199,12 +2198,11 @@ class App:
         self._refresh_week_view()
 
     _TILE_HEIGHT_TIMER = 140
-    _TILE_HEIGHT_WEEK = 220
 
     def _show_week_view(self) -> None:
         self._week_view_active = True
-        self.timer_frame.grid_remove()
-        self.tile_container.configure(height=self._TILE_HEIGHT_WEEK)
+        self.db_content_listbox.grid_remove()
+        self.scrollbar_listbox.grid_remove()
         self.week_frame.grid()
         self.toggle_view_button.configure(text="‹ Timer", command=self._show_timer_view)
         self.toggle_view_button.lift()
@@ -2213,8 +2211,8 @@ class App:
     def _show_timer_view(self) -> None:
         self._week_view_active = False
         self.week_frame.grid_remove()
-        self.tile_container.configure(height=self._TILE_HEIGHT_TIMER)
-        self.timer_frame.grid()
+        self.db_content_listbox.grid()
+        self.scrollbar_listbox.grid()
         self.toggle_view_button.configure(text="Woche ›", command=self._show_week_view)
         self.toggle_view_button.lift()
 

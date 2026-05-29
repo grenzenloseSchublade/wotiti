@@ -676,7 +676,7 @@ def calculate_duration(project: str = "1", name: str = "Hans", conn: sqlite3.Con
                 start_time = None
 
         return total_duration
-    except Error as e:
+    except (Error, ValueError) as e:
         logger.error("Error calculating duration: %s", e)
         return 0
     finally:
