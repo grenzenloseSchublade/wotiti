@@ -135,6 +135,13 @@ def test_start_session_already_active(app_instance):
 
 def test_update_db_content(app_instance):
     """Test updating the database content listbox."""
+    # Erst eine Session starten, damit Events vorhanden sind.
+    app_instance.name_entry.set("test_user")
+    app_instance.project_entry.set("1")
+    today = datetime.today().strftime("%d-%m-%Y")
+    app_instance.date_entry.delete(0, END)
+    app_instance.date_entry.insert(0, today)
+    app_instance.start_session()
     app_instance.update_db_content()
     assert app_instance.db_content_listbox.size() > 0
 

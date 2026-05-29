@@ -191,7 +191,7 @@ class App:
             x = max(0, (sx - w) // 2)
             y = max(0, (sy - h) // 2)
             master.geometry(f"{w}x{h}+{x}+{y}")
-        master.minsize(640, 440)
+        master.minsize(640, 500)
 
         # Make the window resizable
         master.grid_rowconfigure(0, weight=1)
@@ -2113,14 +2113,51 @@ class App:
         self.week_frame.grid(row=0, column=0, sticky="nsew")
         self.week_frame.grid_remove()
 
-        title = Label(
-            self.week_frame,
-            text="Letzte 7 Tage",
+        # Navigationszeile: ‹ Titel › (zentriert)
+        nav_frame = Frame(self.week_frame, bg="#C0C0C0")
+        nav_frame.grid(row=0, column=0, columnspan=7, sticky="ew", padx=4, pady=(0, 2))
+
+        nav_inner = Frame(nav_frame, bg="#C0C0C0")
+        nav_inner.pack(expand=True)
+
+        self._week_btn_back = Button(
+            nav_inner,
+            text="‹",
+            command=self._week_scroll_back,
+            bg="#C0C0C0",
+            fg="#000080",
+            font=("MS Sans Serif", 10, "bold"),
+            relief="flat",
+            borderwidth=0,
+            cursor="hand2",
+            width=2,
+        )
+        self._week_btn_back.pack(side="left")
+
+        self._week_offset = 0
+        self._week_title_label = Label(
+            nav_inner,
+            text="Zeitmaschine",
             bg="#C0C0C0",
             fg="#000080",
             font=("MS Sans Serif", 10, "bold"),
         )
-        title.grid(row=0, column=0, columnspan=7, sticky="w", padx=4, pady=(0, 2))
+        self._week_title_label.pack(side="left", padx=4)
+
+        self._week_btn_forward = Button(
+            nav_inner,
+            text="›",
+            command=self._week_scroll_forward,
+            bg="#C0C0C0",
+            fg="#000080",
+            font=("MS Sans Serif", 10, "bold"),
+            relief="flat",
+            borderwidth=0,
+            cursor="hand2",
+            width=2,
+        )
+        self._week_btn_forward.pack(side="left")
+        self._week_btn_forward.configure(state="disabled")
 
         self._week_day_frames: list[Frame] = []
         for col in range(7):
@@ -2130,6 +2167,16 @@ class App:
             self._week_day_frames.append(cell)
         self.week_frame.grid_columnconfigure(7, weight=0)
         self.week_frame.grid_rowconfigure(1, weight=1)
+
+    def _week_scroll_back(self) -> None:
+        """Scrollt die Wochenansicht 7 Tage in die Vergangenheit."""
+        self._week_offset -= 7
+        self._refresh_week_view()
+
+    def _week_scroll_forward(self) -> None:
+        """Scrollt die Wochenansicht 7 Tage Richtung Gegenwart."""
+        self._week_offset = min(self._week_offset + 7, 0)
+        self._refresh_week_view()
 
     _TILE_HEIGHT_TIMER = 140
     _TILE_HEIGHT_WEEK = 190
@@ -2167,16 +2214,24 @@ class App:
         if not name or not project:
             return
         try:
+            from datetime import timedelta as _td
+
             from db_helper import compute_last_n_days_hours
 
-            days = compute_last_n_days_hours(self.db_conn, name, project, n=7)
+            end_date = datetime.now().date() + _td(days=self._week_offset)
+            days = compute_last_n_days_hours(self.db_conn, name, project, n=7, end_date=end_date)
         except Exception as e:  # noqa: BLE001
             logger.warning("Wochenansicht konnte nicht berechnet werden: %s", e)
             return
 
+        # Titel und Navigation aktualisieren.
+        kw = end_date.isocalendar()[1]
+        self._week_title_label.config(text=f"Zeitmaschine - KW {kw}")
+        self._week_btn_forward.configure(state="normal" if self._week_offset < 0 else "disabled")
+
         max_hours = max((h for _, h in days), default=0.0)
         max_hours = max(max_hours, 1.0)
-        BAR_BLOCKS_MAX = 8
+        BAR_BLOCKS_MAX = 10
 
         for cell, (iso_date, hours) in zip(self._week_day_frames, days, strict=False):
             try:
@@ -2400,22 +2455,23 @@ class App:
                     (view_date, limit),
                 )
             events = cursor.fetchall()
-            self.db_content_listbox.insert(END, f"── {view_date} ──")
-            self._event_ids.append(None)
-            current_user = None
-            for event_id, user_name, project, event_type, timestamp in events:
-                if user_name != current_user:
-                    current_user = user_name
-                    self.db_content_listbox.insert(END, f"User: {user_name}")
-                    self._event_ids.append(None)
-                self.db_content_listbox.insert(END, f"  Projekt {project}: {event_type} at {timestamp}")
-                self._event_ids.append(event_id)
-            # Phase 2.4: Hinweis, wenn das Listenlimit greift.
-            if total_count > limit:
-                self.db_content_listbox.insert(
-                    END, f"… {total_count - limit} weitere Einträge ausgeblendet (Limit {limit})"
-                )
+            if events:
+                self.db_content_listbox.insert(END, f"── {view_date} ──")
                 self._event_ids.append(None)
+                current_user = None
+                for event_id, user_name, project, event_type, timestamp in events:
+                    if user_name != current_user:
+                        current_user = user_name
+                        self.db_content_listbox.insert(END, f"User: {user_name}")
+                        self._event_ids.append(None)
+                    self.db_content_listbox.insert(END, f"  Projekt {project}: {event_type} at {timestamp}")
+                    self._event_ids.append(event_id)
+                # Phase 2.4: Hinweis, wenn das Listenlimit greift.
+                if total_count > limit:
+                    self.db_content_listbox.insert(
+                        END, f"… {total_count - limit} weitere Einträge ausgeblendet (Limit {limit})"
+                    )
+                    self._event_ids.append(None)
 
     def _edit_event(self, event=None):
         """Open edit dialog for the selected event (double-click handler)."""

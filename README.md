@@ -23,6 +23,8 @@ WoTiTi ist eine lokal ausführbare Desktop-Anwendung zur Erfassung von Arbeitsze
 - separate Persistierung von Arbeitsphasen (`events`) und Pausenphasen (`break_events`)
 - Pomodoro-Unterstützung mit konfigurierbaren Arbeits- und Pausenintervallen
 - Mini-Modus als separates Always-on-top Fenster mit persistenter Position
+- Zeitmaschine: scrollbare 7-Tage-Wochenansicht mit Balkendiagramm und KW-Anzeige
+- Feiertags- und Wochenend-Erkennung (konfigurierbar: Land, Region)
 - Dashboard für deskriptive, visuelle und statistische Auswertungen
 - Standalone-Builds für Linux und Windows via PyInstaller
 
@@ -113,6 +115,8 @@ Steuert die **Ereignisliste** (nur Einträge dieses Tages) und die **angezeigten
 
 **Mini-Modus** (▽/△): Kompakte Always-on-top Ansicht mit Tageszeit, Drag-Support und persistenter Position.
 
+**Zeitmaschine** (Wochenansicht): Zeigt die letzten 7 Tage als Balkendiagramm direkt in der Timer-Kachel. Per Pfeil-Navigation (‹ ›) durch beliebige Wochen scrollen, Titel zeigt die aktuelle Kalenderwoche. Wochenenden werden grau, Feiertage rot markiert (Land und Region konfigurierbar in den Einstellungen).
+
 **Ein Fenster (Single-Instance)**  
 Ein erneuter Start der Anwendung (EXE/App unter Windows/Linux) beendet sich und holt stattdessen das **laufende WoTITI-Hauptfenster** (bzw. den **Mini-Modus**, falls aktiv) in den Vordergrund. Das betrifft **nicht** den Browser oder das Auswertungs-Dashboard. Zum Testen mehrerer Instanzen kann in `data/config.json` `single_instance` auf `false` gesetzt werden (optional auch `single_instance_port` für den reinen IPC-Port).
 
@@ -129,6 +133,9 @@ Ein erneuter Start der Anwendung (EXE/App unter Windows/Linux) beendet sich und 
 - Separate Break-Tabellenlogik für manuelle und Pomodoro-Pausen
 - Automatische Bereinigung verwaister Sessions und Pausen nach unsauberem Beenden
 - Echtzeit-Timer-Anzeige (Tageszeit bezogen auf gewähltes Datum, Σ gesamt, ▮▮ Pausen am gewählten Tag)
+- Zeitmaschine: 7-Tage-Balkendiagramm mit Wochennavigation (‹ ›) und KW-Anzeige
+- Feiertags-Erkennung in der Wochenansicht (rot markiert, Land/Region konfigurierbar)
+- Wochenend-/Feiertags-Filter für Dashboard-Statistiken (Durchschnitte, Trends)
 - Session-Schutz bei App-Schließen
 - Eingabevalidierung (Datumsformat DD-MM-YYYY)
 - Log-Rotation (`data/wotiti.log`, 1 MB, 3 Backups)

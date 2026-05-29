@@ -791,22 +791,25 @@ def compute_last_n_days_hours(
     name: str,
     project: str,
     n: int = 7,
+    end_date=None,
 ) -> list[tuple[str, float]]:
-    """Berechnet die Arbeitsstunden pro Tag für die letzten ``n`` Tage (inkl. heute).
+    """Berechnet die Arbeitsstunden pro Tag für ``n`` Tage bis ``end_date`` (inkl.).
 
     Liefert eine Liste der Länge ``n`` mit ``(YYYY-MM-DD, hours)`` — Tage ohne
     Einträge erhalten ``0.0``. Sessions, die Mitternacht überspannen, werden
     anteilig verbucht (über ``calculate_daily_duration``).
+
+    ``end_date`` ist ein ``date``-Objekt; Default = heute.
     """
     from datetime import timedelta as _td
 
     if not conn or not name or not project or n <= 0:
         return []
 
-    today = datetime.now().date()
+    last_day = end_date if end_date is not None else datetime.now().date()
     result: list[tuple[str, float]] = []
     for offset in range(n - 1, -1, -1):
-        day = today - _td(days=offset)
+        day = last_day - _td(days=offset)
         ui_date = day.strftime(UI_DATE_FORMAT)
         seconds = calculate_daily_duration(project=project, name=name, date=ui_date, conn=conn)
         hours = float(seconds) / 3600.0 if seconds else 0.0
