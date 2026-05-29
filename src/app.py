@@ -83,14 +83,28 @@ logger = logging.getLogger(__name__)
 class _ToolTip:
     """Lightweight hover tooltip for any tkinter widget."""
 
+    _DELAY_MS = 400
+
     def __init__(self, widget, text: str):
         self._widget = widget
         self._text = text
         self._tw = None
-        widget.bind("<Enter>", self._show, add="+")
+        self._after_id = None
+        widget.bind("<Enter>", self._schedule, add="+")
         widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+
+    def _schedule(self, _event=None):
+        self._cancel()
+        self._after_id = self._widget.after(self._DELAY_MS, self._show)
+
+    def _cancel(self):
+        if self._after_id:
+            self._widget.after_cancel(self._after_id)
+            self._after_id = None
 
     def _show(self, _event=None):
+        self._after_id = None
         if self._tw:
             return
         x = self._widget.winfo_rootx() + self._widget.winfo_width() // 2
@@ -108,9 +122,11 @@ class _ToolTip:
             borderwidth=1,
             padx=4,
             pady=2,
+            wraplength=320,
         ).pack()
 
     def _hide(self, _event=None):
+        self._cancel()
         if self._tw:
             self._tw.destroy()
             self._tw = None
@@ -388,37 +404,39 @@ class App:
         )
         self.timer_time_label.grid(row=0, column=0, pady=5, padx=10, sticky="w")
 
-        self.timer_name_label = Label(self.timer_frame, text="", bg="#C0C0C0", fg="#000080", font=("MS Sans Serif", 12))
-        self.timer_name_label.grid(row=0, column=1, pady=5, padx=10, sticky="w")
-
-        self.timer_project_label = Label(
-            self.timer_frame, text="", bg="#C0C0C0", fg="#000080", font=("MS Sans Serif", 12)
+        self.timer_subtitle_label = Label(
+            self.timer_frame, text="", bg="#C0C0C0", fg="#000000", font=("MS Sans Serif", 12)
         )
-        self.timer_project_label.grid(row=0, column=2, pady=5, padx=10, sticky="w")
+        self.timer_subtitle_label.grid(row=0, column=1, pady=5, padx=10, sticky="w")
 
+        # Pause block: label + time stacked in a sub-frame (right side)
+        self._pause_frame = Frame(self.timer_frame, bg="#C0C0C0")
+        self._pause_frame.grid(row=0, column=2, pady=5, padx=10, sticky="e")
+        Label(self._pause_frame, text="Pause", bg="#C0C0C0", fg="#404040", font=("MS Sans Serif", 8)).pack(
+            side="top", anchor="e"
+        )
         self.break_time_label = Label(
-            self.timer_frame, text="--:--", bg="#C0C0C0", fg="#0000FF", font=("MS Sans Serif", 12, "bold")
+            self._pause_frame, text="--:--", bg="#C0C0C0", fg="#0000FF", font=("MS Sans Serif", 12, "bold")
         )
-        self.break_time_label.grid(row=0, column=3, pady=5, padx=10, sticky="e")
+        self.break_time_label.pack(side="top", anchor="e")
         _ToolTip(self.break_time_label, "Aktuelle Pause (Countdown oder Dauer)")
 
-        # Row 1: compact totals — symbol + time, tooltip on hover
-        self.timer_total_label = Label(
-            self.timer_frame, text="", bg="#C0C0C0", fg="#CC6666", font=("MS Sans Serif", 10)
-        )
-        self.timer_total_label.grid(row=1, column=0, columnspan=2, padx=12, pady=(0, 2), sticky="sw")
+        # Row 1: compact totals — unified style + sparkline in center
+        self.timer_total_label = Label(self.timer_frame, text="", bg="#C0C0C0", fg="#404040", font=("MS Sans Serif", 9))
+        self.timer_total_label.grid(row=1, column=0, padx=12, pady=(0, 2), sticky="sw")
         _ToolTip(self.timer_total_label, "Gesamte Projektzeit (alle Tage)")
 
-        self.break_total_label = Label(
-            self.timer_frame, text="", bg="#C0C0C0", fg="#6666BB", font=("MS Sans Serif", 10)
-        )
-        self.break_total_label.grid(row=1, column=2, columnspan=2, padx=12, pady=(0, 2), sticky="se")
+        self._sparkline_label = Label(self.timer_frame, text="", bg="#C0C0C0", fg="#000080", font=("Courier New", 11))
+        self._sparkline_label.grid(row=1, column=1, padx=4, pady=(0, 2), sticky="s")
+        _ToolTip(self._sparkline_label, "Letzte 7 Tage")
+
+        self.break_total_label = Label(self.timer_frame, text="", bg="#C0C0C0", fg="#404040", font=("MS Sans Serif", 9))
+        self.break_total_label.grid(row=1, column=2, padx=12, pady=(0, 2), sticky="se")
         _ToolTip(self.break_total_label, "Pausenzeit heute")
 
         self.timer_frame.grid_columnconfigure(0, weight=0)
         self.timer_frame.grid_columnconfigure(1, weight=1)
-        self.timer_frame.grid_columnconfigure(2, weight=1)
-        self.timer_frame.grid_columnconfigure(3, weight=0)
+        self.timer_frame.grid_columnconfigure(2, weight=0)
 
         # Keep legacy reference for tests
         self.timer_label = self.timer_time_label
@@ -428,7 +446,10 @@ class App:
         self._build_week_frame()
 
         # Dezenter Umschalt-Link — lebt per place() im tile_container mit
-        # absoluter Y-Koordinate, damit die Position beim Wechsel identisch bleibt.
+        # absoluter Y-Koordinate vom OBEREN Container-Rand. Da die Oberkante
+        # des Containers in der GUI fix ist (Row 2 wandert nicht), bleibt
+        # dieser Pixel-Offset auch beim Höhenwechsel (140↔190) stabil.
+        # Der Knopf darf sich in der GUI in y-Richtung NIEMALS verschieben.
         self.toggle_view_button = Button(
             self.tile_container,
             text="Woche ›",
@@ -440,7 +461,7 @@ class App:
             borderwidth=0,
             cursor="hand2",
         )
-        self.toggle_view_button.place(relx=1.0, y=self._TILE_HEIGHT_TIMER - 4, anchor="se", x=-6)
+        self.toggle_view_button.place(relx=1.0, y=4, anchor="ne", x=-6)
         self.toggle_view_button.lift()
 
         # =====================================================
@@ -1523,8 +1544,15 @@ class App:
         ).pack(pady=(15, 10))
 
     # ----- Session management -----
+    def _set_timer_color(self, state: str) -> None:
+        """Set timer fg color based on session state: 'idle', 'running', 'break'."""
+        colors = {"idle": "#666666", "running": "#008000", "break": "#B58900"}
+        fg = colors.get(state, "red")
+        self.timer_time_label.config(fg=fg)
+
     def _set_button_state_idle(self):
         """Set buttons to idle state: Start enabled, Pause+Stop disabled."""
+        self._set_timer_color("idle")
         self.start_button.config(state="normal", bg="#D4D0C8", text="\u25b6 Start")
         self.pause_button.config(state="disabled", bg="#A9A9A9", text="\u25ae\u25ae Pause")
         self.stop_button.config(state="disabled", bg="#A9A9A9")
@@ -1537,6 +1565,7 @@ class App:
 
     def _set_button_state_running(self):
         """Set buttons to running state: Start disabled, Pause+Stop enabled."""
+        self._set_timer_color("running")
         self.start_button.config(state="disabled", bg="#A9A9A9", text="\u25b6 Start")
         self.pause_button.config(state="normal", bg="#D4D0C8", text="\u25ae\u25ae Pause")
         self.stop_button.config(state="normal", bg="#D4D0C8")
@@ -1549,6 +1578,7 @@ class App:
 
     def _set_button_state_break(self):
         """Set buttons to break state: Start='Resume', Pause disabled, Stop enabled."""
+        self._set_timer_color("break")
         self.start_button.config(state="normal", bg="#D4D0C8", text="\u25b6 Weiter")
         self.pause_button.config(state="disabled", bg="#A9A9A9", text="\u25ae\u25ae Pause")
         self.stop_button.config(state="normal", bg="#D4D0C8")
@@ -2163,9 +2193,8 @@ class App:
         for col in range(7):
             self.week_frame.grid_columnconfigure(col, weight=1, uniform="weekday")
             cell = Frame(self.week_frame, bg="#C0C0C0")
-            cell.grid(row=1, column=col, sticky="nsew", padx=1)
+            cell.grid(row=1, column=col, sticky="nsew", padx=2)
             self._week_day_frames.append(cell)
-        self.week_frame.grid_columnconfigure(7, weight=0)
         self.week_frame.grid_rowconfigure(1, weight=1)
 
     def _week_scroll_back(self) -> None:
@@ -2224,15 +2253,21 @@ class App:
             logger.warning("Wochenansicht konnte nicht berechnet werden: %s", e)
             return
 
-        # Titel und Navigation aktualisieren.
+        # Titel mit Wochensumme und Navigation aktualisieren.
         kw = end_date.isocalendar()[1]
-        self._week_title_label.config(text=f"Zeitmaschine - KW {kw}")
-        self._week_btn_forward.configure(state="normal" if self._week_offset < 0 else "disabled")
+        week_total = sum(h for _, h in days)
+        self._week_title_label.config(text=f"Zeitmaschine \u00b7 KW {kw} \u00b7 \u03a3 {week_total:.2f} h")
+        if self._week_offset < 0:
+            self._week_btn_forward.configure(state="normal", fg="#000080")
+        else:
+            self._week_btn_forward.configure(state="disabled", fg="#B0B0B0")
 
+        today = datetime.now().date()
         max_hours = max((h for _, h in days), default=0.0)
         max_hours = max(max_hours, 1.0)
         BAR_BLOCKS_MAX = 10
 
+        _WDAY_DE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
         for cell, (iso_date, hours) in zip(self._week_day_frames, days, strict=False):
             try:
                 d = datetime.strptime(iso_date, "%Y-%m-%d").date()
@@ -2240,6 +2275,7 @@ class App:
                 continue
             weekday = d.weekday()  # 0=Mo, 6=So
             is_weekend = weekday >= 5
+            is_today = d == today and self._week_offset == 0
 
             # Feiertags-Erkennung aus Konfiguration.
             from utils import is_holiday as _is_holiday
@@ -2258,31 +2294,60 @@ class App:
                 date_fg = "#000000"
                 bar_fg = "#000080"
 
+            # Heute-Marker: leicht hellerer Hintergrund + sunken bevel
+            if is_today:
+                cell_bg = "#E8E8E8"
+                cell.configure(bg=cell_bg, relief="sunken", borderwidth=1)
+            else:
+                cell_bg = "#C0C0C0"
+                cell.configure(bg=cell_bg, relief="flat", borderwidth=0)
+
             n_blocks = int(round((hours / max_hours) * BAR_BLOCKS_MAX))
-            bar_text = "\n".join(["█"] * n_blocks) if n_blocks else " "
-            # Text oben, Balken wachsen nach unten.
-            _WDAY_DE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
+            bar_text = "\n".join(["\u2588"] * n_blocks) if n_blocks else " "
+
+            # Wochentag (bold) und Datum als zwei Labels
             Label(
                 cell,
-                text=f"{_WDAY_DE[weekday]} {d.strftime('%d.%m')}",
-                bg="#C0C0C0",
+                text=_WDAY_DE[weekday],
+                bg=cell_bg,
+                fg=date_fg,
+                font=("MS Sans Serif", 8, "bold"),
+            ).pack(side="top", pady=(2, 0))
+            Label(
+                cell,
+                text=d.strftime("%d.%m"),
+                bg=cell_bg,
                 fg=date_fg,
                 font=("MS Sans Serif", 8),
             ).pack(side="top")
+
+            # Stunden: "—" für leere Tage, sonst Wert
+            if hours == 0.0:
+                hours_text = "\u2014"
+                hours_fg = "#888888"
+            else:
+                hours_text = f"{hours:.2f} h"
+                hours_fg = date_fg
             Label(
                 cell,
-                text=f"{hours:.2f} h",
-                bg="#C0C0C0",
-                fg=date_fg,
+                text=hours_text,
+                bg=cell_bg,
+                fg=hours_fg,
                 font=("MS Sans Serif", 8, "bold"),
             ).pack(side="top")
+
+            # Balken
             Label(
                 cell,
                 text=bar_text,
-                bg="#C0C0C0",
+                bg=cell_bg,
                 fg=bar_fg,
                 font=("Courier New", 7),
             ).pack(side="top")
+
+            # Tooltip pro Tag
+            tooltip_text = f"{_WDAY_DE[weekday]} {d.strftime('%d.%m')}: {hours:.2f} h"
+            _ToolTip(cell, tooltip_text)
 
     def _force_date_refresh(self):
         """Unconditionally refresh list, timer and totals from DB for the selected date."""
@@ -2694,8 +2759,7 @@ class App:
             hours, minutes = divmod(minutes, 60)
             time_text = f"{int(hours):02}:{int(minutes):02}:{int(seconds):02}"
             self.timer_time_label.config(text=time_text)
-            self.timer_name_label.config(text=f"[{name}]")
-            self.timer_project_label.config(text=f"Projekt: {project}")
+            self.timer_subtitle_label.config(text=f"{name} \u00b7 Projekt {project}")
             if self._mini_toplevel:
                 self._mini_timer_label.config(text=time_text)
 
@@ -2742,8 +2806,7 @@ class App:
             hours, minutes = divmod(minutes, 60)
             time_text = f"{int(hours):02}:{int(minutes):02}:{int(seconds):02}"
             self.timer_time_label.config(text=time_text)
-            self.timer_name_label.config(text=f"[{name}]")
-            self.timer_project_label.config(text=f"Projekt: {project}")
+            self.timer_subtitle_label.config(text=f"{name} \u00b7 Projekt {project}")
             if self._mini_toplevel:
                 self._mini_timer_label.config(text=time_text)
         else:
@@ -2775,16 +2838,48 @@ class App:
         total = calculate_duration(project=project, name=name, conn=self.db_conn)
         t_min, t_sec = divmod(int(total), 60)
         t_hr, t_min = divmod(t_min, 60)
-        self.timer_total_label.config(text=f"\u03a3 {t_hr:02}:{t_min:02}:{t_sec:02}")
+        self.timer_total_label.config(text=f"\u03a3 Projekt: {t_hr:02}:{t_min:02}:{t_sec:02}")
 
         view_date = self._get_selected_date()
         brk = calculate_daily_break_duration(name=name, date=view_date, conn=self.db_conn)
         b_min, b_sec = divmod(int(brk), 60)
         b_hr, b_min = divmod(b_min, 60)
         if brk > 0:
-            self.break_total_label.config(text=f"\u25ae\u25ae {b_hr:02}:{b_min:02}:{b_sec:02}")
+            self.break_total_label.config(text=f"Pause: {b_hr:02}:{b_min:02}:{b_sec:02}")
         else:
             self.break_total_label.config(text="")
+
+        # Update sparkline
+        self._update_sparkline(name, project)
+
+    @staticmethod
+    def _render_sparkline(hours_list: list[float]) -> str:
+        """Convert a list of hour values to a sparkline string using Unicode block chars."""
+        blocks = " \u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
+        if not hours_list:
+            return ""
+        mx = max(hours_list)
+        if mx <= 0:
+            return " " * len(hours_list)
+        result = []
+        for h in hours_list:
+            idx = int(round((h / mx) * (len(blocks) - 1)))
+            result.append(blocks[idx])
+        return "".join(result)
+
+    def _update_sparkline(self, name: str, project: str) -> None:
+        """Refresh the 7-day sparkline in the timer tile."""
+        if not self.db_conn:
+            return
+        try:
+            from db_helper import compute_last_n_days_hours
+
+            days = compute_last_n_days_hours(self.db_conn, name, project, n=7)
+            hours_list = [h for _, h in days]
+            spark = self._render_sparkline(hours_list)
+            self._sparkline_label.config(text=spark)
+        except Exception:  # noqa: BLE001
+            self._sparkline_label.config(text="")
 
     def open_stats_dashboard(self):
         """Opens the statistics dashboard."""
