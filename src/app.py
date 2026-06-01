@@ -2129,10 +2129,11 @@ class App:
     def _build_week_frame(self) -> None:
         """Baut die Wochen-Kachel im Listbox-Bereich auf (initial verborgen)."""
         self.week_frame = Frame(self.db_content_frame, bg="#C0C0C0", border=2, relief="sunken", padx=5, pady=5)
-        # Überlagert die Listbox im gleichen Grid-Slot; Listbox bleibt im Grid
-        # und definiert die Höhe — week_frame legt sich darüber.
-        self.week_frame.grid(row=0, column=0, columnspan=2, sticky="nsew")
-        self.week_frame.grid_remove()
+        # Per place() über die Listbox gelegt: nimmt exakt 100% des
+        # db_content_frame ein, ohne die Grid-Größe zu beeinflussen.
+        # place()-Widgets liegen immer über grid()-Widgets (plattformsicher).
+        self.week_frame.place(x=0, y=0, relwidth=1.0, relheight=1.0)
+        self.week_frame.place_forget()  # initial verborgen
 
         # Navigationszeile: ‹ Titel › (zentriert)
         nav_frame = Frame(self.week_frame, bg="#C0C0C0")
@@ -2202,16 +2203,15 @@ class App:
 
     def _show_week_view(self) -> None:
         self._week_view_active = True
-        # Listbox bleibt im Grid (definiert die Höhe), week_frame darüber.
-        self.week_frame.grid()
-        self.week_frame.tkraise()
+        # place() über Listbox — 100% Größe, plattformsicher.
+        self.week_frame.place(x=0, y=0, relwidth=1.0, relheight=1.0)
         self.toggle_view_button.configure(text="‹ Timer", command=self._show_timer_view)
         self.toggle_view_button.lift()
         self._refresh_week_view()
 
     def _show_timer_view(self) -> None:
         self._week_view_active = False
-        self.week_frame.grid_remove()
+        self.week_frame.place_forget()
         self.toggle_view_button.configure(text="Woche ›", command=self._show_week_view)
         self.toggle_view_button.lift()
 
