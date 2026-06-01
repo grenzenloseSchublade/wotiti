@@ -2129,7 +2129,8 @@ class App:
     def _build_week_frame(self) -> None:
         """Baut die Wochen-Kachel im Listbox-Bereich auf (initial verborgen)."""
         self.week_frame = Frame(self.db_content_frame, bg="#C0C0C0", border=2, relief="sunken", padx=5, pady=5)
-        # Überlagert die Listbox im gleichen Grid-Slot.
+        # Überlagert die Listbox im gleichen Grid-Slot; Listbox bleibt im Grid
+        # und definiert die Höhe — week_frame legt sich darüber.
         self.week_frame.grid(row=0, column=0, columnspan=2, sticky="nsew")
         self.week_frame.grid_remove()
 
@@ -2201,9 +2202,9 @@ class App:
 
     def _show_week_view(self) -> None:
         self._week_view_active = True
-        self.db_content_listbox.grid_remove()
-        self.scrollbar_listbox.grid_remove()
+        # Listbox bleibt im Grid (definiert die Höhe), week_frame darüber.
         self.week_frame.grid()
+        self.week_frame.tkraise()
         self.toggle_view_button.configure(text="‹ Timer", command=self._show_timer_view)
         self.toggle_view_button.lift()
         self._refresh_week_view()
@@ -2211,8 +2212,6 @@ class App:
     def _show_timer_view(self) -> None:
         self._week_view_active = False
         self.week_frame.grid_remove()
-        self.db_content_listbox.grid()
-        self.scrollbar_listbox.grid()
         self.toggle_view_button.configure(text="Woche ›", command=self._show_week_view)
         self.toggle_view_button.lift()
 
@@ -2242,10 +2241,9 @@ class App:
             logger.warning("Wochenansicht konnte nicht berechnet werden: %s", e)
             return
 
-        # Titel mit Wochensumme und Navigation aktualisieren.
+        # Titel und Navigation aktualisieren.
         kw = end_date.isocalendar()[1]
-        week_total = sum(h for _, h in days)
-        self._week_title_label.config(text=f"Zeitmaschine \u00b7 KW {kw} \u00b7 \u03a3 {week_total:.2f} h")
+        self._week_title_label.config(text=f"Zeitmaschine \u00b7 KW {kw}")
         if self._week_offset < 0:
             self._week_btn_forward.configure(state="normal", fg="#000080")
         else:
