@@ -4,7 +4,7 @@ import logging
 import os
 import re
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlite3 import Error
 
 import polars as pl
@@ -306,28 +306,34 @@ def get_all_users(conn: sqlite3.Connection | None) -> list[str]:
     """Return list of all user names from the database."""
     if not conn:
         return []
+    cur = None
     try:
         cur = conn.cursor()
         cur.execute("SELECT name FROM users ORDER BY name")
         return [row[0] for row in cur.fetchall()]
-    except Error:
+    except Error as e:
+        logger.error("Error reading users: %s", e)
         return []
     finally:
-        cur.close()
+        if cur is not None:
+            cur.close()
 
 
 def get_all_projects(conn: sqlite3.Connection | None) -> list[str]:
     """Return list of all project names from the projects table."""
     if not conn:
         return []
+    cur = None
     try:
         cur = conn.cursor()
         cur.execute("SELECT name FROM projects ORDER BY name")
         return [row[0] for row in cur.fetchall()]
-    except Error:
+    except Error as e:
+        logger.error("Error reading projects: %s", e)
         return []
     finally:
-        cur.close()
+        if cur is not None:
+            cur.close()
 
 
 def migrate_projects_to_table(conn: sqlite3.Connection | None) -> bool:
@@ -544,7 +550,15 @@ def log_break_stop(
         stop_dt = ended_at or datetime.now()
         stop_str = stop_dt.strftime(TIMESTAMP_FORMAT)
         start_dt = datetime.strptime(started_at_str, TIMESTAMP_FORMAT)
-        duration = max(0, int((stop_dt - start_dt).total_seconds()))
+        raw_duration = int((stop_dt - start_dt).total_seconds())
+        if raw_duration < 0:
+            logger.warning(
+                "Break #%s: Stop (%s) liegt vor Start (%s) — Dauer auf 0 gesetzt.",
+                break_id,
+                stop_str,
+                started_at_str,
+            )
+        duration = max(0, raw_duration)
 
         cursor.execute(
             """
@@ -643,6 +657,7 @@ def calculate_duration(project: str = "1", name: str = "Hans", conn: sqlite3.Con
         logger.debug("Connection and name are required.")
         return 0
 
+    cursor = None
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT id FROM users WHERE name = ?", (name,))
@@ -680,7 +695,8 @@ def calculate_duration(project: str = "1", name: str = "Hans", conn: sqlite3.Con
         logger.error("Error calculating duration: %s", e)
         return 0
     finally:
-        cursor.close()
+        if cursor is not None:
+            cursor.close()
 
 
 def calculate_daily_duration(
@@ -705,6 +721,7 @@ def calculate_daily_duration(
     except ValueError:
         return 0
 
+    cursor = None
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT id FROM users WHERE name = ?", (name,))
@@ -752,7 +769,8 @@ def calculate_daily_duration(
         logger.error("Error calculating daily duration: %s", e)
         return 0
     finally:
-        cursor.close()
+        if cursor is not None:
+            cursor.close()
 
 
 def get_last_start_date(conn: sqlite3.Connection | None, name: str, project: str) -> str | None:
@@ -817,6 +835,51 @@ def compute_last_n_days_hours(
     return result
 
 
+def compute_last_n_days_hours_by_project(
+    conn: sqlite3.Connection | None,
+    name: str,
+    n: int = 7,
+    end_date=None,
+) -> list[tuple[str, dict[str, float]]]:
+    """Wie :func:`compute_last_n_days_hours`, aber **alle Projekte** des Nutzers.
+
+    Liefert eine Liste der Länge ``n`` mit ``(YYYY-MM-DD, {project: hours})`` —
+    nur Projekte mit Stunden > 0 erscheinen im Tages-Dict. Sessions über
+    Mitternacht werden anteilig verbucht (über ``calculate_daily_duration``).
+    """
+    if not conn or not name or n <= 0:
+        return []
+
+    last_day = end_date if end_date is not None else datetime.now().date()
+    days = [last_day - timedelta(days=off) for off in range(n - 1, -1, -1)]
+    result: list[tuple[str, dict[str, float]]] = [(d.strftime("%Y-%m-%d"), {}) for d in days]
+
+    # Alle Projekte ermitteln, für die der Nutzer überhaupt Events hat.
+    cursor = None
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM users WHERE name = ?", (name,))
+        row = cursor.fetchone()
+        if row is None:
+            return result
+        user_id = row[0]
+        cursor.execute("SELECT DISTINCT project FROM events WHERE user_id = ?", (user_id,))
+        projects = [r[0] for r in cursor.fetchall() if r[0]]
+    except Error as e:
+        logger.error("Error reading projects for week view: %s", e)
+        return result
+    finally:
+        if cursor is not None:
+            cursor.close()
+
+    for project in projects:
+        per_day = compute_last_n_days_hours(conn, name, project, n=n, end_date=end_date)
+        for idx, (_iso, hours) in enumerate(per_day):
+            if hours > 0:
+                result[idx][1][project] = hours
+    return result
+
+
 def close_stale_sessions(conn: sqlite3.Connection | None) -> int:
     """Close orphaned start events that have no matching stop (from unclean shutdown).
 
@@ -871,14 +934,19 @@ def calculate_daily_break_duration(
         return 0
     if date is None:
         date = datetime.now().strftime("%d-%m-%Y")
-    # break_events.started_at is stored as YYYY-MM-DD HH:MM:SS.
-    # Convert the DD-MM-YYYY date to YYYY-MM-DD prefix for LIKE matching.
+    # break_events.started_at is stored as YYYY-MM-DD HH:MM:SS. Use a half-open
+    # range [day 00:00:00, next day 00:00:00) instead of LIKE so the index on
+    # (user_id, started_at) is used reliably.
     try:
-        parts = date.split("-")
-        iso_prefix = f"{parts[2]}-{parts[1]}-{parts[0]}"
-    except (IndexError, ValueError):
-        return 0
+        from datetime import timedelta as _td
 
+        day = datetime.strptime(date, "%d-%m-%Y").date()
+    except ValueError:
+        return 0
+    lower = datetime.combine(day, datetime.min.time()).strftime(TIMESTAMP_FORMAT)
+    upper = datetime.combine(day + _td(days=1), datetime.min.time()).strftime(TIMESTAMP_FORMAT)
+
+    cursor = None
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT id FROM users WHERE name = ?", (name,))
@@ -891,10 +959,11 @@ def calculate_daily_break_duration(
             SELECT COALESCE(SUM(duration_seconds), 0)
             FROM break_events
             WHERE user_id = ?
-              AND started_at LIKE ?
+              AND started_at >= ?
+              AND started_at < ?
               AND duration_seconds IS NOT NULL
         """,
-            (user_id, f"{iso_prefix}%"),
+            (user_id, lower, upper),
         )
         total = cursor.fetchone()[0]
         return float(total)
@@ -902,7 +971,8 @@ def calculate_daily_break_duration(
         logger.error("Error calculating daily break duration: %s", e)
         return 0
     finally:
-        cursor.close()
+        if cursor is not None:
+            cursor.close()
 
 
 def read_database(db_path: str = PATH_TO_DATA) -> pl.DataFrame:

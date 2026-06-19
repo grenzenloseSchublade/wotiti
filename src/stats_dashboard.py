@@ -71,6 +71,10 @@ app = Dash(__name__, external_stylesheets=[dbc.themes.DARKLY], suppress_callback
 
 _DATA_CACHE = {"db_path": None, "db_mtime": None, "data": None, "stats": {}}
 
+# Letzter beim Auto-Refresh gesehener DB-Änderungszeitstempel; verhindert
+# unnötige Chart-Neuberechnungen, wenn sich nichts geändert hat.
+_last_autorefresh_mtime: float | None = None
+
 
 def get_cached_data(db_path, force=False):
     """Loads and caches DB data for reuse across callbacks."""
@@ -293,6 +297,10 @@ app.layout = dbc.Container(
                         dcc.Store(id="db-path", data=None),
                         dcc.Store(id="param-path", data=None),
                         dcc.Interval(id="appdb-autoload", interval=1000, n_intervals=0, max_intervals=1),
+                        # Periodischer Auto-Refresh: lädt die Daten alle 30 s neu,
+                        # aktualisiert die Charts aber nur, wenn sich die DB
+                        # tatsächlich geändert hat (mtime-Prüfung in update_paths).
+                        dcc.Interval(id="auto-refresh-interval", interval=30000, n_intervals=0),
                         html.Div(id="parameters-table"),
                     ],
                     md=12,
@@ -744,15 +752,30 @@ def _load_dashboard_data(db_path, param_path, label, params_required=True):
         Input("example-button", "n_clicks"),
         Input("refresh-button", "n_clicks"),
         Input("appdb-autoload", "n_intervals"),
+        Input("auto-refresh-interval", "n_intervals"),
     ],
 )
-def update_paths(browse_clicks, example_clicks, refresh_clicks, autoload_intervals):
+def update_paths(browse_clicks, example_clicks, refresh_clicks, autoload_intervals, autorefresh_intervals):
     """Updates database and parameter paths based on selected source."""
+    global _last_autorefresh_mtime
     ctx = dash.callback_context
     if not ctx.triggered:
         return None, None, "Datenquelle: -", 0, False, False, "Verzeichnis auswählen", [], None, [], None
 
     trigger_id = ctx.triggered[0]["prop_id"].split(".")[0]
+
+    if trigger_id == "auto-refresh-interval":
+        # Nur weiterarbeiten, wenn sich die DB seit dem letzten Tick geändert hat.
+        db_path = get_app_database_path(PATH_TO_DATA)
+        try:
+            current_mtime = os.path.getmtime(db_path) if db_path else None
+        except OSError:
+            current_mtime = None
+        if current_mtime is None or current_mtime == _last_autorefresh_mtime:
+            raise dash.exceptions.PreventUpdate
+        _last_autorefresh_mtime = current_mtime
+        # In den normalen Reload-Pfad übergehen (Daten neu laden, Charts aktualisieren).
+        trigger_id = "appdb-autoload"
 
     if trigger_id in ("appdb-autoload", "refresh-button"):
         db_path = get_app_database_path(PATH_TO_DATA)

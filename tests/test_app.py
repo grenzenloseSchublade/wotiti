@@ -62,6 +62,82 @@ def test_update_timer_with_duration(app_instance):
     assert "01:00:00" in app_instance.timer_label.cget("text")
 
 
+def test_project_color_stable():
+    """project_color liefert stabile Farben aus der Palette."""
+    from app import WEEK_PROJECT_COLORS, project_color
+
+    assert project_color("ProjektX") == project_color("ProjektX")
+    assert project_color("ProjektX") in WEEK_PROJECT_COLORS
+    assert project_color("") in WEEK_PROJECT_COLORS
+
+
+def test_new_project_sentinel_in_combobox(app_instance):
+    """Die Projekt-Combobox enthält den 'Neues Projekt'-Sentinel."""
+    from app import NEW_PROJECT_LABEL
+    from db_helper import check_project
+
+    check_project(app_instance.db_conn, "Demo")
+    app_instance._combobox_dirty = True
+    app_instance._refresh_comboboxes(force=True)
+    values = list(app_instance.project_entry["values"])
+    assert NEW_PROJECT_LABEL in values
+    assert "Demo" in values
+
+
+def test_idle_timeout_config_default(app_instance):
+    """Idle-Timeout wird aus der Konfiguration übernommen (Default 120)."""
+    assert isinstance(app_instance.idle_timeout_minutes, int)
+
+
+def test_add_manual_event_rejects_today(app_instance):
+    """add_manual_event legt für heute/Zukunft nichts an (früher Abbruch, kein Dialog)."""
+    app_instance.name_entry.set("u_today")
+    app_instance.project_entry.set("p_today")
+    app_instance.date_entry.delete(0, END)
+    app_instance.date_entry.insert(0, datetime.today().strftime("%d-%m-%Y"))
+    cur = app_instance.db_conn.cursor()
+    before = cur.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    app_instance.add_manual_event()
+    after = cur.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    assert after == before
+
+
+def test_maybe_auto_stop_idle(app_instance, monkeypatch):
+    """Eine laufende Session wird bei Überschreiten des Idle-Limits gestoppt."""
+    import app as app_module
+
+    app_instance.name_entry.set("idle_user")
+    app_instance.project_entry.set("1")
+    app_instance.date_entry.delete(0, END)
+    app_instance.date_entry.insert(0, datetime.today().strftime("%d-%m-%Y"))
+    app_instance.start_session()
+    assert app_instance.session_active.get(("idle_user", "1")) is True
+
+    app_instance.idle_timeout_minutes = 120
+    # OS meldet 3 h Inaktivität → Auto-Stop.
+    monkeypatch.setattr(app_module, "get_idle_seconds", lambda: 3 * 3600)
+    app_instance._idle_check_counter = 29  # nächster Aufruf erreicht die 30er-Schwelle
+    app_instance._maybe_auto_stop_idle()
+    assert app_instance.session_active.get(("idle_user", "1")) is False
+    assert app_instance.timer_running is False
+
+
+def test_maybe_auto_stop_idle_unavailable(app_instance, monkeypatch):
+    """Ohne verfügbare Idle-Erkennung (None) bleibt die Session laufen."""
+    import app as app_module
+
+    app_instance.name_entry.set("idle_user2")
+    app_instance.project_entry.set("1")
+    app_instance.date_entry.delete(0, END)
+    app_instance.date_entry.insert(0, datetime.today().strftime("%d-%m-%Y"))
+    app_instance.start_session()
+    app_instance.idle_timeout_minutes = 120
+    monkeypatch.setattr(app_module, "get_idle_seconds", lambda: None)
+    app_instance._idle_check_counter = 29
+    app_instance._maybe_auto_stop_idle()
+    assert app_instance.session_active.get(("idle_user2", "1")) is True
+
+
 def test_start_session_invalid_project(app_instance):
     """Test starting a session with an invalid project ID."""
     app_instance.name_entry.set("test_user")

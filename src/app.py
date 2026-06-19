@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 import webbrowser
-from datetime import datetime
+from datetime import datetime, timedelta
 from shutil import which
 from tkinter import (
     END,
@@ -44,6 +44,7 @@ from db_helper import (
     calculate_daily_break_duration,
     calculate_daily_duration,
     calculate_duration,
+    check_project,
     check_user,
     close_stale_breaks,
     close_stale_sessions,
@@ -66,6 +67,7 @@ from db_helper import (
     update_event,
     validate_event_pair,
 )
+from idle_monitor import get_idle_seconds
 from utils import (
     APP_AUTHOR,
     APP_LICENSE,
@@ -78,6 +80,33 @@ from utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Sentinel-Eintrag in der Projekt-Combobox, der den "Neues Projekt"-Dialog öffnet.
+# So ist das Anlegen eines Projekts direkt im Dropdown sichtbar/auffindbar.
+NEW_PROJECT_LABEL = "➕ Neues Projekt …"
+
+# Farbpalette für die Projekt-Farbcodierung in der Wochenansicht. Distinkte,
+# kräftige Farben; die Zuordnung erfolgt stabil über den Projektnamen.
+WEEK_PROJECT_COLORS = [
+    "#000080",
+    "#008000",
+    "#800000",
+    "#808000",
+    "#800080",
+    "#008080",
+    "#D2691E",
+    "#0000FF",
+    "#C00000",
+    "#006666",
+]
+
+
+def project_color(name: str) -> str:
+    """Liefert eine stabile (laufübergreifend gleiche) Farbe für einen Projektnamen."""
+    if not name:
+        return WEEK_PROJECT_COLORS[0]
+    idx = sum(ord(c) for c in name) % len(WEEK_PROJECT_COLORS)
+    return WEEK_PROJECT_COLORS[idx]
 
 
 class _ToolTip:
@@ -166,6 +195,11 @@ class App:
         self._date_entry_past_bg = "#FFFACD"
         self._db_dirty = False
         self._db_dirty_since: float = 0.0
+        # Cache der gespeicherten Tagesdauer (ohne laufende Live-Session), damit
+        # nicht jede Sekunde die DB gescannt werden muss. Wird bei DB-Änderungen
+        # und Datums-/Projektwechsel invalidiert.
+        self._daily_dur_cache_key: tuple | None = None
+        self._daily_dur_cache_val: float = 0.0
         os.makedirs(PATH_TO_SOUNDS, exist_ok=True)
 
         # Pomodoro settings (persisted in config)
@@ -181,6 +215,10 @@ class App:
         ).strip()
         self._cached_sound_path = ""
         self._cached_sound_player = ""
+
+        # Auto-Stop bei systemweiter Inaktivität (0 = deaktiviert).
+        self.idle_timeout_minutes = int(self.config.get("idle_timeout_minutes", 120))
+        self._idle_check_counter = 0
 
         master.title("WoTITI - Work Time Timer")
         master.configure(bg="#C0C0C0")
@@ -359,29 +397,33 @@ class App:
         self.heute_button = Button(self.entry_frame, text="Heute", command=self.set_today_date, **button_config)
         self.heute_button.grid(row=0, column=4, pady=5, padx=3, sticky="ew")
 
-        # "+"-Button: erzeugt einen 09:00 / 17:00-Eintrag für ein Vergangenheitsdatum.
-        # Initial versteckt, erscheint nur, wenn das Datum-Feld nicht "heute" ist.
+        # "+"-Button: öffnet einen Dialog zum Anlegen eines manuellen Eintrags
+        # für ein Vergangenheitsdatum. Initial versteckt, erscheint nur, wenn das
+        # Datum-Feld nicht "heute" ist (_update_add_event_button_visibility).
+        # Bewusst zwischen "Heute" (Spalte 4) und dem Projekt-Feld platziert, damit
+        # der kleine Button nicht am rechten Rahmen des entry_frame anliegt und ihn
+        # überlappt — das stretchende Projekt-Feld bildet sauber den rechten Abschluss.
         self.add_event_button = Button(self.entry_frame, text="+", command=self.add_manual_event, **button_config)
-        # Wird in `_update_add_event_button_visibility` ein-/ausgeblendet.
-        _ToolTip(self.add_event_button, "Eintrag für dieses Datum anlegen (09:00–17:00, danach bearbeiten)")
+        _ToolTip(self.add_event_button, "Eintrag für dieses Datum anlegen (Dialog mit Start-/Stop-Zeit)")
+        self.add_event_button.grid(row=0, column=5, pady=5, padx=3, sticky="w")
+        self.add_event_button.grid_remove()
 
         # Project label and combobox
         self.project_label = Label(self.entry_frame, text="Projekt:", **label_config)
-        self.project_label.grid(row=0, column=5, pady=5, padx=3, sticky="w")
+        self.project_label.grid(row=0, column=6, pady=5, padx=3, sticky="w")
         self.project_entry = Combobox(self.entry_frame, font=("MS Sans Serif", 10), width=14)
-        self.project_entry.grid(row=0, column=6, pady=5, padx=3, sticky="ew")
+        self.project_entry.grid(row=0, column=7, pady=5, padx=3, sticky="ew")
         self.project_entry.set("1")
+        self._last_valid_project = "1"
+        self.project_entry.bind("<<ComboboxSelected>>", self._on_project_selected)
 
-        # "+"-Button rechts neben dem Projekt-Feld; wird nur bei Vergangenheits-
-        # datum sichtbar (siehe _update_add_event_button_visibility).
-        self.add_event_button.grid(row=0, column=7, pady=5, padx=3, sticky="w")
-        self.add_event_button.grid_remove()
-
-        # Configure entry frame columns — ensure combobox/entry columns are flexible
+        # Configure entry frame columns — ensure combobox/entry columns are flexible.
+        # Stretch geht an Name (1), Datum (3) und Projekt (7); Projekt bildet den
+        # rechten Abschluss.
         for col in range(8):
             if col == 3:
                 self.entry_frame.grid_columnconfigure(col, weight=1, minsize=80)
-            elif col in (1, 6):
+            elif col in (1, 7):
                 self.entry_frame.grid_columnconfigure(col, weight=2, minsize=100)
             else:
                 self.entry_frame.grid_columnconfigure(col, weight=0)
@@ -858,10 +900,80 @@ class App:
             self.name_entry["values"] = users
         if projects != self._cached_projects:
             self._cached_projects = projects
-            self.project_entry["values"] = projects
+            # Sentinel voranstellen, damit "Neues Projekt anlegen" direkt im
+            # Dropdown auffindbar ist (siehe _on_project_selected).
+            self.project_entry["values"] = [NEW_PROJECT_LABEL, *projects]
             if self._mini_toplevel:
                 self._mini_project_combo["values"] = projects
         self._combobox_dirty = False
+
+    def _on_project_selected(self, _event=None):
+        """Reagiert auf eine Auswahl in der Projekt-Combobox.
+
+        Wird der Sentinel-Eintrag gewählt, öffnet sich der "Neues Projekt"-Dialog;
+        die vorherige Auswahl wird vorab gemerkt und bei Abbruch wiederhergestellt.
+        """
+        if self.project_entry.get() == NEW_PROJECT_LABEL:
+            self.project_entry.set(self._last_valid_project)
+            self._add_project_dialog()
+        else:
+            self._last_valid_project = self.project_entry.get()
+            # In der Einzelprojekt-Wochenansicht das gewählte Projekt sofort zeigen.
+            if getattr(self, "_week_view_active", False) and not self._week_all_projects:
+                self._refresh_week_view()
+
+    def _add_project_dialog(self):
+        """Kleiner Dialog zum Anlegen eines neuen Projekts (ohne Session-Start)."""
+        if not self.db_conn:
+            self.write("Keine Datenbankverbindung.", error=True)
+            return
+        win = Toplevel(self.master)
+        win.title("Neues Projekt")
+        win.configure(bg="#C0C0C0")
+        w, h = 360, 140
+        x = self.master.winfo_x() + (self.master.winfo_width() - w) // 2
+        y = self.master.winfo_y() + (self.master.winfo_height() - h) // 2
+        win.geometry(f"{w}x{h}+{x}+{y}")
+        win.transient(self.master)
+        win.wait_visibility()
+        win.grab_set()
+
+        lbl_cfg = {"bg": "#C0C0C0", "fg": "black", "font": ("MS Sans Serif", 10)}
+        btn_cfg = {"bg": "#D4D0C8", "fg": "black", "font": ("MS Sans Serif", 10), "relief": "raised", "borderwidth": 2}
+
+        Label(win, text="Projektname:", **lbl_cfg).pack(pady=(14, 4), padx=12, anchor="w")
+        name_entry = Entry(win, bg="#FFFFFF", fg="black", font=("MS Sans Serif", 10), relief="sunken", borderwidth=2)
+        name_entry.pack(fill="x", padx=12)
+        name_entry.focus_set()
+
+        def _create():
+            project = name_entry.get().strip()
+            if not project:
+                messagebox.showwarning("Fehler", "Projektname darf nicht leer sein.", parent=win)
+                return
+            if project == NEW_PROJECT_LABEL or not re.match(r"^[A-Za-z0-9_\-\s]+$", project):
+                messagebox.showwarning(
+                    "Ungültiger Name",
+                    "Name darf nur Buchstaben, Zahlen, Leerzeichen, - und _ enthalten.",
+                    parent=win,
+                )
+                return
+            if check_project(self.db_conn, project) is None:
+                messagebox.showerror("Fehler", "Projekt konnte nicht angelegt werden.", parent=win)
+                return
+            self.write(f"Projekt angelegt: {project}")
+            self._combobox_dirty = True
+            self._refresh_comboboxes(force=True)
+            self.project_entry.set(project)
+            self._last_valid_project = project
+            win.destroy()
+
+        btn_frame = Frame(win, bg="#C0C0C0")
+        btn_frame.pack(pady=12)
+        Button(btn_frame, text="Anlegen", command=_create, **btn_cfg).pack(side="left", padx=5)
+        Button(btn_frame, text="Abbrechen", command=win.destroy, **btn_cfg).pack(side="left", padx=5)
+        win.bind("<Escape>", lambda _e: win.destroy())
+        win.bind("<Return>", lambda _e: _create())
 
     # ----- User Management Window -----
     def open_user_management(self):
@@ -1190,6 +1302,14 @@ class App:
         pomodoro_every_var.delete(0, END)
         pomodoro_every_var.insert(0, str(self.pomodoro_long_break_every))
 
+        Label(pomodoro_frame, text="Auto-Stop bei Idle (min, 0=aus):", **lbl).grid(row=5, column=0, sticky="w", pady=2)
+        idle_timeout_var = Spinbox(
+            pomodoro_frame, from_=0, to=1440, width=8, font=("MS Sans Serif", 10), bg="#FFFFFF", fg="black"
+        )
+        idle_timeout_var.grid(row=5, column=1, padx=5, pady=2, sticky="w")
+        idle_timeout_var.delete(0, END)
+        idle_timeout_var.insert(0, str(self.idle_timeout_minutes))
+
         Checkbutton(
             pomodoro_frame,
             text="Auto-Pause",
@@ -1399,6 +1519,11 @@ class App:
                     messagebox.showwarning("Ungültiger Wert", f"{label} muss eine positive Zahl sein.", parent=win)
                     return
 
+            idle_timeout_raw = idle_timeout_var.get().strip()
+            if not idle_timeout_raw.isdigit():
+                messagebox.showwarning("Ungültiger Wert", "Idle-Timeout muss eine Zahl ≥ 0 sein (0 = aus).", parent=win)
+                return
+
             raw_sound_path = sound_file_entry.get().strip() or "sounds/StartupSound.wav"
             sound_path = raw_sound_path.replace("\\", "/")
             if os.path.isabs(sound_path):
@@ -1427,6 +1552,7 @@ class App:
                 "pomodoro_auto_break": bool(pomodoro_auto_var.get()),
                 "pomodoro_sound_enabled": bool(pomodoro_sound_enabled_var.get()),
                 "pomodoro_sound_local_path": sound_path,
+                "idle_timeout_minutes": int(idle_timeout_raw),
                 "holiday_country": holiday_country_var.get().strip() or "DE",
                 "holiday_subdiv": holiday_subdiv_var.get().strip(),
             }
@@ -1448,6 +1574,7 @@ class App:
             self.pomodoro_sound_local_path = str(
                 new_config.get("pomodoro_sound_local_path", "sounds/StartupSound.wav")
             ).strip()
+            self.idle_timeout_minutes = int(new_config.get("idle_timeout_minutes", 120))
             self._preload_sound()
 
             # Switch database if changed
@@ -1595,7 +1722,11 @@ class App:
                     # Zeitstempel (datetime.now) abgeleitet — UI-Datumsfeld
                     # ist hier nur Anzeige/Filter und nicht Schreib-Quelle.
                     logger.info("Session gestartet: user=%s, project=%s", name, project)
-                    log_start(project=project, name=name, conn=self.db_conn)
+                    if not log_start(project=project, name=name, conn=self.db_conn):
+                        # DB-Schreiben fehlgeschlagen — UI nicht auf "aktiv" setzen,
+                        # damit App- und DB-Zustand nicht auseinanderlaufen.
+                        self.write("Session konnte nicht gestartet werden (DB-Fehler).", error=True)
+                        return
                     self._mark_dirty()
                     self.session_active[(name, project)] = True
                     self.timer_running = True
@@ -1627,7 +1758,11 @@ class App:
             # Zeitstempel abgeleitet, damit Sessions über Mitternacht den
             # Stop am realen Tag des Stops verbuchen.
             logger.info("Session gestoppt: user=%s, project=%s", name, project)
-            log_stop(project=project, name=name, conn=self.db_conn)
+            if not log_stop(project=project, name=name, conn=self.db_conn):
+                # Stop-Event konnte nicht geschrieben werden: warnen, UI dennoch
+                # zurücksetzen (verwaiste Sessions werden beim nächsten Start
+                # via close_stale_sessions repariert).
+                self.write("Stop konnte nicht gespeichert werden (DB-Fehler).", error=True)
             self._mark_dirty()
             self.session_active[(name, project)] = False
             self.timer_running = False
@@ -2049,11 +2184,9 @@ class App:
         self.add_event_button.grid_remove()
 
     def add_manual_event(self):
-        """Erzeugt ein 09:00/17:00-Paar am ausgewählten (vergangenen) Datum und
-        öffnet anschließend automatisch den Edit-Dialog auf das Start-Event,
-        damit der Nutzer die Zeiten justieren kann."""
-        from db_helper import log_event
-
+        """Öffnet einen Dialog, um für ein Vergangenheitsdatum ein Start/Stop-Paar
+        anzulegen. Es wird **nichts** in die Datenbank geschrieben, bevor der Nutzer
+        auf "Speichern" klickt — "Abbrechen" legt keinen Eintrag an."""
         date_text = self.date_entry.get().strip()
         try:
             d = datetime.strptime(date_text, "%d-%m-%Y").date()
@@ -2063,65 +2196,105 @@ class App:
         if d >= datetime.today().date():
             self.write("Manueller Eintrag nur für Vergangenheitsdaten.", error=True)
             return
-        name = self._get_name_silent()
-        project = self._get_project_silent()
-        if not name or not project:
-            self.write("Name und Projekt müssen gesetzt sein.", error=True)
-            return
         if not self.db_conn:
             self.write("Keine Datenbankverbindung.", error=True)
             return
 
-        start_ts = datetime.combine(d, datetime.min.time()).replace(hour=9)
-        stop_ts = datetime.combine(d, datetime.min.time()).replace(hour=17)
+        win = Toplevel(self.master)
+        win.title("Eintrag anlegen")
+        win.configure(bg="#C0C0C0")
+        w, h = 460, 230
+        x = self.master.winfo_x() + (self.master.winfo_width() - w) // 2
+        y = self.master.winfo_y() + (self.master.winfo_height() - h) // 2
+        win.geometry(f"{w}x{h}+{x}+{y}")
+        win.transient(self.master)
+        win.wait_visibility()
+        win.grab_set()
 
-        ok_start = log_event(self.db_conn, project, name, "start", timestamp=start_ts)
-        ok_stop = log_event(self.db_conn, project, name, "stop", timestamp=stop_ts)
-        if not (ok_start and ok_stop):
-            self.write("Manueller Eintrag konnte nicht angelegt werden.", error=True)
-            return
+        lbl_cfg = {"bg": "#C0C0C0", "fg": "black", "font": ("MS Sans Serif", 10)}
+        entry_cfg = {
+            "font": ("MS Sans Serif", 10),
+            "bg": "#FFFFFF",
+            "fg": "black",
+            "relief": "sunken",
+            "borderwidth": 2,
+        }
 
-        self.write(f"Eintrag angelegt: {date_text} 09:00–17:00 — bitte anpassen.")
-        self._combobox_dirty = True
-        self._refresh_comboboxes()
-        self._force_date_refresh()
-        # Wochen-Kachel aktualisieren, falls aktiv.
-        if getattr(self, "_week_view_active", False):
-            self._refresh_week_view()
+        # Row 0: Datum (fest auf das gewählte Vergangenheitsdatum)
+        Label(win, text="Datum (TT-MM-JJJJ):", **lbl_cfg).grid(row=0, column=0, padx=8, pady=4, sticky="w")
+        Label(win, text=date_text, bg="#C0C0C0", fg="black", font=("MS Sans Serif", 10, "bold")).grid(
+            row=0, column=1, padx=8, pady=4, sticky="w"
+        )
 
-        # Den eben angelegten Start-Eintrag im Edit-Dialog öffnen.
-        self._open_edit_for_latest_event(name, project, start_ts)
+        # Row 1: Projekt
+        Label(win, text="Projekt:", **lbl_cfg).grid(row=1, column=0, padx=8, pady=4, sticky="w")
+        proj_combo = Combobox(win, font=("MS Sans Serif", 10), width=28)
+        proj_combo["values"] = self.project_entry["values"]
+        proj_combo.set(self._get_project_silent() or "")
+        proj_combo.grid(row=1, column=1, padx=8, pady=4, sticky="ew")
 
-    def _open_edit_for_latest_event(self, name: str, project: str, around_ts: datetime) -> None:
-        """Selektiert den passenden Listbox-Eintrag und öffnet `_edit_event`."""
-        try:
-            target_id = None
-            cur = self.db_conn.cursor()
-            cur.execute(
-                """
-                SELECT e.id FROM events e
-                JOIN users u ON u.id = e.user_id
-                WHERE u.name = ? AND e.project = ? AND e.event_type = 'start'
-                  AND e.timestamp = ?
-                ORDER BY e.id DESC LIMIT 1
-                """,
-                (name, project, around_ts.strftime(TIMESTAMP_FORMAT)),
-            )
-            row = cur.fetchone()
-            cur.close()
-            if not row:
+        # Row 2: Start-Uhrzeit
+        Label(win, text="Start (HH:MM):", **lbl_cfg).grid(row=2, column=0, padx=8, pady=4, sticky="w")
+        start_var = StringVar(value="09:00")
+        Entry(win, textvariable=start_var, **entry_cfg, width=30).grid(row=2, column=1, padx=8, pady=4, sticky="ew")
+
+        # Row 3: Stop-Uhrzeit
+        Label(win, text="Stop (HH:MM):", **lbl_cfg).grid(row=3, column=0, padx=8, pady=4, sticky="w")
+        stop_var = StringVar(value="17:00")
+        Entry(win, textvariable=stop_var, **entry_cfg, width=30).grid(row=3, column=1, padx=8, pady=4, sticky="ew")
+
+        win.grid_columnconfigure(1, weight=1)
+
+        btn_cfg = {"bg": "#D4D0C8", "fg": "black", "font": ("MS Sans Serif", 10), "relief": "raised", "borderwidth": 2}
+        btn_frame = Frame(win, bg="#C0C0C0")
+        btn_frame.grid(row=5, column=0, columnspan=2, pady=12)
+
+        def _save():
+            from db_helper import log_event
+
+            project = proj_combo.get().strip()
+            if not project:
+                messagebox.showwarning("Fehler", "Projekt darf nicht leer sein.", parent=win)
                 return
-            target_id = row[0]
-            # Listbox-Index zum Event-ID finden.
-            for idx, ev_id in enumerate(self._event_ids):
-                if ev_id == target_id:
-                    self.db_content_listbox.selection_clear(0, END)
-                    self.db_content_listbox.selection_set(idx)
-                    self.db_content_listbox.see(idx)
-                    self._edit_event()
-                    return
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Auto-Edit nach manuellem Eintrag fehlgeschlagen: %s", e)
+            name = self._get_name_silent()
+            if not name:
+                messagebox.showwarning("Fehler", "Name muss gesetzt sein.", parent=win)
+                return
+            try:
+                t_start = datetime.strptime(start_var.get().strip(), "%H:%M")
+                t_stop = datetime.strptime(stop_var.get().strip(), "%H:%M")
+            except ValueError:
+                messagebox.showwarning("Fehler", "Ungültige Uhrzeit.\nErwartet: HH:MM", parent=win)
+                return
+            start_ts = datetime.combine(d, datetime.min.time()).replace(hour=t_start.hour, minute=t_start.minute)
+            stop_ts = datetime.combine(d, datetime.min.time()).replace(hour=t_stop.hour, minute=t_stop.minute)
+            if stop_ts <= start_ts:
+                messagebox.showwarning("Fehler", "Stop muss nach Start liegen.", parent=win)
+                return
+
+            # Erst jetzt — nach "Speichern" — wird in die DB geschrieben.
+            ok_start = log_event(self.db_conn, project, name, "start", timestamp=start_ts)
+            ok_stop = log_event(self.db_conn, project, name, "stop", timestamp=stop_ts)
+            if not (ok_start and ok_stop):
+                messagebox.showerror("Fehler", "Eintrag konnte nicht angelegt werden.", parent=win)
+                return
+
+            self.write(
+                f"Eintrag angelegt: {date_text} {start_var.get().strip()}–{stop_var.get().strip()} (Projekt {project})."
+            )
+            self._combobox_dirty = True
+            self._refresh_comboboxes()
+            self._force_date_refresh()
+            if getattr(self, "_week_view_active", False):
+                self._refresh_week_view()
+            win.destroy()
+
+        Button(btn_frame, text="Speichern", command=_save, **btn_cfg).pack(side="left", padx=5)
+        Button(btn_frame, text="Abbrechen", command=win.destroy, **btn_cfg).pack(side="left", padx=5)
+
+        # Esc = Abbrechen (legt nichts an), Return = Speichern.
+        win.bind("<Escape>", lambda _e: win.destroy())
+        win.bind("<Return>", lambda _e: _save())
 
     # ------------------------------------------------------------------
     # Wochen-Kachel (alternative Ansicht zur Timer-Kachel)
@@ -2181,6 +2354,21 @@ class App:
         self._week_btn_forward.pack(side="left")
         self._week_btn_forward.configure(state="disabled")
 
+        # Umschalter "Alle Projekte" / "Nur aktuelles" (rechts in der Navizeile).
+        self._week_all_projects = True
+        self._week_btn_mode = Button(
+            nav_frame,
+            text="Nur aktuelles",
+            command=self._toggle_week_mode,
+            bg="#C0C0C0",
+            fg="#666666",
+            font=("MS Sans Serif", 8),
+            relief="flat",
+            borderwidth=0,
+            cursor="hand2",
+        )
+        self._week_btn_mode.pack(side="right")
+
         self._week_day_frames: list[Frame] = []
         for col in range(7):
             self.week_frame.grid_columnconfigure(col, weight=1, uniform="weekday")
@@ -2188,6 +2376,16 @@ class App:
             cell.grid(row=1, column=col, sticky="nsew", padx=2)
             self._week_day_frames.append(cell)
         self.week_frame.grid_rowconfigure(1, weight=1)
+
+        # Legende für die Projekt-Farben (wird in _refresh_week_view gefüllt).
+        self._week_legend_frame = Frame(self.week_frame, bg="#C0C0C0")
+        self._week_legend_frame.grid(row=2, column=0, columnspan=7, sticky="ew", padx=4, pady=(2, 0))
+
+    def _toggle_week_mode(self) -> None:
+        """Schaltet zwischen "alle Projekte" und "nur aktuelles Projekt" um."""
+        self._week_all_projects = not self._week_all_projects
+        self._week_btn_mode.configure(text="Nur aktuelles" if self._week_all_projects else "Alle Projekte")
+        self._refresh_week_view()
 
     def _week_scroll_back(self) -> None:
         """Scrollt die Wochenansicht 7 Tage in die Vergangenheit."""
@@ -2216,46 +2414,65 @@ class App:
         self.toggle_view_button.lift()
 
     def _refresh_week_view(self) -> None:
-        """Berechnet die letzten 7 Tage Stunden und zeichnet vertikale Block-Balken."""
+        """Zeichnet die letzten 7 Tage als gestapelte, projektweise eingefaerbte Balken.
+
+        Standardmaessig werden **alle Projekte gleichzeitig** mit stabiler
+        Projektfarbe dargestellt (Umschalter "Nur aktuelles" fuer die
+        Einzelprojekt-Ansicht). Wochenende/Feiertag werden ueber die Datumsfarbe
+        und den Zellhintergrund kodiert, die Balkenfarbe steht fuer das Projekt.
+        """
         if not getattr(self, "week_frame", None):
             return
-        # Vorherige Inhalte je Tag löschen.
+        # Vorherige Inhalte je Tag + Legende loeschen.
         for cell in self._week_day_frames:
             for child in cell.winfo_children():
                 child.destroy()
+        for child in self._week_legend_frame.winfo_children():
+            child.destroy()
 
         if not self.db_conn:
             return
         name = self._get_name_silent()
+        if not name:
+            return
         project = self._get_project_silent()
-        if not name or not project:
+        if not self._week_all_projects and not project:
             return
         try:
-            from datetime import timedelta as _td
+            from db_helper import compute_last_n_days_hours, compute_last_n_days_hours_by_project
 
-            from db_helper import compute_last_n_days_hours
-
-            end_date = datetime.now().date() + _td(days=self._week_offset)
-            days = compute_last_n_days_hours(self.db_conn, name, project, n=7, end_date=end_date)
+            end_date = datetime.now().date() + timedelta(days=self._week_offset)
+            if self._week_all_projects:
+                days = compute_last_n_days_hours_by_project(self.db_conn, name, n=7, end_date=end_date)
+            else:
+                # Einzelprojekt in dasselbe {project: hours}-Format bringen.
+                single = compute_last_n_days_hours(self.db_conn, name, project, n=7, end_date=end_date)
+                days = [(iso, {project: h} if h > 0 else {}) for iso, h in single]
         except Exception as e:  # noqa: BLE001
             logger.warning("Wochenansicht konnte nicht berechnet werden: %s", e)
             return
 
         # Titel und Navigation aktualisieren.
         kw = end_date.isocalendar()[1]
-        self._week_title_label.config(text=f"Zeitmaschine \u00b7 KW {kw}")
+        self._week_title_label.config(text=f"Zeitmaschine · KW {kw}")
         if self._week_offset < 0:
             self._week_btn_forward.configure(state="normal", fg="#000080")
         else:
             self._week_btn_forward.configure(state="disabled", fg="#B0B0B0")
 
         today = datetime.now().date()
-        max_hours = max((h for _, h in days), default=0.0)
-        max_hours = max(max_hours, 1.0)
+        day_totals = [sum(by_proj.values()) for _, by_proj in days]
+        max_hours = max(max(day_totals, default=0.0), 1.0)
         BAR_BLOCKS_MAX = 14
 
+        from utils import is_holiday as _is_holiday
+
+        _h_country = self.config.get("holiday_country", "DE") or "DE"
+        _h_subdiv = self.config.get("holiday_subdiv", "") or None
+
         _WDAY_DE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
-        for cell, (iso_date, hours) in zip(self._week_day_frames, days, strict=False):
+        seen_projects: set[str] = set()
+        for cell, (iso_date, by_proj) in zip(self._week_day_frames, days, strict=False):
             try:
                 d = datetime.strptime(iso_date, "%Y-%m-%d").date()
             except ValueError:
@@ -2263,23 +2480,14 @@ class App:
             weekday = d.weekday()  # 0=Mo, 6=So
             is_weekend = weekday >= 5
             is_today = d == today and self._week_offset == 0
-
-            # Feiertags-Erkennung aus Konfiguration.
-            from utils import is_holiday as _is_holiday
-
-            _h_country = self.config.get("holiday_country", "DE") or "DE"
-            _h_subdiv = self.config.get("holiday_subdiv", "") or None
             _is_hol = _is_holiday(d, country=_h_country, subdiv=_h_subdiv)
 
             if _is_hol:
                 date_fg = "#CC4444"
-                bar_fg = "#CC4444"
             elif is_weekend:
                 date_fg = "#888888"
-                bar_fg = "#A0A0A0"
             else:
                 date_fg = "#000000"
-                bar_fg = "#000080"
 
             # Heute-Marker: leicht hellerer Hintergrund + sunken bevel
             if is_today:
@@ -2289,68 +2497,94 @@ class App:
                 cell_bg = "#C0C0C0"
                 cell.configure(bg=cell_bg, relief="flat", borderwidth=0)
 
-            n_blocks = min(int((hours / max_hours) * BAR_BLOCKS_MAX), BAR_BLOCKS_MAX) if hours > 0 else 0
-            bar_text = "\n".join(["\u2588"] * n_blocks) if n_blocks else " "
+            day_total = sum(by_proj.values())
 
             # Wochentag (bold) und Datum als zwei Labels
-            Label(
-                cell,
-                text=_WDAY_DE[weekday],
-                bg=cell_bg,
-                fg=date_fg,
-                font=("MS Sans Serif", 8, "bold"),
-            ).pack(side="top", pady=(2, 0))
-            Label(
-                cell,
-                text=d.strftime("%d.%m"),
-                bg=cell_bg,
-                fg=date_fg,
-                font=("MS Sans Serif", 8),
-            ).pack(side="top")
+            Label(cell, text=_WDAY_DE[weekday], bg=cell_bg, fg=date_fg, font=("MS Sans Serif", 8, "bold")).pack(
+                side="top", pady=(2, 0)
+            )
+            Label(cell, text=d.strftime("%d.%m"), bg=cell_bg, fg=date_fg, font=("MS Sans Serif", 8)).pack(side="top")
 
-            # Stunden: "—" für leere Tage, sonst Wert
-            if hours == 0.0:
-                hours_text = "\u2014"
-                hours_fg = "#888888"
+            # Gesamtstunden des Tages ("—" wenn leer)
+            if day_total == 0.0:
+                Label(cell, text="—", bg=cell_bg, fg="#888888", font=("MS Sans Serif", 8, "bold")).pack(side="top")
             else:
-                hours_text = f"{hours:.2f} h"
-                hours_fg = date_fg
-            Label(
-                cell,
-                text=hours_text,
-                bg=cell_bg,
-                fg=hours_fg,
-                font=("MS Sans Serif", 8, "bold"),
-            ).pack(side="top")
+                Label(cell, text=f"{day_total:.2f} h", bg=cell_bg, fg=date_fg, font=("MS Sans Serif", 8, "bold")).pack(
+                    side="top"
+                )
 
-            # Balken
-            Label(
-                cell,
-                text=bar_text,
-                bg=cell_bg,
-                fg=bar_fg,
-                font=("Courier New", 7),
-            ).pack(side="top")
+            # Gestapelte, projektweise eingefaerbte Block-Segmente (groesstes oben).
+            tooltip_lines = [f"{_WDAY_DE[weekday]} {d.strftime('%d.%m')}: {day_total:.2f} h"]
+            for proj, hrs in sorted(by_proj.items(), key=lambda kv: (-kv[1], kv[0])):
+                seen_projects.add(proj)
+                n_blocks = max(1, int(round((hrs / max_hours) * BAR_BLOCKS_MAX)))
+                Label(
+                    cell,
+                    text="\n".join(["█"] * n_blocks),
+                    bg=cell_bg,
+                    fg=project_color(proj),
+                    font=("Courier New", 7),
+                ).pack(side="top")
+                tooltip_lines.append(f"  {proj}: {hrs:.2f} h")
 
-            # Tooltip pro Tag
-            tooltip_text = f"{_WDAY_DE[weekday]} {d.strftime('%d.%m')}: {hours:.2f} h"
-            _ToolTip(cell, tooltip_text)
+            _ToolTip(cell, "\n".join(tooltip_lines))
+
+        # Legende: Farbsymbol + Projektname fuer alle in dieser Woche aktiven Projekte.
+        if seen_projects:
+            Label(
+                self._week_legend_frame, text="Projekte:", bg="#C0C0C0", fg="#404040", font=("MS Sans Serif", 8)
+            ).pack(side="left", padx=(0, 4))
+            for proj in sorted(seen_projects):
+                Label(
+                    self._week_legend_frame,
+                    text=f"█ {proj}",
+                    bg="#C0C0C0",
+                    fg=project_color(proj),
+                    font=("MS Sans Serif", 8, "bold"),
+                ).pack(side="left", padx=4)
 
     def _force_date_refresh(self):
         """Unconditionally refresh list, timer and totals from DB for the selected date."""
         self._last_date_view_input_cache = self.date_entry.get().strip()
+        # Daten könnten sich geändert haben (Edit/Delete/Add/Start/Stop) → Cache verwerfen.
+        self._invalidate_duration_cache()
         if self._closing:
             self._update_date_entry_visual()
             return
         self.update_db_content()
         self._refresh_duration_display()
         self._update_date_entry_visual()
+        # Wochen-Kachel mitziehen, falls sie gerade sichtbar ist.
+        if getattr(self, "_week_view_active", False):
+            self._refresh_week_view()
         self._mark_clean()
 
     # ----- Sync indicator (dirty/clean) -----
 
+    def _get_cached_daily_duration(self, project: str, name: str, view_date: str) -> float:
+        """Tagesdauer (gespeicherte Sessions, ohne Live-Anteil) — gecacht.
+
+        Vermeidet einen DB-Scan pro Sekunde im Timer-Loop. Der Cache wird über
+        ``_invalidate_duration_cache`` (bei DB-Änderungen/Refresh) verworfen und
+        zusätzlich beim Wechsel von Name/Projekt/Datum automatisch neu berechnet.
+        """
+        key = (name, project, view_date)
+        if key != self._daily_dur_cache_key:
+            self._daily_dur_cache_val = (
+                calculate_daily_duration(project=project, name=name, date=view_date, conn=self.db_conn)
+                if self.db_conn
+                else 0.0
+            )
+            self._daily_dur_cache_key = key
+        return self._daily_dur_cache_val
+
+    def _invalidate_duration_cache(self):
+        """Erzwingt eine Neuberechnung der gecachten Tagesdauer beim nächsten Tick."""
+        self._daily_dur_cache_key = None
+
     def _mark_dirty(self):
         """Signal that the DB changed and the display may be stale."""
+        self._invalidate_duration_cache()
         if not self._db_dirty:
             self._db_dirty = True
             self._db_dirty_since = time.time()
@@ -2732,11 +2966,8 @@ class App:
 
         if project is not None and name and self.session_active.get((name, project)):
             view_date = self._get_selected_date()
-            daily_dur = (
-                calculate_daily_duration(project=project, name=name, date=view_date, conn=self.db_conn)
-                if self.db_conn
-                else 0
-            )
+            # Gecachte Tagesdauer statt DB-Scan pro Sekunde (siehe _get_cached_daily_duration).
+            daily_dur = self._get_cached_daily_duration(project, name, view_date)
             if self.timer_running and self._is_viewing_today():
                 start_ts = self.timer_start_time or time.time()
                 elapsed_time = time.time() - start_ts + daily_dur
@@ -2755,6 +2986,11 @@ class App:
             if self._total_update_counter >= 30:
                 self._total_update_counter = 0
                 self._refresh_total_label(project, name)
+                # Wochen-Kachel periodisch mitziehen, damit der heutige Balken
+                # während einer laufenden Session automatisch wächst.
+                if getattr(self, "_week_view_active", False):
+                    self._invalidate_duration_cache()
+                    self._refresh_week_view()
 
             if self.pomodoro_enabled and not self._break_active and self.timer_running:
                 if self._pomodoro_work_deadline_ts <= 0:
@@ -2772,11 +3008,34 @@ class App:
                         source_label="pomodoro_break",
                         timed_break=True,
                     )
+
+            # Auto-Stop bei langer systemweiter Inaktivität (~alle 30 s geprüft).
+            self._maybe_auto_stop_idle()
         if self._db_dirty and (time.time() - self._db_dirty_since) >= 2:
             self._force_date_refresh()
 
         if not self._closing:
             self.master.after(1000, self.update_timer_realtime)
+
+    def _maybe_auto_stop_idle(self):
+        """Stoppt eine laufende Session nach ``idle_timeout_minutes`` Minuten
+        systemweiter Inaktivität. Wird nur ~alle 30 Sekunden tatsächlich geprüft,
+        da die OS-Idle-Abfrage nicht jede Sekunde nötig ist. Ist keine
+        Idle-Erkennung verfügbar (``get_idle_seconds`` → ``None``), passiert nichts."""
+        if self.idle_timeout_minutes <= 0 or not self.timer_running or self._break_active:
+            return
+        self._idle_check_counter += 1
+        if self._idle_check_counter < 30:
+            return
+        self._idle_check_counter = 0
+        idle = get_idle_seconds()
+        if idle is None:
+            return
+        if idle >= self.idle_timeout_minutes * 60:
+            mins = int(idle // 60)
+            logger.info("Auto-Stop: System seit ~%s min inaktiv — Session wird gestoppt.", mins)
+            self.write(f"Session wegen Inaktivität (~{mins} min) automatisch gestoppt.")
+            self.stop_session()
 
     def update_timer(self, duration):
         """Update the timer label with the daily elapsed time."""

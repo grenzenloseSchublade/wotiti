@@ -416,3 +416,53 @@ def test_calculate_daily_duration_splits_midnight(db_conn):
     # Toleranz für Sekunden-Bruchteile.
     assert abs(sec_a - 600) < 2
     assert abs(sec_b - 1800) < 2
+
+
+def test_compute_last_n_days_hours_by_project(db_conn):
+    """Aggregation liefert pro Tag ein {project: hours}-Dict über alle Projekte."""
+    from datetime import date as _date
+    from datetime import datetime as _dt
+
+    from db_helper import compute_last_n_days_hours_by_project, log_start, log_stop
+
+    check_user(db_conn, "u1")
+    # Tag 02-06-2025: 2 h Projekt A + 1 h Projekt B.
+    log_start(project="A", name="u1", timestamp=_dt(2025, 6, 2, 9, 0), conn=db_conn)
+    log_stop(project="A", name="u1", timestamp=_dt(2025, 6, 2, 11, 0), conn=db_conn)
+    log_start(project="B", name="u1", timestamp=_dt(2025, 6, 2, 13, 0), conn=db_conn)
+    log_stop(project="B", name="u1", timestamp=_dt(2025, 6, 2, 14, 0), conn=db_conn)
+
+    days = compute_last_n_days_hours_by_project(db_conn, "u1", n=3, end_date=_date(2025, 6, 3))
+    assert len(days) == 3
+    by_day = dict(days)
+    target = by_day["2025-06-02"]
+    assert abs(target["A"] - 2.0) < 0.01
+    assert abs(target["B"] - 1.0) < 0.01
+    # Tage ohne Einträge sind leere Dicts.
+    assert by_day["2025-06-03"] == {}
+
+
+def test_compute_last_n_days_hours_by_project_unknown_user(db_conn):
+    """Unbekannter Nutzer → n leere Tages-Dicts, kein Fehler."""
+    from datetime import date as _date
+
+    from db_helper import compute_last_n_days_hours_by_project
+
+    days = compute_last_n_days_hours_by_project(db_conn, "nobody", n=2, end_date=_date(2025, 6, 3))
+    assert len(days) == 2
+    assert all(d == {} for _, d in days)
+
+
+def test_calculate_daily_break_duration_range(db_conn):
+    """Pausendauer wird über den Tag korrekt summiert (Range-Query)."""
+    from datetime import datetime as _dt
+
+    from db_helper import calculate_daily_break_duration, log_break_start, log_break_stop
+
+    check_user(db_conn, "u1")
+    log_break_start(project="p", name="u1", break_kind="manual", started_at=_dt(2025, 6, 2, 10, 0), conn=db_conn)
+    log_break_stop(project="p", name="u1", ended_at=_dt(2025, 6, 2, 10, 15), conn=db_conn)
+    total = calculate_daily_break_duration(name="u1", date="02-06-2025", conn=db_conn)
+    assert abs(total - 900) < 2
+    # Anderer Tag → 0.
+    assert calculate_daily_break_duration(name="u1", date="03-06-2025", conn=db_conn) == 0

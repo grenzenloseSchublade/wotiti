@@ -13,6 +13,10 @@
     "ghcr.io/devcontainers-extra/features/uv:1": {
       "version": "latest"
     },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "lts"
+    },
+    "ghcr.io/anthropics/devcontainer-features/claude-code:1": {},
     "./local-features/devtools": {}
   },
   "runArgs": [
@@ -44,7 +48,8 @@
   ],
   "mounts": [
     "source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind,consistency=cached",
-    "source=/mnt/wslg/PulseServer,target=/mnt/wslg/PulseServer,type=bind,consistency=cached"
+    "source=/mnt/wslg/PulseServer,target=/mnt/wslg/PulseServer,type=bind,consistency=cached",
+    "source=claude-code-config-${devcontainerId},target=/home/vscode/.claude,type=volume"
   ],
   "remoteEnv": {
     "GH_TOKEN": "${localEnv:GH_TOKEN}",
@@ -64,5 +69,5 @@
     }
   },
   "updateContentCommand": "uv sync --extra stats --extra dev",
-  "postCreateCommand": "uv run pre-commit install"
+  "postCreateCommand": "sudo chown -R vscode:vscode /home/vscode/.claude && uv run pre-commit install"
 }

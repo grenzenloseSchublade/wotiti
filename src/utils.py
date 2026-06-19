@@ -83,6 +83,9 @@ DEFAULT_CONFIG = {
     "pomodoro_sound_enabled": True,
     "pomodoro_sound_local_path": "sounds/StartupSound.wav",
     "single_instance": True,
+    # Automatischer Stopp einer laufenden Session nach so vielen Minuten
+    # systemweiter Inaktivität (Maus/Tastatur). 0 deaktiviert die Funktion.
+    "idle_timeout_minutes": 120,
     # Wochenend-/Feiertags-Filter für Durchschnitts- und Trend-Statistiken.
     # Summen und Pies bleiben unangetastet.
     "holiday_country": "DE",
