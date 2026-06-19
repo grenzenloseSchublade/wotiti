@@ -16,7 +16,7 @@ import polars as pl
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 APP_AUTHOR = "grenzenloseSchublade"
 APP_LICENSE = "MIT"
 
@@ -334,6 +334,41 @@ def read_database(
 
     except sqlite3.Error as e:
         logger.error("Fehler beim Lesen der Datenbank: %s", e)
+        return pl.DataFrame()
+
+
+def read_break_events(db_path: str) -> pl.DataFrame:
+    """Liest die ``break_events``-Tabelle (Pausen/Pomodoro) als DataFrame.
+
+    Spalten: user, project, break_kind, started_at (Datetime), ended_at,
+    duration_seconds, is_auto, pomodoro_cycle. Leere/fehlende Tabelle → leerer
+    DataFrame. ``started_at`` wird in ein Datetime + ``date`` (YYYY-MM-DD) konvertiert.
+    """
+    try:
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='break_events';")
+            if cursor.fetchone() is None:
+                return pl.DataFrame()
+            cursor.execute(
+                """
+                SELECT u.name AS user, b.project, b.break_kind, b.started_at, b.ended_at,
+                       b.duration_seconds, b.is_auto, b.pomodoro_cycle
+                FROM break_events b
+                JOIN users u ON u.id = b.user_id
+                """
+            )
+            rows = cursor.fetchall()
+            columns = [desc[0] for desc in cursor.description]
+            data = pl.DataFrame(rows, schema=columns, orient="row")
+            if data.is_empty():
+                return data
+            started = pl.col("started_at").cast(pl.Utf8).str.strptime(pl.Datetime, "%Y-%m-%d %H:%M:%S", strict=False)
+            data = data.with_columns(started.alias("started_at"))
+            data = data.with_columns(pl.col("started_at").dt.strftime("%Y-%m-%d").alias("date"))
+            return data
+    except sqlite3.Error as e:
+        logger.error("Fehler beim Lesen der break_events: %s", e)
         return pl.DataFrame()
 
 

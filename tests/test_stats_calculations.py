@@ -114,3 +114,78 @@ def test_calculate_overview_empty():
     ov = calculate_overview(pl.DataFrame())
     assert ov["total_hours"] == 0.0
     assert ov["users"] == []
+
+
+def test_calculate_hour_weekday_matrix_basic():
+    from stats_calculations import calculate_hour_weekday_matrix
+
+    # 2024-01-08 is a Monday (weekday 0); 09:00-11:00 = 2h across hours 9,10.
+    df = _df([("u", "p", "start", "2024-01-08 09:00:00"), ("u", "p", "stop", "2024-01-08 11:00:00")])
+    m = calculate_hour_weekday_matrix(df)
+    by = {(r["weekday"], r["hour"]): r["hours"] for r in m.iter_rows(named=True)}
+    assert by[(0, 9)] == pytest.approx(1.0)
+    assert by[(0, 10)] == pytest.approx(1.0)
+
+
+def test_calculate_start_hour_distribution():
+    from stats_calculations import calculate_start_hour_distribution
+
+    df = _df(
+        [
+            ("u", "p", "start", "2024-01-08 09:00:00"),
+            ("u", "p", "stop", "2024-01-08 11:00:00"),
+            ("u", "p", "start", "2024-01-09 09:30:00"),
+            ("u", "p", "stop", "2024-01-09 10:00:00"),
+        ]
+    )
+    dist = calculate_start_hour_distribution(df)
+    counts = {r["hour"]: r["count"] for r in dist.iter_rows(named=True)}
+    assert counts == {9: 2}
+
+
+def test_calculate_session_duration_distribution():
+    from stats_calculations import calculate_session_duration_distribution
+
+    df = _df(
+        [
+            ("u", "p", "start", "2024-01-08 09:00:00"),
+            ("u", "p", "stop", "2024-01-08 11:00:00"),
+            ("u", "p", "start", "2024-01-09 09:00:00"),
+            ("u", "p", "stop", "2024-01-09 09:30:00"),
+        ]
+    )
+    dist = calculate_session_duration_distribution(df)
+    vals = sorted(dist["duration_hours"].to_list())
+    assert vals == pytest.approx([0.5, 2.0])
+
+
+def test_calculate_break_statistics():
+    from stats_calculations import calculate_break_statistics
+
+    events = _df([("u", "p", "start", "2024-01-08 09:00:00"), ("u", "p", "stop", "2024-01-08 12:00:00")])
+    breaks = pl.DataFrame(
+        [
+            {"break_kind": "short", "duration_seconds": 900, "date": "2024-01-08"},
+            {"break_kind": "manual", "duration_seconds": 1800, "date": "2024-01-08"},
+        ]
+    )
+    stats = calculate_break_statistics(breaks, events)
+    assert stats["totals"]["work_hours"] == pytest.approx(3.0)
+    assert stats["totals"]["break_hours"] == pytest.approx(0.75)
+    assert not stats["per_day"].is_empty()
+
+
+def test_new_calcs_handle_empty():
+    from stats_calculations import (
+        calculate_break_statistics,
+        calculate_hour_weekday_matrix,
+        calculate_session_duration_distribution,
+        calculate_start_hour_distribution,
+    )
+
+    empty = pl.DataFrame()
+    assert calculate_hour_weekday_matrix(empty).is_empty()
+    assert calculate_start_hour_distribution(empty).is_empty()
+    assert calculate_session_duration_distribution(empty).is_empty()
+    bs = calculate_break_statistics(empty, empty)
+    assert bs["totals"]["break_hours"] == 0.0

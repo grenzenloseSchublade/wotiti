@@ -17,11 +17,15 @@ from stats_calculations import (
     analyze_time_series,
     calculate_average_hours_per_period,
     calculate_average_hours_per_user,
+    calculate_break_statistics,
     calculate_daily_project_hours,
+    calculate_hour_weekday_matrix,
     calculate_hours_per_project,
     calculate_overview,
     calculate_project_switches,
     calculate_project_time_stats,
+    calculate_session_duration_distribution,
+    calculate_start_hour_distribution,
     calculate_total_hours_per_user,
     perform_anova_analysis,
     perform_cluster_analysis,
@@ -31,13 +35,17 @@ from stats_plotting import (
     plot_anova_results,
     plot_average_hours_per_period,
     plot_average_hours_per_user,
+    plot_break_analysis,
     plot_cluster_analysis,
     plot_daily_patterns,
     plot_daily_project_hours,
+    plot_hour_heatmap,
     plot_hours_per_project,
     plot_project_switches,
     plot_project_time_stats,
     plot_regression_analysis,
+    plot_session_duration_distribution,
+    plot_start_hour_distribution,
     plot_time_series_analysis,
     plot_total_hours_per_user,
 )
@@ -47,6 +55,7 @@ from utils import (
     find_latest_example_dataset,
     get_app_database_path,
     get_theme_colors,
+    read_break_events,
     read_database,
     read_parameters,
 )
@@ -74,6 +83,11 @@ _DATA_CACHE = {"db_path": None, "db_mtime": None, "data": None, "stats": {}}
 # Letzter beim Auto-Refresh gesehener DB-Änderungszeitstempel; verhindert
 # unnötige Chart-Neuberechnungen, wenn sich nichts geändert hat.
 _last_autorefresh_mtime: float | None = None
+
+# Aktiver globaler Filter (Datumsbereich + Projektauswahl). Wird von
+# update_paths gesetzt; get_filtered_data wendet ihn an. Bei Änderung wird der
+# Stats-Cache geleert, damit alle Diagramme neu berechnet werden.
+_active_filter: dict = {"start": None, "end": None, "projects": None}
 
 
 def get_cached_data(db_path, force=False):
@@ -125,9 +139,33 @@ def get_filtered_data(db_path, weekend_include):
     data = get_cached_data(db_path)
     if data.is_empty():
         return data
+    # Globalen Datums-/Projektfilter anwenden (Spalte ``date`` ist YYYY-MM-DD,
+    # daher ist der lexikografische Vergleich = chronologisch).
+    if _active_filter.get("start"):
+        data = data.filter(pl.col("date") >= _active_filter["start"])
+    if _active_filter.get("end"):
+        data = data.filter(pl.col("date") <= _active_filter["end"])
+    if _active_filter.get("projects"):
+        data = data.filter(pl.col("project").is_in(_active_filter["projects"]))
+    if data.is_empty():
+        return data
     count_we = _weekend_flag(weekend_include)
     # count_weekend_work=True → alles behalten; False → filtern
     return _apply_workday_filter(data, override_count_weekend_work=count_we)
+
+
+def get_filtered_breaks(db_path):
+    """Pausen (break_events) gefiltert nach dem aktiven Datums-/Projektfilter."""
+    breaks = read_break_events(db_path)
+    if breaks.is_empty():
+        return breaks
+    if _active_filter.get("start"):
+        breaks = breaks.filter(pl.col("date") >= _active_filter["start"])
+    if _active_filter.get("end"):
+        breaks = breaks.filter(pl.col("date") <= _active_filter["end"])
+    if _active_filter.get("projects"):
+        breaks = breaks.filter(pl.col("project").is_in(_active_filter["projects"]))
+    return breaks
 
 
 def get_cached_stat(key, compute_fn):
@@ -218,7 +256,7 @@ app.layout = dbc.Container(
                                         dbc.ButtonGroup(
                                             [
                                                 dbc.Button(
-                                                    "\U0001f4c1 Verzeichnis",
+                                                    "Verzeichnis",
                                                     id="browse-button",
                                                     n_clicks=0,
                                                     color="primary",
@@ -226,7 +264,7 @@ app.layout = dbc.Container(
                                                     size="sm",
                                                 ),
                                                 dbc.Button(
-                                                    "\U0001f4ca Beispieldaten",
+                                                    "Beispieldaten",
                                                     id="example-button",
                                                     n_clicks=0,
                                                     color="outline-primary",
@@ -234,7 +272,7 @@ app.layout = dbc.Container(
                                                     size="sm",
                                                 ),
                                                 dbc.Button(
-                                                    "\U0001f504 Aktualisieren",
+                                                    "Aktualisieren",
                                                     id="refresh-button",
                                                     n_clicks=0,
                                                     color="outline-info",
@@ -258,6 +296,48 @@ app.layout = dbc.Container(
                                         style={"color": _colors["text"], "fontSize": "13px"},
                                         className="mb-3",
                                     ),
+                                    width="auto",
+                                    style={"display": "flex", "alignItems": "center", "paddingLeft": "15px"},
+                                ),
+                                # Datumsbereich-Filter (global)
+                                dbc.Col(
+                                    dcc.DatePickerRange(
+                                        id="date-filter",
+                                        display_format="DD.MM.YYYY",
+                                        first_day_of_week=1,
+                                        clearable=True,
+                                        className="mb-3",
+                                    ),
+                                    width="auto",
+                                    style={"display": "flex", "alignItems": "center", "paddingLeft": "15px"},
+                                ),
+                                # Projektfilter (global, Mehrfachauswahl)
+                                dbc.Col(
+                                    dcc.Dropdown(
+                                        id="project-filter",
+                                        options=[],
+                                        value=[],
+                                        multi=True,
+                                        placeholder="Projekte filtern",
+                                        style={"minWidth": "200px", "color": "#000000"},
+                                        className="mb-3",
+                                    ),
+                                    width="auto",
+                                    style={"display": "flex", "alignItems": "center", "paddingLeft": "15px"},
+                                ),
+                                # Export der gefilterten Daten als CSV
+                                dbc.Col(
+                                    [
+                                        dbc.Button(
+                                            "Export CSV",
+                                            id="export-csv-button",
+                                            n_clicks=0,
+                                            color="outline-secondary",
+                                            size="sm",
+                                            className="mb-3",
+                                        ),
+                                        dcc.Download(id="download-csv"),
+                                    ],
                                     width="auto",
                                     style={"display": "flex", "alignItems": "center", "paddingLeft": "15px"},
                                 ),
@@ -544,6 +624,32 @@ app.layout = dbc.Container(
                                 )
                             ]
                         ),
+                        dbc.Row(
+                            [
+                                create_card(
+                                    "Startzeit-Verteilung",
+                                    dbc.Spinner(
+                                        dcc.Graph(
+                                            id="start-hour-dist-chart",
+                                            style=GRAPH_STYLE,
+                                            figure=go.Figure(layout=GRAPH_LAYOUT),
+                                        ),
+                                        size="sm",
+                                    ),
+                                ),
+                                create_card(
+                                    "Session-Dauer-Verteilung",
+                                    dbc.Spinner(
+                                        dcc.Graph(
+                                            id="session-duration-dist-chart",
+                                            style=GRAPH_STYLE,
+                                            figure=go.Figure(layout=GRAPH_LAYOUT),
+                                        ),
+                                        size="sm",
+                                    ),
+                                ),
+                            ]
+                        ),
                     ],
                     label="Projekte & Muster",
                 ),
@@ -597,6 +703,38 @@ app.layout = dbc.Container(
                                         size="sm",
                                     ),
                                 ),
+                            ]
+                        ),
+                        dbc.Row(
+                            [
+                                create_card(
+                                    "Aktivitäts-Heatmap",
+                                    dbc.Spinner(
+                                        dcc.Graph(
+                                            id="hour-heatmap-chart",
+                                            style=GRAPH_STYLE,
+                                            figure=go.Figure(layout=GRAPH_LAYOUT),
+                                        ),
+                                        size="sm",
+                                    ),
+                                    md_value=12,
+                                )
+                            ]
+                        ),
+                        dbc.Row(
+                            [
+                                create_card(
+                                    "Arbeit vs. Pause",
+                                    dbc.Spinner(
+                                        dcc.Graph(
+                                            id="break-analysis-chart",
+                                            style=GRAPH_STYLE,
+                                            figure=go.Figure(layout=GRAPH_LAYOUT),
+                                        ),
+                                        size="sm",
+                                    ),
+                                    md_value=12,
+                                )
                             ]
                         ),
                     ],
@@ -753,14 +891,28 @@ def _load_dashboard_data(db_path, param_path, label, params_required=True):
         Input("refresh-button", "n_clicks"),
         Input("appdb-autoload", "n_intervals"),
         Input("auto-refresh-interval", "n_intervals"),
+        Input("date-filter", "start_date"),
+        Input("date-filter", "end_date"),
+        Input("project-filter", "value"),
     ],
     [
         State("left-user-dropdown", "value"),
         State("right-user-dropdown", "value"),
+        State("db-path", "data"),
     ],
 )
 def update_paths(
-    browse_clicks, example_clicks, refresh_clicks, autoload_intervals, autorefresh_intervals, left_value, right_value
+    browse_clicks,
+    example_clicks,
+    refresh_clicks,
+    autoload_intervals,
+    autorefresh_intervals,
+    filter_start,
+    filter_end,
+    filter_projects,
+    left_value,
+    right_value,
+    current_db,
 ):
     """Updates database and parameter paths based on selected source."""
     global _last_autorefresh_mtime
@@ -769,6 +921,16 @@ def update_paths(
         return None, None, "Datenquelle: -", 0, False, False, "Verzeichnis auswählen", [], None, [], None
 
     trigger_id = ctx.triggered[0]["prop_id"].split(".")[0]
+
+    if trigger_id in ("date-filter", "project-filter"):
+        # Globalen Filter aktualisieren, Stats-Cache leeren und db-path neu
+        # emittieren → alle Chart-Callbacks rechnen mit dem neuen Filter neu.
+        _active_filter["start"] = filter_start
+        _active_filter["end"] = filter_end
+        _active_filter["projects"] = filter_projects or None
+        _DATA_CACHE["stats"] = {}
+        nu = dash.no_update
+        return (current_db, nu, nu, nu, nu, nu, nu, nu, left_value, nu, right_value)
 
     if trigger_id == "auto-refresh-interval":
         # Nur weiterarbeiten, wenn sich die DB seit dem letzten Tick geändert hat.
@@ -1003,8 +1165,27 @@ def update_right_pie_chart(selected_user, db_path, weekend_include):
         we = _weekend_flag(weekend_include)
         hours = get_cached_stat(f"hours_per_project_we={int(we)}", lambda: calculate_hours_per_project(data))
         return plot_hours_per_project(hours, selected_user)
-    else:
-        return go.Figure(layout=go.Layout(plot_bgcolor=_colors["background"], paper_bgcolor=_colors["background"]))
+    # Kein (zweiter) Benutzer gewählt — Hinweis statt leerem Diagramm.
+    fig = go.Figure(
+        layout=go.Layout(
+            plot_bgcolor=_colors["background"],
+            paper_bgcolor=_colors["background"],
+            font_color=_colors["text"],
+            xaxis=dict(visible=False),
+            yaxis=dict(visible=False),
+        )
+    )
+    fig.add_annotation(
+        text="Benutzer auswählen",
+        xref="paper",
+        yref="paper",
+        x=0.5,
+        y=0.5,
+        showarrow=False,
+        font=dict(size=16, color=_colors["text"]),
+        opacity=0.5,
+    )
+    return fig
 
 
 @app.callback(
@@ -1272,6 +1453,116 @@ def update_anova_analysis(db_path, weekend_include):
     except Exception as e:
         logger.error("Fehler bei der ANOVA-Analyse: %s", e)
         return empty_fig, empty_fig
+
+
+@app.callback(
+    Output("hour-heatmap-chart", "figure"),
+    [Input("db-path", "data"), Input("weekend-include", "value")],
+)
+def update_hour_heatmap(db_path, weekend_include):
+    """Aktualisiert die Aktivitäts-Heatmap (Wochentag × Stunde)."""
+    if not db_path:
+        return go.Figure(layout=GRAPH_LAYOUT)
+    try:
+        data = get_filtered_data(db_path, weekend_include)
+        we = _weekend_flag(weekend_include)
+        matrix = get_cached_stat(f"hour_weekday_matrix_we={int(we)}", lambda: calculate_hour_weekday_matrix(data))
+        return plot_hour_heatmap(matrix)
+    except Exception as e:
+        logger.error("Fehler bei der Heatmap: %s", e)
+        return go.Figure(layout=GRAPH_LAYOUT)
+
+
+@app.callback(
+    Output("break-analysis-chart", "figure"),
+    [Input("db-path", "data"), Input("weekend-include", "value")],
+)
+def update_break_analysis(db_path, weekend_include):
+    """Aktualisiert die Arbeit-vs-Pause-Analyse aus break_events."""
+    if not db_path:
+        return go.Figure(layout=GRAPH_LAYOUT)
+    try:
+        data = get_filtered_data(db_path, weekend_include)
+        breaks = get_filtered_breaks(db_path)
+        we = _weekend_flag(weekend_include)
+        stats = get_cached_stat(f"break_statistics_we={int(we)}", lambda: calculate_break_statistics(breaks, data))
+        return plot_break_analysis(stats)
+    except Exception as e:
+        logger.error("Fehler bei der Pausen-Analyse: %s", e)
+        return go.Figure(layout=GRAPH_LAYOUT)
+
+
+@app.callback(
+    Output("start-hour-dist-chart", "figure"),
+    [Input("db-path", "data"), Input("weekend-include", "value")],
+)
+def update_start_hour_dist(db_path, weekend_include):
+    """Aktualisiert die Startzeit-Verteilung."""
+    if not db_path:
+        return go.Figure(layout=GRAPH_LAYOUT)
+    try:
+        data = get_filtered_data(db_path, weekend_include)
+        we = _weekend_flag(weekend_include)
+        dist = get_cached_stat(f"start_hour_dist_we={int(we)}", lambda: calculate_start_hour_distribution(data))
+        return plot_start_hour_distribution(dist)
+    except Exception as e:
+        logger.error("Fehler bei der Startzeit-Verteilung: %s", e)
+        return go.Figure(layout=GRAPH_LAYOUT)
+
+
+@app.callback(
+    Output("session-duration-dist-chart", "figure"),
+    [Input("db-path", "data"), Input("weekend-include", "value")],
+)
+def update_session_duration_dist(db_path, weekend_include):
+    """Aktualisiert die Session-Dauer-Verteilung."""
+    if not db_path:
+        return go.Figure(layout=GRAPH_LAYOUT)
+    try:
+        data = get_filtered_data(db_path, weekend_include)
+        we = _weekend_flag(weekend_include)
+        dist = get_cached_stat(
+            f"session_duration_dist_we={int(we)}", lambda: calculate_session_duration_distribution(data)
+        )
+        return plot_session_duration_distribution(dist)
+    except Exception as e:
+        logger.error("Fehler bei der Dauer-Verteilung: %s", e)
+        return go.Figure(layout=GRAPH_LAYOUT)
+
+
+@app.callback(
+    Output("project-filter", "options"),
+    [Input("db-path", "data")],
+)
+def update_project_filter_options(db_path):
+    """Befüllt den Projektfilter mit den Projekten der geladenen Daten."""
+    if not db_path:
+        return []
+    data = get_cached_data(db_path)
+    if data.is_empty():
+        return []
+    projects = sorted(p for p in data.select(pl.col("project").unique()).to_series().to_list() if p)
+    return [{"label": p, "value": p} for p in projects]
+
+
+@app.callback(
+    Output("download-csv", "data"),
+    [Input("export-csv-button", "n_clicks")],
+    [State("db-path", "data"), State("weekend-include", "value")],
+    prevent_initial_call=True,
+)
+def export_filtered_csv(n_clicks, db_path, weekend_include):
+    """Exportiert die aktuell gefilterten Arbeits-Events als CSV."""
+    if not n_clicks or not db_path:
+        raise dash.exceptions.PreventUpdate
+    data = get_filtered_data(db_path, weekend_include)
+    if data is None or data.is_empty():
+        raise dash.exceptions.PreventUpdate
+    import io
+
+    buffer = io.StringIO()
+    data.write_csv(buffer)
+    return {"content": buffer.getvalue(), "filename": "wotiti_export.csv"}
 
 
 def _find_available_port(start_port):

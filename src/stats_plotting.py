@@ -140,12 +140,17 @@ def plot_hours_per_project(hours: pl.DataFrame | None, user: str) -> go.Figure:
     if _is_empty(hours):
         return _empty_figure("Stunden pro Projekt")
     user_data = hours.filter(pl.col("user") == user)
+    if _is_empty(user_data):
+        return _empty_figure(f"Stunden pro Projekt — {user}")
+    labels = user_data["project"].to_list()
+    # Volle Palette zyklisch über die Projektanzahl (statt fix 3 Farben).
+    colors = [_sequence[i % len(_sequence)] for i in range(len(labels))]
     fig = go.Figure(
         data=[
             go.Pie(
-                labels=user_data["project"].to_list(),
+                labels=labels,
                 values=[round(v, 2) for v in user_data["total_hours"].to_list()],
-                marker_colors=_sequence[:3],
+                marker_colors=colors,
                 hovertemplate="%{label}: %{value:.2f} h<extra></extra>",
             )
         ],
@@ -224,7 +229,7 @@ def plot_average_hours_per_user(average_hours: pl.DataFrame | None) -> go.Figure
             go.Bar(
                 x=average_hours["user"].to_list(),
                 y=vals,
-                marker_color=_sequence[1],
+                marker_color=_sequence[1] if len(_sequence) > 1 else _sequence[0],
                 text=[f"{v:.2f}" for v in vals],
                 textposition="auto",
             ),
@@ -355,7 +360,7 @@ def plot_project_switches(switches: pl.DataFrame | None) -> go.Figure:
         )
 
     fig.update_layout(
-        title="Projektwechsel-Muster (Pausendauer)",
+        title="Pausendauer zwischen Projektwechseln",
         yaxis_title="Pausendauer (Minuten)",
         plot_bgcolor=_colors["background"],
         paper_bgcolor=_colors["background"],
@@ -388,7 +393,7 @@ def plot_daily_patterns(patterns: pl.DataFrame | None) -> go.Figure:
     fig.update_layout(
         title="Arbeitsmuster (Durchschn. Startzeiten)",
         xaxis_title="Projekt",
-        yaxis_title="Uhrzeit",
+        yaxis_title="Startzeit (Stunde)",
         plot_bgcolor=_colors["background"],
         paper_bgcolor=_colors["background"],
         font_color=_colors["text"],
@@ -509,7 +514,7 @@ def plot_cluster_analysis(
         )
 
     overview_fig.update_layout(
-        title="Benutzer-Cluster Übersicht",
+        title="Benutzer-Cluster Übersicht (Blasengröße = Ø Dauer)",
         xaxis_title="Durchschn. Startzeit",
         yaxis_title="Wechsel pro Tag",
         plot_bgcolor=_colors["background"],
@@ -524,9 +529,9 @@ def plot_cluster_analysis(
         profile_fig.add_trace(
             go.Bar(
                 name=f"Cluster {profile['cluster']}",
-                x=["Avg Start", "Avg Switches", "Avg Duration"],
+                x=["Ø Startzeit", "Ø Wechsel", "Ø Dauer"],
                 y=[profile["avg_start"], profile["avg_switches"], profile["avg_duration"]],
-                text=[f"Users: {', '.join(profile['users'])}"],
+                text=[f"Benutzer: {', '.join(profile['users'])}"],
                 hoverinfo="text",
             )
         )
@@ -534,6 +539,8 @@ def plot_cluster_analysis(
     profile_fig.update_layout(
         title="Cluster-Profile",
         barmode="group",
+        xaxis_title="Kennzahl",
+        yaxis_title="Wert",
         plot_bgcolor=_colors["background"],
         paper_bgcolor=_colors["background"],
         font_color=_colors["text"],
@@ -574,7 +581,7 @@ def plot_regression_analysis(regression_results: dict | None) -> tuple[go.Figure
             x=results["actual"].to_list(),
             y=results["predicted"].to_list(),
             mode="markers",
-            marker=dict(color=_sequence[1]),
+            marker=dict(color=_sequence[1] if len(_sequence) > 1 else _sequence[0]),
         )
     )
 
@@ -650,3 +657,122 @@ def plot_anova_results(anova_results: dict | None) -> tuple[go.Figure, go.Figure
     )
 
     return user_fig, project_fig
+
+
+# ---------------------------------------------------------------------------
+# Zusätzliche Diagramme: Pausen, Heatmap, Verteilungen
+# ---------------------------------------------------------------------------
+def plot_break_analysis(break_stats: dict | None) -> go.Figure:
+    """Gestapelte Balken Arbeits- vs. Pausenstunden pro Tag (+ Verhältnis im Titel)."""
+    if not break_stats or _is_empty(break_stats.get("per_day")):
+        return _empty_figure("Pausen-Analyse")
+    per_day = break_stats["per_day"]
+    totals = break_stats.get("totals", {})
+    dates = per_day["date"].to_list()
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=dates,
+            y=per_day["work_hours"].to_list(),
+            name="Arbeit",
+            marker_color=_sequence[0],
+            hovertemplate="%{x}: %{y:.2f} h Arbeit<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Bar(
+            x=dates,
+            y=per_day["break_hours"].to_list(),
+            name="Pause",
+            marker_color=_sequence[1] if len(_sequence) > 1 else _colors["accent"],
+            hovertemplate="%{x}: %{y:.2f} h Pause<extra></extra>",
+        )
+    )
+    ratio_pct = totals.get("ratio", 0.0) * 100
+    fig.update_layout(
+        title=f"Arbeit vs. Pause pro Tag (Pausenanteil {ratio_pct:.0f}%)",
+        barmode="stack",
+        xaxis_title="Datum",
+        yaxis_title="Stunden",
+        yaxis=dict(rangemode="tozero"),
+        plot_bgcolor=_colors["background"],
+        paper_bgcolor=_colors["background"],
+        font_color=_colors["text"],
+    )
+    return fig
+
+
+def plot_hour_heatmap(matrix: pl.DataFrame | None) -> go.Figure:
+    """Heatmap der Arbeitsstunden je Wochentag (Y) × Tagesstunde (X)."""
+    if _is_empty(matrix):
+        return _empty_figure("Aktivitäts-Heatmap")
+    wd_labels = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
+    grid = [[0.0 for _ in range(24)] for _ in range(7)]
+    for row in matrix.iter_rows(named=True):
+        wd = int(row["weekday"])
+        hr = int(row["hour"])
+        if 0 <= wd <= 6 and 0 <= hr <= 23:
+            grid[wd][hr] = round(float(row["hours"]), 2)
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=grid,
+            x=[f"{h:02d}" for h in range(24)],
+            y=wd_labels,
+            colorscale="Viridis",
+            colorbar=dict(title="Stunden"),
+            hovertemplate="%{y} %{x}:00 — %{z:.2f} h<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        title="Aktivitäts-Heatmap (Wochentag × Stunde)",
+        xaxis_title="Tagesstunde",
+        yaxis_title="Wochentag",
+        plot_bgcolor=_colors["background"],
+        paper_bgcolor=_colors["background"],
+        font_color=_colors["text"],
+    )
+    return fig
+
+
+def plot_start_hour_distribution(dist: pl.DataFrame | None) -> go.Figure:
+    """Balkendiagramm der Häufigkeit von Start-Uhrzeiten (0..23)."""
+    if _is_empty(dist):
+        return _empty_figure("Startzeit-Verteilung")
+    counts = {int(r["hour"]): int(r["count"]) for r in dist.iter_rows(named=True)}
+    x = list(range(24))
+    y = [counts.get(h, 0) for h in x]
+    fig = go.Figure(data=[go.Bar(x=[f"{h:02d}" for h in x], y=y, marker_color=_sequence[0])])
+    fig.update_layout(
+        title="Verteilung der Start-Uhrzeiten",
+        xaxis_title="Stunde",
+        yaxis_title="Anzahl Starts",
+        yaxis=dict(rangemode="tozero"),
+        plot_bgcolor=_colors["background"],
+        paper_bgcolor=_colors["background"],
+        font_color=_colors["text"],
+    )
+    return fig
+
+
+def plot_session_duration_distribution(dist: pl.DataFrame | None) -> go.Figure:
+    """Histogramm der Session-Dauern (Stunden)."""
+    if _is_empty(dist):
+        return _empty_figure("Session-Dauer-Verteilung")
+    fig = go.Figure(
+        data=[
+            go.Histogram(
+                x=dist["duration_hours"].to_list(),
+                marker_color=_sequence[1] if len(_sequence) > 1 else _sequence[0],
+                hovertemplate="%{x:.1f} h: %{y} Sessions<extra></extra>",
+            )
+        ]
+    )
+    fig.update_layout(
+        title="Verteilung der Session-Dauern",
+        xaxis_title="Dauer (Stunden)",
+        yaxis_title="Anzahl Sessions",
+        plot_bgcolor=_colors["background"],
+        paper_bgcolor=_colors["background"],
+        font_color=_colors["text"],
+    )
+    return fig

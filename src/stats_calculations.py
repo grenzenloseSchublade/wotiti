@@ -55,8 +55,9 @@ def _paired_durations_hours(group):
             hours = 0.0
         durations.append(hours)
     if neg_count:
-        logger.debug(
-            "_paired_durations_hours: %d negative Dauern auf 0 gesetzt (von %d Paaren).",
+        logger.warning(
+            "_paired_durations_hours: %d negative Dauern auf 0 gesetzt (von %d Paaren) — "
+            "Stop vor Start? Bitte Einträge prüfen.",
             neg_count,
             min_length,
         )
@@ -845,3 +846,122 @@ def calculate_overview(data: pl.DataFrame) -> dict:
             "holiday_entries": int(holiday_entries),
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Zusätzliche Auswertungen: Pausen, Heatmap, Verteilungen
+# ---------------------------------------------------------------------------
+def calculate_break_statistics(breaks_df, events_df) -> dict:
+    """Aggregiert Pausen (break_events) und stellt sie der Arbeitszeit gegenüber.
+
+    Args:
+        breaks_df: DataFrame aus ``utils.read_break_events`` (Spalten u.a.
+            ``date``, ``duration_seconds``, ``break_kind``).
+        events_df: Arbeits-Events (für die Arbeitsstunden pro Tag).
+
+    Returns:
+        dict mit ``per_day`` ([date, work_hours, break_hours]),
+        ``by_kind`` ([break_kind, hours]) und ``totals``
+        ({work_hours, break_hours, ratio}).
+    """
+    # Arbeitsstunden pro Tag (über alle Projekte/User summiert).
+    work_per_day = pl.DataFrame(schema={"date": pl.Utf8, "work_hours": pl.Float64})
+    if events_df is not None and not events_df.is_empty():
+        daily = calculate_daily_project_hours(events_df)
+        if not daily.is_empty():
+            work_per_day = daily.group_by("date").agg(pl.col("hours").sum().alias("work_hours")).sort("date")
+
+    break_per_day = pl.DataFrame(schema={"date": pl.Utf8, "break_hours": pl.Float64})
+    by_kind = pl.DataFrame(schema={"break_kind": pl.Utf8, "hours": pl.Float64})
+    total_break_hours = 0.0
+    if breaks_df is not None and not breaks_df.is_empty():
+        b = breaks_df.filter(pl.col("duration_seconds").is_not_null())
+        if not b.is_empty():
+            b = b.with_columns((pl.col("duration_seconds") / 3600.0).alias("hours"))
+            break_per_day = b.group_by("date").agg(pl.col("hours").sum().alias("break_hours")).sort("date")
+            by_kind = b.group_by("break_kind").agg(pl.col("hours").sum().alias("hours")).sort("break_kind")
+            total_break_hours = float(b.select(pl.col("hours").sum()).to_series()[0] or 0.0)
+
+    per_day = work_per_day.join(break_per_day, on="date", how="full", coalesce=True).sort("date")
+    per_day = per_day.with_columns(
+        pl.col("work_hours").fill_null(0.0),
+        pl.col("break_hours").fill_null(0.0),
+    )
+
+    total_work_hours = 0.0
+    if not per_day.is_empty():
+        total_work_hours = float(per_day.select(pl.col("work_hours").sum()).to_series()[0] or 0.0)
+    ratio = (total_break_hours / total_work_hours) if total_work_hours > 0 else 0.0
+
+    return {
+        "per_day": per_day,
+        "by_kind": by_kind,
+        "totals": {
+            "work_hours": round(total_work_hours, 2),
+            "break_hours": round(total_break_hours, 2),
+            "ratio": round(ratio, 3),
+        },
+    }
+
+
+def calculate_hour_weekday_matrix(data) -> pl.DataFrame:
+    """Stunden je (Wochentag, Tagesstunde) für eine Heatmap.
+
+    Sessions werden stundenweise anteilig verteilt (auch über Mitternacht).
+    Rückgabe: DataFrame [weekday (0=Mo..6=So), hour (0..23), hours].
+    """
+    if data is None or data.is_empty():
+        return pl.DataFrame(schema={"weekday": pl.Int64, "hour": pl.Int64, "hours": pl.Float64})
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
+
+    data = data.sort(["user", "project", "timestamp"])
+    bucket: dict[tuple, float] = {}
+    for (_u, _p), group in data.partition_by(["user", "project"], as_dict=True).items():
+        starts = group.filter(pl.col("event_type") == "start").select("timestamp").to_series().to_list()
+        stops = group.filter(pl.col("event_type") == "stop").select("timestamp").to_series().to_list()
+        for start_ts, stop_ts in zip(starts, stops, strict=False):
+            if start_ts is None or stop_ts is None or stop_ts <= start_ts:
+                continue
+            cursor = start_ts
+            while cursor < stop_ts:
+                hour_end = _dt.combine(cursor.date(), _dt.min.time()) + _td(hours=cursor.hour + 1)
+                chunk_end = min(hour_end, stop_ts)
+                seconds = (chunk_end - cursor).total_seconds()
+                if seconds > 0:
+                    key = (cursor.weekday(), cursor.hour)
+                    bucket[key] = bucket.get(key, 0.0) + seconds / 3600.0
+                cursor = chunk_end
+    if not bucket:
+        return pl.DataFrame(schema={"weekday": pl.Int64, "hour": pl.Int64, "hours": pl.Float64})
+    rows = [{"weekday": wd, "hour": hr, "hours": h} for (wd, hr), h in bucket.items()]
+    return pl.DataFrame(rows).sort(["weekday", "hour"])
+
+
+def calculate_start_hour_distribution(data) -> pl.DataFrame:
+    """Häufigkeit der Start-Uhrzeiten (Stunde 0..23) über alle Start-Events."""
+    if data is None or data.is_empty():
+        return pl.DataFrame(schema={"hour": pl.Int64, "count": pl.Int64})
+    starts = data.filter(pl.col("event_type") == "start").filter(pl.col("timestamp").is_not_null())
+    if starts.is_empty():
+        return pl.DataFrame(schema={"hour": pl.Int64, "count": pl.Int64})
+    return (
+        starts.with_columns(pl.col("timestamp").dt.hour().alias("hour"))
+        .group_by("hour")
+        .agg(pl.len().alias("count"))
+        .sort("hour")
+    )
+
+
+def calculate_session_duration_distribution(data) -> pl.DataFrame:
+    """Liste der Session-Dauern (Stunden) über alle (User, Projekt)-Gruppen."""
+    if data is None or data.is_empty():
+        return pl.DataFrame(schema={"duration_hours": pl.Float64})
+    data = data.sort(["user", "project", "timestamp"])
+    durations: list[float] = []
+    for _key, group in data.partition_by(["user", "project"], as_dict=True).items():
+        durations.extend(_paired_durations_hours(group))
+    durations = [d for d in durations if d > 0]
+    if not durations:
+        return pl.DataFrame(schema={"duration_hours": pl.Float64})
+    return pl.DataFrame({"duration_hours": durations})
