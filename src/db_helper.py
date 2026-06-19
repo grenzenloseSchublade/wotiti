@@ -804,6 +804,86 @@ def get_last_start_date(conn: sqlite3.Connection | None, name: str, project: str
         return None
 
 
+def _resolve_user_id(conn, name) -> int | None:
+    """Liefert die user_id zum Namen oder ``None`` (mit Fehler-Logging)."""
+    cursor = None
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM users WHERE name = ?", (name,))
+        row = cursor.fetchone()
+        return row[0] if row else None
+    except Error as e:
+        logger.error("Error resolving user id: %s", e)
+        return None
+    finally:
+        if cursor is not None:
+            cursor.close()
+
+
+def _hours_by_project_day(conn, user_id, days, project_filter=None) -> dict[str, dict[str, float]]:
+    """Verteilt abgeschlossene Sessions sekundengenau auf ``days`` je Projekt.
+
+    Ein **einziger** Scan über die Events des Nutzers (optional auf ein Projekt
+    gefiltert). Start/Stop werden je Projekt gepaart; jede Session wird anteilig
+    auf die Ziel-Tage verteilt (Mitternachts-Split), identisch zur Semantik von
+    :func:`calculate_daily_duration`.
+
+    Rückgabe: ``{YYYY-MM-DD: {project: seconds}}`` (nur belegte Einträge).
+    """
+    day_bounds = [
+        (
+            d.strftime("%Y-%m-%d"),
+            datetime.combine(d, datetime.min.time()),
+            datetime.combine(d, datetime.min.time()) + timedelta(days=1),
+        )
+        for d in days
+    ]
+    out: dict[str, dict[str, float]] = {iso: {} for iso, _, _ in day_bounds}
+
+    cursor = None
+    try:
+        cursor = conn.cursor()
+        if project_filter is not None:
+            cursor.execute(
+                "SELECT project, event_type, timestamp FROM events WHERE user_id = ? AND project = ? ORDER BY project, timestamp",
+                (user_id, project_filter),
+            )
+        else:
+            cursor.execute(
+                "SELECT project, event_type, timestamp FROM events WHERE user_id = ? ORDER BY project, timestamp",
+                (user_id,),
+            )
+        rows = cursor.fetchall()
+    except Error as e:
+        logger.error("Error reading events for week view: %s", e)
+        return out
+    finally:
+        if cursor is not None:
+            cursor.close()
+
+    current_project = None
+    start_time: datetime | None = None
+    for project, event_type, ts_str in rows:
+        if project != current_project:
+            current_project = project
+            start_time = None
+        try:
+            ts = datetime.strptime(ts_str, TIMESTAMP_FORMAT)
+        except ValueError:
+            continue
+        if event_type == "start":
+            start_time = ts
+        elif event_type == "stop" and start_time is not None:
+            for iso, day_start, day_end in day_bounds:
+                chunk_start = max(start_time, day_start)
+                chunk_end = min(ts, day_end)
+                if chunk_end > chunk_start:
+                    secs = (chunk_end - chunk_start).total_seconds()
+                    out[iso][project] = out[iso].get(project, 0.0) + secs
+            start_time = None
+    return out
+
+
 def compute_last_n_days_hours(
     conn: sqlite3.Connection | None,
     name: str,
@@ -814,24 +894,25 @@ def compute_last_n_days_hours(
     """Berechnet die Arbeitsstunden pro Tag für ``n`` Tage bis ``end_date`` (inkl.).
 
     Liefert eine Liste der Länge ``n`` mit ``(YYYY-MM-DD, hours)`` — Tage ohne
-    Einträge erhalten ``0.0``. Sessions, die Mitternacht überspannen, werden
-    anteilig verbucht (über ``calculate_daily_duration``).
+    Einträge erhalten ``0.0``. Sessions über Mitternacht werden anteilig verbucht.
+    Ein einziger DB-Scan (siehe :func:`_hours_by_project_day`).
 
     ``end_date`` ist ein ``date``-Objekt; Default = heute.
     """
-    from datetime import timedelta as _td
-
     if not conn or not name or not project or n <= 0:
         return []
 
+    user_id = _resolve_user_id(conn, name)
     last_day = end_date if end_date is not None else datetime.now().date()
+    days = [last_day - timedelta(days=off) for off in range(n - 1, -1, -1)]
+    if user_id is None:
+        return [(d.strftime("%Y-%m-%d"), 0.0) for d in days]
+
+    by_day = _hours_by_project_day(conn, user_id, days, project_filter=project)
     result: list[tuple[str, float]] = []
-    for offset in range(n - 1, -1, -1):
-        day = last_day - _td(days=offset)
-        ui_date = day.strftime(UI_DATE_FORMAT)
-        seconds = calculate_daily_duration(project=project, name=name, date=ui_date, conn=conn)
-        hours = float(seconds) / 3600.0 if seconds else 0.0
-        result.append((day.strftime("%Y-%m-%d"), hours))
+    for d in days:
+        iso = d.strftime("%Y-%m-%d")
+        result.append((iso, by_day.get(iso, {}).get(project, 0.0) / 3600.0))
     return result
 
 
@@ -844,39 +925,23 @@ def compute_last_n_days_hours_by_project(
     """Wie :func:`compute_last_n_days_hours`, aber **alle Projekte** des Nutzers.
 
     Liefert eine Liste der Länge ``n`` mit ``(YYYY-MM-DD, {project: hours})`` —
-    nur Projekte mit Stunden > 0 erscheinen im Tages-Dict. Sessions über
-    Mitternacht werden anteilig verbucht (über ``calculate_daily_duration``).
+    nur Projekte mit Stunden > 0 erscheinen im Tages-Dict. Ein einziger DB-Scan.
     """
     if not conn or not name or n <= 0:
         return []
 
     last_day = end_date if end_date is not None else datetime.now().date()
     days = [last_day - timedelta(days=off) for off in range(n - 1, -1, -1)]
-    result: list[tuple[str, dict[str, float]]] = [(d.strftime("%Y-%m-%d"), {}) for d in days]
+    user_id = _resolve_user_id(conn, name)
+    if user_id is None:
+        return [(d.strftime("%Y-%m-%d"), {}) for d in days]
 
-    # Alle Projekte ermitteln, für die der Nutzer überhaupt Events hat.
-    cursor = None
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM users WHERE name = ?", (name,))
-        row = cursor.fetchone()
-        if row is None:
-            return result
-        user_id = row[0]
-        cursor.execute("SELECT DISTINCT project FROM events WHERE user_id = ?", (user_id,))
-        projects = [r[0] for r in cursor.fetchall() if r[0]]
-    except Error as e:
-        logger.error("Error reading projects for week view: %s", e)
-        return result
-    finally:
-        if cursor is not None:
-            cursor.close()
-
-    for project in projects:
-        per_day = compute_last_n_days_hours(conn, name, project, n=n, end_date=end_date)
-        for idx, (_iso, hours) in enumerate(per_day):
-            if hours > 0:
-                result[idx][1][project] = hours
+    by_day = _hours_by_project_day(conn, user_id, days)
+    result: list[tuple[str, dict[str, float]]] = []
+    for d in days:
+        iso = d.strftime("%Y-%m-%d")
+        hours = {proj: secs / 3600.0 for proj, secs in by_day.get(iso, {}).items() if secs > 0}
+        result.append((iso, hours))
     return result
 
 

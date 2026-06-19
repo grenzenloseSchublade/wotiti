@@ -442,6 +442,22 @@ def test_compute_last_n_days_hours_by_project(db_conn):
     assert by_day["2025-06-03"] == {}
 
 
+def test_compute_last_n_days_hours_by_project_midnight_split(db_conn):
+    """Mitternachts-Sessions werden je Projekt anteilig auf beide Tage verteilt."""
+    from datetime import date as _date
+    from datetime import datetime as _dt
+
+    from db_helper import compute_last_n_days_hours_by_project, log_start, log_stop
+
+    check_user(db_conn, "u1")
+    # 23:30 -> 00:30 = 30 min Vortag + 30 min Folgetag, Projekt P.
+    log_start(project="P", name="u1", timestamp=_dt(2025, 6, 1, 23, 30), conn=db_conn)
+    log_stop(project="P", name="u1", timestamp=_dt(2025, 6, 2, 0, 30), conn=db_conn)
+    days = dict(compute_last_n_days_hours_by_project(db_conn, "u1", n=3, end_date=_date(2025, 6, 3)))
+    assert abs(days["2025-06-01"]["P"] - 0.5) < 0.02
+    assert abs(days["2025-06-02"]["P"] - 0.5) < 0.02
+
+
 def test_compute_last_n_days_hours_by_project_unknown_user(db_conn):
     """Unbekannter Nutzer → n leere Tages-Dicts, kein Fehler."""
     from datetime import date as _date

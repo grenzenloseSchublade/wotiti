@@ -122,6 +122,37 @@ def test_maybe_auto_stop_idle(app_instance, monkeypatch):
     assert app_instance.timer_running is False
 
 
+def test_get_project_rejects_sentinel(app_instance):
+    """Der Sentinel-Eintrag wird nie als echtes Projekt zurückgegeben."""
+    from app import NEW_PROJECT_LABEL
+
+    app_instance.project_entry.set(NEW_PROJECT_LABEL)
+    assert app_instance._get_project_silent() is None
+    assert app_instance.get_project() is None
+
+
+def test_set_project_syncs_last_valid(app_instance):
+    """_set_project hält _last_valid_project synchron und filtert den Sentinel."""
+    from app import NEW_PROJECT_LABEL
+
+    app_instance._set_project("Alpha")
+    assert app_instance.project_entry.get() == "Alpha"
+    assert app_instance._last_valid_project == "Alpha"
+    app_instance._set_project(NEW_PROJECT_LABEL)
+    assert app_instance.project_entry.get() == "1"
+    assert app_instance._last_valid_project == "1"
+
+
+def test_step_date(app_instance):
+    """Der Tag-Stepper verschiebt das Datum um genau einen Tag."""
+    app_instance.date_entry.delete(0, END)
+    app_instance.date_entry.insert(0, "10-06-2025")
+    app_instance._step_date(1)
+    assert app_instance.date_entry.get() == "11-06-2025"
+    app_instance._step_date(-1)
+    assert app_instance.date_entry.get() == "10-06-2025"
+
+
 def test_maybe_auto_stop_idle_unavailable(app_instance, monkeypatch):
     """Ohne verfügbare Idle-Erkennung (None) bleibt die Session laufen."""
     import app as app_module

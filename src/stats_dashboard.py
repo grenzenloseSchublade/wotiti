@@ -754,8 +754,14 @@ def _load_dashboard_data(db_path, param_path, label, params_required=True):
         Input("appdb-autoload", "n_intervals"),
         Input("auto-refresh-interval", "n_intervals"),
     ],
+    [
+        State("left-user-dropdown", "value"),
+        State("right-user-dropdown", "value"),
+    ],
 )
-def update_paths(browse_clicks, example_clicks, refresh_clicks, autoload_intervals, autorefresh_intervals):
+def update_paths(
+    browse_clicks, example_clicks, refresh_clicks, autoload_intervals, autorefresh_intervals, left_value, right_value
+):
     """Updates database and parameter paths based on selected source."""
     global _last_autorefresh_mtime
     ctx = dash.callback_context
@@ -774,8 +780,11 @@ def update_paths(browse_clicks, example_clicks, refresh_clicks, autoload_interva
         if current_mtime is None or current_mtime == _last_autorefresh_mtime:
             raise dash.exceptions.PreventUpdate
         _last_autorefresh_mtime = current_mtime
-        # In den normalen Reload-Pfad übergehen (Daten neu laden, Charts aktualisieren).
-        trigger_id = "appdb-autoload"
+        # DB hat sich geändert: db-path neu emittieren — das löst die Chart-Callbacks
+        # aus, die via get_cached_data (mtime-aware) frisch laden. Alles andere bleibt
+        # unverändert (no_update), insbesondere die ausgewählten Benutzer im Dropdown.
+        nu = dash.no_update
+        return (db_path, nu, nu, nu, nu, nu, nu, nu, left_value, nu, right_value)
 
     if trigger_id in ("appdb-autoload", "refresh-button"):
         db_path = get_app_database_path(PATH_TO_DATA)

@@ -83,7 +83,8 @@ logger = logging.getLogger(__name__)
 
 # Sentinel-Eintrag in der Projekt-Combobox, der den "Neues Projekt"-Dialog öffnet.
 # So ist das Anlegen eines Projekts direkt im Dropdown sichtbar/auffindbar.
-NEW_PROJECT_LABEL = "➕ Neues Projekt …"
+# Bewusst nur Standard-Zeichen (kein Emoji).
+NEW_PROJECT_LABEL = "+ Neues Projekt …"
 
 # Farbpalette für die Projekt-Farbcodierung in der Wochenansicht. Distinkte,
 # kräftige Farben; die Zuordnung erfolgt stabil über den Projektnamen.
@@ -193,6 +194,7 @@ class App:
         self._last_date_view_input_cache = None
         self._date_entry_normal_bg = "#FFFFFF"
         self._date_entry_past_bg = "#FFFACD"
+        self._date_entry_invalid_bg = "#FFCCCC"
         self._db_dirty = False
         self._db_dirty_since: float = 0.0
         # Cache der gespeicherten Tagesdauer (ohne laufende Live-Session), damit
@@ -200,6 +202,13 @@ class App:
         # und Datums-/Projektwechsel invalidiert.
         self._daily_dur_cache_key: tuple | None = None
         self._daily_dur_cache_val: float = 0.0
+        # Caches für die (alle 30 s aktualisierten) Total-/Pausen-Labels, damit
+        # nicht jedes Mal die gesamte Events-/Break-Tabelle gescannt wird.
+        self._total_cache_key: tuple | None = None
+        self._total_cache_val: float = 0.0
+        self._break_cache_key: tuple | None = None
+        self._break_cache_val: float = 0.0
+        self._timer_state_text = "Leerlauf"
         os.makedirs(PATH_TO_SOUNDS, exist_ok=True)
 
         # Pomodoro settings (persisted in config)
@@ -287,6 +296,7 @@ class App:
             borderwidth=2,
         )
         self.start_button.grid(row=0, column=0, pady=5, padx=3, sticky=W + E)
+        _ToolTip(self.start_button, "Start (Strg+S)")
 
         # Pause button - toggle pause/resume
         self.pause_button = Button(
@@ -304,6 +314,7 @@ class App:
             state="disabled",
         )
         self.pause_button.grid(row=0, column=1, pady=5, padx=3, sticky=W + E)
+        _ToolTip(self.pause_button, "Pause (Strg+P)")
 
         # Stop button - ends session completely
         self.stop_button = Button(
@@ -321,6 +332,7 @@ class App:
             state="disabled",
         )
         self.stop_button.grid(row=0, column=2, pady=5, padx=3, sticky=W + E)
+        _ToolTip(self.stop_button, "Stop (Strg+E)")
 
         # Separator
         self.button_separator = Frame(self.button_frame, width=10, bg="#C0C0C0")
@@ -358,6 +370,7 @@ class App:
             self.button_frame, text="\u25bd Mini", command=self._toggle_mini_mode, **button_config
         )
         self.mini_button.grid(row=0, column=8, pady=5, padx=3, sticky=W + E)
+        _ToolTip(self.mini_button, "Mini-Modus (Strg+M)")
 
         # Configure button frame columns
         self.button_frame.grid_columnconfigure(0, weight=2)
@@ -383,15 +396,29 @@ class App:
         self.name_entry.grid(row=0, column=1, pady=5, padx=3, sticky="ew")
         self.name_entry.set("Hans")
 
-        # Datum label and entry
-        self.date_label = Label(self.entry_frame, text="Datum (TT-MM-JJJJ):", **label_config)
+        # Datum: Label + Tag-Stepper (<) Eingabe (>) in einem Sub-Frame, damit die
+        # drei Elemente zusammen bleiben und die Spaltenaufteilung unverändert ist.
+        self.date_label = Label(self.entry_frame, text="Datum:", **label_config)
         self.date_label.grid(row=0, column=2, pady=5, padx=3, sticky="w")
-        self.date_entry = Entry(self.entry_frame, **entry_config, width=12)
-        self.date_entry.grid(row=0, column=3, pady=5, padx=3, sticky="ew")
+        date_frame = Frame(self.entry_frame, bg="#C0C0C0")
+        date_frame.grid(row=0, column=3, pady=5, padx=3, sticky="ew")
+        self.date_prev_button = Button(
+            date_frame, text="<", width=2, command=lambda: self._step_date(-1), **button_config
+        )
+        self.date_prev_button.pack(side="left")
+        _ToolTip(self.date_prev_button, "Ein Tag zurück")
+        self.date_entry = Entry(date_frame, **entry_config, width=11)
+        self.date_entry.pack(side="left", fill="x", expand=True, padx=2)
         self.date_entry.insert(0, str(datetime.today().strftime("%d-%m-%Y")))
         self._last_date_view_input_cache = self.date_entry.get().strip()
         self.date_entry.bind("<Return>", self._on_date_changed)
         self.date_entry.bind("<FocusOut>", self._on_date_changed)
+        _ToolTip(self.date_entry, "Format: TT-MM-JJJJ")
+        self.date_next_button = Button(
+            date_frame, text=">", width=2, command=lambda: self._step_date(1), **button_config
+        )
+        self.date_next_button.pack(side="left")
+        _ToolTip(self.date_next_button, "Ein Tag vor")
 
         # Heute button
         self.heute_button = Button(self.entry_frame, text="Heute", command=self.set_today_date, **button_config)
@@ -477,8 +504,8 @@ class App:
         # Wochen-Kachel wird erst nach db_content_frame gebaut (siehe unten).
         self._week_view_active = False
 
-        # Dezenter Umschalt-Link — lebt per place() im tile_container.
-        # Feste Y-Position (y=4) vom oberen Rand, bewegt sich nie.
+        # Dezenter, kleiner Umschalt-Link — lebt per place() im tile_container,
+        # ganz oben rechts (y=2, über dem Pausen-Bereich, klein und unscheinbar).
         self.toggle_view_button = Button(
             self.tile_container,
             text="Woche ›",
@@ -488,9 +515,11 @@ class App:
             font=("MS Sans Serif", 8),
             relief="flat",
             borderwidth=0,
+            padx=0,
+            pady=0,
             cursor="hand2",
         )
-        self.toggle_view_button.place(relx=1.0, y=4, anchor="ne", x=-6)
+        self.toggle_view_button.place(relx=1.0, y=4, anchor="ne", x=-9)
         self.toggle_view_button.lift()
 
         # =====================================================
@@ -568,9 +597,13 @@ class App:
         )
         self._status_date_label.pack(side="left", padx=4)
 
-        self._sync_canvas = Canvas(self._status_frame, width=12, height=12, bg="#C0C0C0", highlightthickness=0)
-        self._sync_canvas.pack(side="right", padx=4)
-        self._sync_dot = self._sync_canvas.create_oval(2, 2, 10, 10, fill="#00AA00", outline="#006600")
+        self._sync_label = Label(
+            self._status_frame, text="aktuell", bg="#C0C0C0", fg="#006600", font=("MS Sans Serif", 8)
+        )
+        self._sync_label.pack(side="right", padx=(0, 2))
+        self._sync_canvas = Canvas(self._status_frame, width=14, height=14, bg="#C0C0C0", highlightthickness=0)
+        self._sync_canvas.pack(side="right", padx=2)
+        self._sync_dot = self._sync_canvas.create_oval(2, 2, 12, 12, fill="#00AA00", outline="#006600")
         _ToolTip(self._sync_canvas, "Sync-Status: grün = aktuell, gelb = Daten veraltet")
 
         # =====================================================
@@ -623,7 +656,7 @@ class App:
                 self._refresh_comboboxes(force=True)
                 self.name_entry.set(default_user)
                 default_project = self.config.get("default_project", "1")
-                self.project_entry.set(default_project)
+                self._set_project(default_project)
                 self.update_db_content()
         except Exception as e:
             logger.error("Datenbankverbindung fehlgeschlagen: %s", e)
@@ -861,7 +894,7 @@ class App:
             save_config(self.config)
 
         # Sync project selection back from mini to main
-        self.project_entry.set(self._mini_project_combo.get().strip())
+        self._set_project(self._mini_project_combo.get().strip())
 
         # Hide mini first, then restore main — avoids WM focus confusion.
         self._mini_toplevel.withdraw()
@@ -1541,7 +1574,7 @@ class App:
                 **self.config,
                 "database_path": new_db if new_db else self._db_path,
                 "default_user": default_user_var.get().strip() or "Hans",
-                "default_project": default_proj_var.get().strip() or "1",
+                "default_project": (dp if (dp := default_proj_var.get().strip()) and dp != NEW_PROJECT_LABEL else "1"),
                 "dashboard_port": int(new_port),
                 "theme": theme_var.get(),
                 "pomodoro_enabled": bool(pomodoro_enabled_var.get()),
@@ -1601,7 +1634,7 @@ class App:
             self._combobox_dirty = True
             self._refresh_comboboxes(force=True)
             self.name_entry.set(new_config["default_user"])
-            self.project_entry.set(new_config["default_project"])
+            self._set_project(new_config["default_project"])
             self._force_date_refresh()
 
             if int(new_port) != self._stats_port:
@@ -1662,10 +1695,15 @@ class App:
 
     # ----- Session management -----
     def _set_timer_color(self, state: str) -> None:
-        """Set timer fg color based on session state: 'idle', 'running', 'break'."""
+        """Set timer fg color + Status-Text based on session state: 'idle', 'running', 'break'."""
         colors = {"idle": "#666666", "running": "#008000", "break": "#B58900"}
+        labels = {"idle": "Leerlauf", "running": "Läuft", "break": "Pause"}
         fg = colors.get(state, "red")
         self.timer_time_label.config(fg=fg)
+        self._timer_state_text = labels.get(state, "")
+        # Wenn keine Session aktiv ist, zeigt der Untertitel direkt den Status.
+        if state != "running":
+            self.timer_subtitle_label.config(text=self._timer_state_text, fg=fg)
 
     def _set_button_state_idle(self):
         """Set buttons to idle state: Start enabled, Pause+Stop disabled."""
@@ -1732,6 +1770,7 @@ class App:
                     self.timer_running = True
                     self.timer_start_time = time.time()
                     self._session_started_ts = time.time()
+                    self._idle_check_counter = 0
                     self._pomodoro_cycles = 0
                     if self.pomodoro_enabled and self._pomodoro_work_deadline_ts <= 0:
                         self._pomodoro_work_deadline_ts = time.time() + (self.pomodoro_work_minutes * 60)
@@ -1767,6 +1806,7 @@ class App:
             self.session_active[(name, project)] = False
             self.timer_running = False
             self._session_started_ts = 0.0
+            self._idle_check_counter = 0
             self._pomodoro_work_deadline_ts = 0.0
             self._paused_pomodoro_remaining_seconds = 0
             self._pomodoro_cycles = 0
@@ -2102,9 +2142,21 @@ class App:
         """Return the currently visible project combobox."""
         return self._mini_project_combo if self._mini_mode else self.project_entry
 
+    def _set_project(self, value: str) -> None:
+        """Setzt das Projektfeld programmatisch und hält ``_last_valid_project`` synchron.
+
+        Verhindert, dass nach einer programmatischen Auswahl der Sentinel-Restore
+        in ``_on_project_selected`` auf einen veralteten Wert zurückfällt.
+        """
+        value = (value or "").strip()
+        if not value or value == NEW_PROJECT_LABEL:
+            value = "1"
+        self.project_entry.set(value)
+        self._last_valid_project = value
+
     def get_project(self):
         val = self._active_project_combo().get().strip()
-        if not val:
+        if not val or val == NEW_PROJECT_LABEL:
             self.write("Projekt darf nicht leer sein.", error=True)
             return None
         return val
@@ -2144,9 +2196,30 @@ class App:
         return self._get_selected_date() == datetime.today().strftime("%d-%m-%Y")
 
     def _update_date_entry_visual(self):
-        """Highlight date field when viewing a day other than today."""
+        """Highlight date field: rot bei ungültiger Eingabe, gelb wenn nicht heute."""
+        text = self.date_entry.get().strip()
+        try:
+            datetime.strptime(text, "%d-%m-%Y")
+        except ValueError:
+            self.date_entry.config(bg=self._date_entry_invalid_bg)
+            return
         bg = self._date_entry_normal_bg if self._is_viewing_today() else self._date_entry_past_bg
         self.date_entry.config(bg=bg)
+
+    def _step_date(self, delta_days: int):
+        """Verschiebt das angezeigte Datum um ``delta_days`` Tage und lädt neu.
+
+        Bei ungültiger aktueller Eingabe wird von heute ausgegangen.
+        """
+        text = self.date_entry.get().strip()
+        try:
+            base = datetime.strptime(text, "%d-%m-%Y").date()
+        except ValueError:
+            base = datetime.today().date()
+        new_date = base + timedelta(days=delta_days)
+        self.date_entry.delete(0, END)
+        self.date_entry.insert(0, new_date.strftime("%d-%m-%Y"))
+        self._on_date_changed()
 
     def _on_date_changed(self, _event=None):
         """Refresh list and duration when the date field changes (Return / focus out)."""
@@ -2253,7 +2326,7 @@ class App:
             from db_helper import log_event
 
             project = proj_combo.get().strip()
-            if not project:
+            if not project or project == NEW_PROJECT_LABEL:
                 messagebox.showwarning("Fehler", "Projekt darf nicht leer sein.", parent=win)
                 return
             name = self._get_name_silent()
@@ -2579,8 +2652,10 @@ class App:
         return self._daily_dur_cache_val
 
     def _invalidate_duration_cache(self):
-        """Erzwingt eine Neuberechnung der gecachten Tagesdauer beim nächsten Tick."""
+        """Erzwingt Neuberechnung aller gecachten Dauerwerte beim nächsten Tick."""
         self._daily_dur_cache_key = None
+        self._total_cache_key = None
+        self._break_cache_key = None
 
     def _mark_dirty(self):
         """Signal that the DB changed and the display may be stale."""
@@ -2589,12 +2664,14 @@ class App:
             self._db_dirty = True
             self._db_dirty_since = time.time()
             self._sync_canvas.itemconfig(self._sync_dot, fill="#DDAA00", outline="#AA7700")
+            self._sync_label.config(text="veraltet", fg="#AA7700")
 
     def _mark_clean(self):
         """Signal that the display is in sync with the DB."""
         self._db_dirty = False
         self._db_dirty_since = 0.0
         self._sync_canvas.itemconfig(self._sync_dot, fill="#00AA00", outline="#006600")
+        self._sync_label.config(text="aktuell", fg="#006600")
 
     def _refresh_duration_display(self) -> None:
         """Recalculate timer and totals from DB for the selected date (no validation popups)."""
@@ -2977,7 +3054,7 @@ class App:
             hours, minutes = divmod(minutes, 60)
             time_text = f"{int(hours):02}:{int(minutes):02}:{int(seconds):02}"
             self.timer_time_label.config(text=time_text)
-            self.timer_subtitle_label.config(text=f"{name} \u00b7 Projekt {project}")
+            self.timer_subtitle_label.config(text=f"{self._timer_state_text} \u00b7 {name} \u00b7 Projekt {project}")
             if self._mini_toplevel:
                 self._mini_timer_label.config(text=time_text)
 
@@ -3036,6 +3113,10 @@ class App:
             logger.info("Auto-Stop: System seit ~%s min inaktiv — Session wird gestoppt.", mins)
             self.write(f"Session wegen Inaktivität (~{mins} min) automatisch gestoppt.")
             self.stop_session()
+            # Sichtbar machen: Fenster nach vorn + bleibender Hinweis im Untertitel
+            # (wird erst beim nächsten Start/Statuswechsel überschrieben).
+            self._bring_main_window_to_front()
+            self.timer_subtitle_label.config(text=f"Automatisch gestoppt (Inaktivität ~{mins} min)", fg="#B58900")
 
     def update_timer(self, duration):
         """Update the timer label with the daily elapsed time."""
@@ -3052,7 +3133,7 @@ class App:
             hours, minutes = divmod(minutes, 60)
             time_text = f"{int(hours):02}:{int(minutes):02}:{int(seconds):02}"
             self.timer_time_label.config(text=time_text)
-            self.timer_subtitle_label.config(text=f"{name} \u00b7 Projekt {project}")
+            self.timer_subtitle_label.config(text=f"{self._timer_state_text} \u00b7 {name} \u00b7 Projekt {project}")
             if self._mini_toplevel:
                 self._mini_timer_label.config(text=time_text)
         else:
@@ -3061,7 +3142,9 @@ class App:
     def _get_project_silent(self):
         """Get project without validation errors (for timer updates)."""
         val = self._active_project_combo().get().strip()
-        return val if val else None
+        if not val or val == NEW_PROJECT_LABEL:
+            return None
+        return val
 
     def _get_name_silent(self):
         """Get name without validation errors (for timer updates)."""
@@ -3081,13 +3164,21 @@ class App:
             self.break_total_label.config(text="")
             return
 
-        total = calculate_duration(project=project, name=name, conn=self.db_conn)
+        total_key = (name, project)
+        if total_key != self._total_cache_key:
+            self._total_cache_val = calculate_duration(project=project, name=name, conn=self.db_conn)
+            self._total_cache_key = total_key
+        total = self._total_cache_val
         t_min, t_sec = divmod(int(total), 60)
         t_hr, t_min = divmod(t_min, 60)
         self.timer_total_label.config(text=f"\u03a3 Projekt: {t_hr:02}:{t_min:02}:{t_sec:02}")
 
         view_date = self._get_selected_date()
-        brk = calculate_daily_break_duration(name=name, date=view_date, conn=self.db_conn)
+        break_key = (name, view_date)
+        if break_key != self._break_cache_key:
+            self._break_cache_val = calculate_daily_break_duration(name=name, date=view_date, conn=self.db_conn)
+            self._break_cache_key = break_key
+        brk = self._break_cache_val
         b_min, b_sec = divmod(int(brk), 60)
         b_hr, b_min = divmod(b_min, 60)
         if brk > 0:

@@ -14,6 +14,8 @@ Unterstützung:
 
 from __future__ import annotations
 
+import atexit
+import contextlib
 import ctypes
 import logging
 import shutil
@@ -84,6 +86,7 @@ def _load_x11():
 
     xlib.XOpenDisplay.restype = ctypes.c_void_p
     xlib.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    xlib.XCloseDisplay.argtypes = [ctypes.c_void_p]
     xlib.XDefaultRootWindow.restype = ctypes.c_ulong
     xlib.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
     xss.XScreenSaverAllocInfo.restype = ctypes.POINTER(_XScreenSaverInfo)
@@ -100,6 +103,13 @@ def _load_x11():
         "root": xlib.XDefaultRootWindow(display),
         "info": xss.XScreenSaverAllocInfo(),
     }
+
+    # Display-Handle beim Programmende sauber schließen (vermeidet FD-Leak).
+    def _close_display():
+        with contextlib.suppress(Exception):
+            xlib.XCloseDisplay(display)
+
+    atexit.register(_close_display)
     return _xss_state
 
 
