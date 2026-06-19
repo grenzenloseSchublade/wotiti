@@ -2398,7 +2398,7 @@ class App:
             relief="flat",
             borderwidth=0,
             cursor="hand2",
-            width=2,
+            width=4,
         )
         self._week_btn_back.pack(side="left")
 
@@ -2422,7 +2422,7 @@ class App:
             relief="flat",
             borderwidth=0,
             cursor="hand2",
-            width=2,
+            width=4,
         )
         self._week_btn_forward.pack(side="left")
         self._week_btn_forward.configure(state="disabled")
@@ -2538,6 +2538,12 @@ class App:
         max_hours = max(max(day_totals, default=0.0), 1.0)
         BAR_BLOCKS_MAX = 14
 
+        # Distinkte Farbe je Projekt: feste Zuordnung über die in dieser Woche
+        # aktiven Projekte (Index in die Palette), damit sich Projekte zuverlässig
+        # farblich unterscheiden — der reine Hash konnte kollidieren.
+        all_projects = sorted({p for _, by_proj in days for p in by_proj})
+        color_map = {p: WEEK_PROJECT_COLORS[i % len(WEEK_PROJECT_COLORS)] for i, p in enumerate(all_projects)}
+
         from utils import is_holiday as _is_holiday
 
         _h_country = self.config.get("holiday_country", "DE") or "DE"
@@ -2591,13 +2597,16 @@ class App:
             for proj, hrs in sorted(by_proj.items(), key=lambda kv: (-kv[1], kv[0])):
                 seen_projects.add(proj)
                 n_blocks = max(1, int(round((hrs / max_hours) * BAR_BLOCKS_MAX)))
-                Label(
+                seg = Label(
                     cell,
                     text="\n".join(["█"] * n_blocks),
                     bg=cell_bg,
-                    fg=project_color(proj),
+                    fg=color_map.get(proj, WEEK_PROJECT_COLORS[0]),
                     font=("Courier New", 7),
-                ).pack(side="top")
+                )
+                seg.pack(side="top")
+                # Hover über den Balken: Projektname + getrackte Zeit dieses Tages.
+                _ToolTip(seg, f"{proj}: {hrs:.2f} h ({_WDAY_DE[weekday]} {d.strftime('%d.%m')})")
                 tooltip_lines.append(f"  {proj}: {hrs:.2f} h")
 
             _ToolTip(cell, "\n".join(tooltip_lines))
@@ -2612,7 +2621,7 @@ class App:
                     self._week_legend_frame,
                     text=f"█ {proj}",
                     bg="#C0C0C0",
-                    fg=project_color(proj),
+                    fg=color_map.get(proj, WEEK_PROJECT_COLORS[0]),
                     font=("MS Sans Serif", 8, "bold"),
                 ).pack(side="left", padx=4)
 
