@@ -244,7 +244,7 @@ def save_config(config: dict) -> None:
     os.replace(tmp_path, CONFIG_PATH)
 
 
-def clamp_note(text: str, max_words: int = 20) -> str:
+def clamp_note(text: str, max_words: int = 44) -> str:
     """Normalisiert eine Notiz: einzeilig, Whitespace kollabiert, max. ``max_words`` Wörter."""
     if not text:
         return ""

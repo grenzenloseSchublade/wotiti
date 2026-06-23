@@ -47,3 +47,16 @@ def test_holidays_import_failure_fallback(monkeypatch):
     monkeypatch.setattr(utils, "_try_import_holidays", lambda: None)
     assert is_holiday(date(2024, 10, 3), country="DE", subdiv="") is False
     utils._holiday_set_cached.cache_clear()
+
+
+def test_clamp_note_limits_to_44_words():
+    """clamp_note begrenzt auf 44 Wörter und kollabiert Whitespace."""
+    from utils import clamp_note
+
+    words = [f"w{i}" for i in range(60)]
+    out = clamp_note(" ".join(words))
+    assert len(out.split()) == 44
+    assert out.split() == words[:44]
+    # Whitespace/Zeilenumbrüche werden einzeilig normalisiert.
+    assert clamp_note("a\n  b\t c") == "a b c"
+    assert clamp_note("") == ""

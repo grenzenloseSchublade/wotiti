@@ -6,6 +6,7 @@ import re
 import socket
 import subprocess
 import sys
+import textwrap
 import threading
 import time
 import webbrowser
@@ -459,16 +460,21 @@ class App:
             else:
                 self.entry_frame.grid_columnconfigure(col, weight=0)
 
-        # Notiz-Zeile: eine kurze Notiz je Projekt/Tag (max. ~20 Wörter). Wird
+        # Notiz-Zeile: eine kurze Notiz je Projekt/Tag (max. ~44 Wörter). Wird
         # automatisch zum gewählten Datum + Projekt geladen/gespeichert und in
         # der Wochenansicht beim Hovern angezeigt.
         self.note_label = Label(self.entry_frame, text="Notiz:", **label_config)
-        self.note_label.grid(row=1, column=0, pady=(0, 4), padx=3, sticky="w")
-        self.note_entry = Entry(self.entry_frame, **entry_config)
+        self.note_label.grid(row=1, column=0, pady=(0, 4), padx=3, sticky="nw")
+        # Zweizeiliges Notizfeld: lange Notizen (bis ~44 Wörter) sind so lesbar
+        # umgebrochen. Inhaltlich bleibt die Notiz einzeilig (clamp_note
+        # kollabiert Whitespace) — Enter speichert und fügt KEINEN Umbruch ein.
+        self.note_entry = Text(
+            self.entry_frame, height=2, wrap="word", relief="sunken", borderwidth=2, **entry_config
+        )
         self.note_entry.grid(row=1, column=1, columnspan=6, pady=(0, 4), padx=3, sticky="ew")
-        self.note_entry.bind("<Return>", self._on_note_changed)
+        self.note_entry.bind("<Return>", self._on_note_return)
         self.note_entry.bind("<FocusOut>", self._on_note_changed)
-        _ToolTip(self.note_entry, "Notiz für dieses Datum + Projekt (max. 20 Wörter)")
+        _ToolTip(self.note_entry, "Notiz für dieses Datum + Projekt (max. 44 Wörter)")
         # Übertragen-Status: markiert, dass diese Zeit (Projekt+Tag) bereits
         # manuell ins Firmensystem eingetragen wurde. Setzt beim Anhaken das
         # heutige Datum als Übertragungsdatum.
@@ -1331,7 +1337,7 @@ class App:
 
         # Start/Stop-Liste: Gruppierung nach Projekt (Default) vs. chronologisch.
         entry_chrono_var = BooleanVar(value=bool(self.config.get("entry_list_chronological", False)))
-        Checkbutton(
+        chrono_check = Checkbutton(
             dash_frame,
             text="Einträge chronologisch statt nach Projekt gruppieren",
             variable=entry_chrono_var,
@@ -1340,7 +1346,21 @@ class App:
             selectcolor="#C0C0C0",
             activebackground="#C0C0C0",
             font=("MS Sans Serif", 10),
-        ).grid(row=4, column=0, columnspan=2, sticky="w", pady=2)
+        )
+        chrono_check.grid(row=4, column=0, columnspan=2, sticky="w", pady=2)
+        # Bei laufender Session sperren: die Umstellung der Session-Darstellung
+        # soll nicht mitten in einer Session erfolgen (sonst wirkt sie verworfen).
+        if sessions_active:
+            chrono_check.config(state="disabled", fg="#888888", disabledforeground="#888888")
+            Label(
+                dash_frame,
+                text="Während einer laufenden Session nicht änderbar — bitte zuerst stoppen.",
+                bg="#C0C0C0",
+                fg="#B00020",
+                font=("MS Sans Serif", 9, "italic"),
+                wraplength=480,
+                justify="left",
+            ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(0, 2))
 
         # ── Pomodoro ──
         pomodoro_frame = LabelFrame(
@@ -3045,6 +3065,22 @@ class App:
             return f"{start} → {stop}", "läuft"
         return f"{start} → {stop}", f"{s['dur_h']:.2f} h"
 
+    @staticmethod
+    def _note_rows(note: str, indent: str, width: int = 56) -> list[str]:
+        """Notiz-Zeile(n) für den Session-Viewer: bei Bedarf umbrochen.
+
+        Lange Notizen (bis ~44 Wörter) werden an Wortgrenzen über mehrere Zeilen
+        umgebrochen, damit die volle Notiz lesbar bleibt (wichtig für den Übertrag
+        ins Firmensystem). Fortsetzungszeilen werden unter dem Notiz-Text
+        eingerückt.
+        """
+        label = f"{indent}Notiz: "
+        text = note or "—"
+        avail = max(10, width - len(label))
+        wrapped = textwrap.wrap(text, width=avail) or ["—"]
+        cont = " " * len(label)
+        return [label + wrapped[0]] + [cont + line for line in wrapped[1:]]
+
     def update_db_content(self):
         """Update the database content listbox with the latest data."""
         self.db_content_listbox.delete(0, END)
@@ -3187,7 +3223,8 @@ class App:
                             for s in [ps for ps in user_sessions if ps["project"] == project]:
                                 times, dur = self._session_times_str(s)
                                 _row(f"    {times}  ({dur})", {**s, "date_iso": view_iso})
-                            _row(f"    Notiz: {meta['note'] or '—'}")
+                            for ln in self._note_rows(meta["note"], "    "):
+                                _row(ln)
                     else:
                         # Layout B: chronologisch, Projekt je Zeile.
                         for s in user_sessions:
@@ -3195,7 +3232,8 @@ class App:
                             times, dur = self._session_times_str(s)
                             mark = "  ✓" if meta["transferred"] else ""
                             _row(f"  {times}  Projekt {s['project']}  ({dur}){mark}", {**s, "date_iso": view_iso})
-                            _row(f"     Notiz: {meta['note'] or '—'}")
+                            for ln in self._note_rows(meta["note"], "     "):
+                                _row(ln)
 
                     # Notiz/✓-Projekte ohne Zeiten ans Ende der Nutzergruppe.
                     for project in sorted(note_only.get(user, [])):
@@ -3204,7 +3242,8 @@ class App:
                         if meta["transferred"]:
                             head += "   ✓ übertragen"
                         _row(head)
-                        _row(f"    Notiz: {meta['note'] or '—'}")
+                        for ln in self._note_rows(meta["note"], "    "):
+                            _row(ln)
 
                 # Phase 2.4: Hinweis, wenn das Listenlimit greift.
                 if total_count > limit:
@@ -3354,7 +3393,7 @@ class App:
         note_var = StringVar(value=initial_note)
         note_entry_edit = Entry(win, textvariable=note_var, **entry_cfg, width=30)
         note_entry_edit.grid(row=4, column=1, padx=8, pady=4, sticky="ew")
-        _ToolTip(note_entry_edit, "Notiz für dieses Datum + Projekt (max. 20 Wörter)")
+        _ToolTip(note_entry_edit, "Notiz für dieses Datum + Projekt (max. 44 Wörter)")
 
         # Übertragen-Status
         transferred_var = BooleanVar(value=initial_transferred)
@@ -3681,14 +3720,14 @@ class App:
         project = self._get_project_silent()
         date_iso = self._selected_date_iso()
         if not name or not project or not date_iso:
-            self.note_entry.delete(0, END)
+            self.note_entry.delete("1.0", END)
             self._transferred_var.set(False)
             self.transferred_check.configure(state="disabled")
             self._note_loaded_key = None
             return
         meta = get_daily_meta(self.db_conn, name, project, date_iso)
-        self.note_entry.delete(0, END)
-        self.note_entry.insert(0, meta["note"])
+        self.note_entry.delete("1.0", END)
+        self.note_entry.insert("1.0", meta["note"])
         self._transferred_var.set(meta["transferred"])
         self.transferred_check.configure(state="normal")
         self._note_loaded_key = (project, date_iso)
@@ -3710,13 +3749,13 @@ class App:
         date_iso = self._selected_date_iso()
         if not name or not project or not date_iso:
             return False
-        cleaned = clamp_note(self.note_entry.get())
+        cleaned = clamp_note(self.note_entry.get("1.0", "end-1c"))
         if (project, date_iso) == self._note_loaded_key and cleaned == self._note_loaded_text:
             return False
         # Feld auf die normalisierte Form bringen (Kürzung sichtbar machen).
-        if cleaned != self.note_entry.get():
-            self.note_entry.delete(0, END)
-            self.note_entry.insert(0, cleaned)
+        if cleaned != self.note_entry.get("1.0", "end-1c"):
+            self.note_entry.delete("1.0", END)
+            self.note_entry.insert("1.0", cleaned)
         set_daily_note(self.db_conn, name, project, date_iso, cleaned)
         self._note_loaded_key = (project, date_iso)
         self._note_loaded_text = cleaned
@@ -3739,6 +3778,15 @@ class App:
         # Wochenansicht ggf. aktualisieren (Schraffur + ✓-Badge).
         if getattr(self, "_week_view_active", False):
             self._refresh_week_view()
+
+    def _on_note_return(self, _event=None) -> str:
+        """Enter im Notizfeld: speichern, aber KEINEN Zeilenumbruch einfügen.
+
+        Das Feld ist zweizeilig nur zur besseren Lesbarkeit langer Notizen; der
+        Inhalt bleibt einzeilig (``\"break\"`` unterdrückt den Standard-Umbruch).
+        """
+        self._on_note_changed()
+        return "break"
 
     def _on_note_changed(self, _event=None) -> None:
         """FocusOut/Return des Notizfeldes: speichern und Ansichten aktualisieren."""

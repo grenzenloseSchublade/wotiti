@@ -381,6 +381,39 @@ def test_pair_sessions_orphan_stop(app_instance):
     assert sessions[0]["stop_id"] == 1
 
 
+def test_note_rows_short_single_line():
+    """Kurze Notiz → genau eine Zeile mit 'Notiz:'-Präfix."""
+    from app import App
+
+    rows = App._note_rows("kurz", "    ")
+    assert rows == ["    Notiz: kurz"]
+
+
+def test_note_rows_empty_dash():
+    """Leere Notiz → Platzhalter '—'."""
+    from app import App
+
+    assert App._note_rows("", "    ") == ["    Notiz: —"]
+
+
+def test_note_rows_long_wraps_multiline():
+    """Lange Notiz wird über mehrere Zeilen umbrochen; Fortsetzung eingerückt."""
+    from app import App
+
+    note = " ".join(f"wort{i}" for i in range(44))
+    rows = App._note_rows(note, "    ")
+    assert len(rows) >= 2  # mehrzeilig
+    assert rows[0].startswith("    Notiz: ")
+    # Fortsetzungszeilen sind unter dem Notiz-Text eingerückt (kein 'Notiz:').
+    indent = len("    Notiz: ")
+    for cont in rows[1:]:
+        assert cont.startswith(" " * indent)
+        assert "Notiz:" not in cont
+    # Kein Wort geht verloren (Union der Zeilen == Originalwörter).
+    joined = " ".join(r.strip() for r in rows).replace("Notiz: ", "", 1)
+    assert joined.split() == note.split()
+
+
 def test_pair_sessions_equal_timestamp_pairs_not_orphans(app_instance):
     """Gleichzeitiger Start & Stop → Null-Dauer-Paar, kein verwaister Stop.
 
