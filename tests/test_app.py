@@ -443,6 +443,16 @@ def test_note_rows_long_wraps_multiline():
     assert joined.split() == note.split()
 
 
+def test_note_rows_wider_wraps_fewer_lines():
+    """Breiterer Default (88) bricht dieselbe Notiz in weniger Zeilen um als 56."""
+    from app import App
+
+    note = " ".join(f"wort{i}" for i in range(44))
+    wide = App._note_rows(note, "    ")  # Default width=88
+    narrow = App._note_rows(note, "    ", width=56)
+    assert len(wide) < len(narrow)
+
+
 def test_pair_sessions_equal_timestamp_pairs_not_orphans(app_instance):
     """Gleichzeitiger Start & Stop → Null-Dauer-Paar, kein verwaister Stop.
 

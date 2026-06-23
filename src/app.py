@@ -249,8 +249,9 @@ class App:
             if gx + 100 <= sx and gy + 100 <= sy:
                 master.geometry(saved_geometry)
             else:
-                # Saved position is off-screen — center instead
-                w, h = sw, sh
+                # Saved position is off-screen — recenter at the default size
+                # (not the full screen size — that would maximize the window).
+                w, h = 720, 540
                 x = max(0, (sx - w) // 2)
                 y = max(0, (sy - h) // 2)
                 master.geometry(f"{w}x{h}+{x}+{y}")
@@ -1149,13 +1150,11 @@ class App:
         win = Toplevel(self.master)
         win.title("Einstellungen")
         win.configure(bg="#C0C0C0")
-        w, h = 560, 820
-        x = self.master.winfo_x() + (self.master.winfo_width() - w) // 2
-        y = self.master.winfo_y() + (self.master.winfo_height() - h) // 2
-        win.geometry(f"{w}x{h}+{x}+{y}")
         win.transient(self.master)
-        win.wait_visibility()
-        win.grab_set()
+        # Geometrie wird am Ende aus dem tatsächlichen Inhalt berechnet
+        # (winfo_reqheight), damit das Fenster auf Windows wie Linux trotz
+        # unterschiedlicher Font-Metriken genau passt und die unteren Buttons
+        # nie abgeschnitten werden.
 
         lbl = {"bg": "#C0C0C0", "fg": "black", "font": ("MS Sans Serif", 10)}
         btn = {"bg": "#D4D0C8", "fg": "black", "font": ("MS Sans Serif", 10), "relief": "raised", "borderwidth": 2}
@@ -1603,8 +1602,10 @@ class App:
         _load_log()
 
         # ── Speichern / Abbrechen ──
+        # side="bottom": Buttonleiste am unteren Rand verankern, damit sie auch
+        # bei viel Inhalt / kleinem Bildschirm sichtbar bleibt (nicht abgeschnitten).
         action_frame = Frame(win, bg="#C0C0C0")
-        action_frame.pack(fill="x", padx=10, pady=(10, 10))
+        action_frame.pack(side="bottom", fill="x", padx=10, pady=(10, 10))
 
         def _save():
             new_db = db_var.get().strip()
@@ -1719,6 +1720,21 @@ class App:
 
         # Phase 2.6: Esc = Abbrechen.
         win.bind("<Escape>", lambda _e: win.destroy())
+
+        # Fenster an den tatsächlichen Inhalt anpassen und zentrieren. reqheight
+        # spiegelt die plattformspezifischen Font-Metriken wider, sodass nichts
+        # gestaucht und nichts (v.a. die Buttonleiste) abgeschnitten wird.
+        win.update_idletasks()
+        w = max(560, win.winfo_reqwidth())
+        h = win.winfo_reqheight()
+        sh = win.winfo_screenheight()
+        h = min(h, sh - 80)  # nie höher als der Bildschirm
+        x = self.master.winfo_x() + (self.master.winfo_width() - w) // 2
+        y = max(0, self.master.winfo_y() + (self.master.winfo_height() - h) // 2)
+        win.geometry(f"{w}x{h}+{x}+{y}")
+        win.minsize(w, min(h, 560))
+        win.wait_visibility()
+        win.grab_set()
 
     # ----- About Dialog -----
     def _open_about(self, parent=None):
@@ -3081,7 +3097,7 @@ class App:
         return f"{start} → {stop}", App._fmt_hours_hm(s["dur_h"])
 
     @staticmethod
-    def _note_rows(note: str, indent: str, width: int = 56) -> list[str]:
+    def _note_rows(note: str, indent: str, width: int = 88) -> list[str]:
         """Notiz-Zeile(n) für den Session-Viewer: bei Bedarf umbrochen.
 
         Lange Notizen (bis ~44 Wörter) werden an Wortgrenzen über mehrere Zeilen
