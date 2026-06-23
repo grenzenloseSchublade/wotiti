@@ -3058,12 +3058,18 @@ class App:
 
     @staticmethod
     def _session_times_str(s: dict) -> tuple[str, str]:
-        """(»HH:MM → HH:MM«-Text, Dauer-Text) für eine Session."""
+        """(»HH:MM → HH:MM«-Text, Dauer-Text) für eine Session.
+
+        Die Dauer wird als **H:MM** ausgegeben (echte Minuten, 60 min = 1 h) statt
+        als Dezimalstunde — 55 min sind „0:55 h", nicht „0.92 h".
+        """
         start = s["start_ts"].strftime("%H:%M") if s["start_ts"] else "…"
         stop = s["stop_ts"].strftime("%H:%M") if s["stop_ts"] else "…"
         if s["dur_h"] is None:
             return f"{start} → {stop}", "läuft"
-        return f"{start} → {stop}", f"{s['dur_h']:.2f} h"
+        total_min = round(s["dur_h"] * 60)
+        h, m = divmod(total_min, 60)
+        return f"{start} → {stop}", f"{h}:{m:02d} h"
 
     @staticmethod
     def _note_rows(note: str, indent: str, width: int = 56) -> list[str]:

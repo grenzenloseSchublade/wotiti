@@ -381,6 +381,35 @@ def test_pair_sessions_orphan_stop(app_instance):
     assert sessions[0]["stop_id"] == 1
 
 
+def test_session_times_str_duration_is_hmm():
+    """Dauer wird als H:MM (echte Minuten) ausgegeben, nicht als Dezimalstunde."""
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
+
+    from app import App
+
+    def dur(minutes):
+        s = _dt(2026, 6, 23, 9, 0)
+        e = s + _td(minutes=minutes)
+        return App._session_times_str({"start_ts": s, "stop_ts": e, "dur_h": minutes / 60.0})[1]
+
+    assert dur(55) == "0:55 h"  # früher fälschlich 0.92 h
+    assert dur(90) == "1:30 h"
+    assert dur(60) == "1:00 h"
+    assert dur(5) == "0:05 h"
+
+
+def test_session_times_str_running():
+    """Laufende Session (keine Dauer) zeigt 'läuft'."""
+    from datetime import datetime as _dt
+
+    from app import App
+
+    times, dur = App._session_times_str({"start_ts": _dt(2026, 6, 23, 9, 0), "stop_ts": None, "dur_h": None})
+    assert dur == "läuft"
+    assert "→" in times
+
+
 def test_note_rows_short_single_line():
     """Kurze Notiz → genau eine Zeile mit 'Notiz:'-Präfix."""
     from app import App
