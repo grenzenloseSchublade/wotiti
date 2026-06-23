@@ -837,31 +837,61 @@ def close_stale_breaks(conn: sqlite3.Connection | None = None) -> int:
             cursor.close()
 
 
-def pair_sessions_fifo(events):
-    """Paart ``(event_type, datetime)``-Events per FIFO-Queue zu Sessions.
+def pair_sessions_lifo(events):
+    """Paart ``(event_type, datetime)``-Events per **LIFO-Stack** zu Sessions.
 
     ``events``: Iterable von ``(event_type, datetime)`` (gleiche (user, project)-
-    Gruppe). Wird intern stabil nach ``(Zeitstempel, Start-vor-Stop)`` sortiert
-    und dann gepaart: jeder Stop bindet den **frühesten offenen Start**. Damit
-    gilt exakt dieselbe Paarungs-Semantik wie in der Anzeige
-    (``App._pair_day_sessions``) — Eintragsliste und alle Summen/Dauern stimmen
-    so auch bei überschneidenden Sessions desselben Projekts überein.
+    Gruppe). Wird stabil nach ``(Zeitstempel, Start-vor-Stop)`` sortiert; jeder
+    Stop bindet den **jüngsten** offenen Start (``stack.pop()``).
 
-    Yields ``(start_dt, stop_dt)``: ``stop_dt=None`` für offene Sessions,
+    Warum LIFO statt FIFO für Dauer-Berechnungen: Die Dauer-Funktionen scannen
+    ALLE Events eines Projekts über alle Tage. Ein vergessener/verwaister Start
+    (kein Stopp) bleibt mit LIFO am Boden des Stacks liegen und wird nie von
+    einem viel späteren Stopp einer anderen Session „eingefangen". Damit gibt es
+    keine tagübergreifenden Mega-Paare mehr (die sonst bis zu 24h auf
+    Zwischentage warfen) und die Paarung verschiebt sich nicht. Echte
+    Mitternachts-Sessions bleiben korrekt gepaart (jüngster offener Start bindet
+    den Folgetag-Stopp).
+
+    Yields ``(start_dt, stop_dt)``: ``stop_dt=None`` für offene/verwaiste Starts,
     ``start_dt=None`` für verwaiste Stops.
     """
     ordered = sorted(events, key=lambda e: (e[1], 0 if e[0] == "start" else 1))
-    pending: deque = deque()
+    stack: list = []
     for etype, ts in ordered:
         if etype == "start":
-            pending.append(ts)
+            stack.append(ts)
         elif etype == "stop":
-            if pending:
-                yield pending.popleft(), ts
+            if stack:
+                yield stack.pop(), ts
             else:
                 yield None, ts
-    while pending:
-        yield pending.popleft(), None
+    for ts in stack:  # übrig gebliebene (verwaiste) Starts
+        yield ts, None
+
+
+def merge_intervals_seconds(intervals) -> float:
+    """Summiert die **Vereinigung** von ``(start_dt, stop_dt)``-Intervallen (s).
+
+    Überlappende Intervalle werden zusammengeführt, statt ihre Längen zu
+    addieren — so zählt überlappende Zeit nie doppelt, und die Vereinigung von
+    Intervallen, die in ein 24h-Tagesfenster geschnitten wurden, kann strukturell
+    nie über 24h liegen.
+    """
+    ivs = sorted(iv for iv in intervals if iv[0] is not None and iv[1] is not None and iv[1] > iv[0])
+    if not ivs:
+        return 0.0
+    total = 0.0
+    cur_start, cur_end = ivs[0]
+    for s, e in ivs[1:]:
+        if s <= cur_end:
+            if e > cur_end:
+                cur_end = e
+        else:
+            total += (cur_end - cur_start).total_seconds()
+            cur_start, cur_end = s, e
+    total += (cur_end - cur_start).total_seconds()
+    return total
 
 
 def calculate_duration(project: str = "1", name: str = "Hans", conn: sqlite3.Connection | None = None) -> float:
@@ -896,12 +926,9 @@ def calculate_duration(project: str = "1", name: str = "Hans", conn: sqlite3.Con
             except ValueError:
                 continue
 
-        total_duration = 0.0
-        for start_time, stop_time in pair_sessions_fifo(parsed):
-            if start_time is not None and stop_time is not None:
-                total_duration += (stop_time - start_time).total_seconds()
-
-        return total_duration
+        # LIFO-Paarung (robust gegen verwaiste Starts) + Vereinigung der
+        # Intervalle (überlappende Sessions zählen nicht doppelt).
+        return merge_intervals_seconds(pair_sessions_lifo(parsed))
     except (Error, ValueError) as e:
         logger.error("Error calculating duration: %s", e)
         return 0
@@ -965,17 +992,19 @@ def calculate_daily_duration(
 
         day_start = datetime.combine(target_day, datetime.min.time())
         day_end = day_start + _td(days=1)
-        total_seconds = 0.0
-        for start_time, stop_time in pair_sessions_fifo(parsed):
+        # Auf den Tag zugeschnittene Intervalle sammeln und als Vereinigung
+        # summieren: kein Doppelzählen bei Überschneidung, struktureller 24h-
+        # Deckel, und LIFO verhindert tagübergreifende Mega-Paare.
+        day_intervals = []
+        for start_time, stop_time in pair_sessions_lifo(parsed):
             if start_time is None or stop_time is None:
                 continue
-            # Anteil dieser Session, der in ``target_day`` fällt (Midnight-Split).
             chunk_start = max(start_time, day_start)
             chunk_end = min(stop_time, day_end)
             if chunk_end > chunk_start:
-                total_seconds += (chunk_end - chunk_start).total_seconds()
+                day_intervals.append((chunk_start, chunk_end))
 
-        return total_seconds
+        return merge_intervals_seconds(day_intervals)
     except Error as e:
         logger.error("Error calculating daily duration: %s", e)
         return 0
@@ -1082,16 +1111,22 @@ def _hours_by_project_day(conn, user_id, days, project_filter=None) -> dict[str,
             continue
         events_by_project.setdefault(project, []).append((event_type, ts))
 
+    # Zugeschnittene Intervalle je (Tag, Projekt) sammeln, dann als Vereinigung
+    # summieren (LIFO-Paarung + Union → robust gegen Waisen, kein Doppelzählen,
+    # max. 24h/Tag).
+    day_proj_intervals: dict[tuple, list] = {}
     for project, evs in events_by_project.items():
-        for start_time, stop_time in pair_sessions_fifo(evs):
+        for start_time, stop_time in pair_sessions_lifo(evs):
             if start_time is None or stop_time is None:
                 continue
             for iso, day_start, day_end in day_bounds:
                 chunk_start = max(start_time, day_start)
                 chunk_end = min(stop_time, day_end)
                 if chunk_end > chunk_start:
-                    secs = (chunk_end - chunk_start).total_seconds()
-                    out[iso][project] = out[iso].get(project, 0.0) + secs
+                    day_proj_intervals.setdefault((iso, project), []).append((chunk_start, chunk_end))
+
+    for (iso, project), ivs in day_proj_intervals.items():
+        out[iso][project] = merge_intervals_seconds(ivs)
     return out
 
 
@@ -1157,42 +1192,52 @@ def compute_last_n_days_hours_by_project(
 
 
 def close_stale_sessions(conn: sqlite3.Connection | None) -> int:
-    """Close orphaned start events that have no matching stop (from unclean shutdown).
+    """Schließt verwaiste Start-Events ohne passenden Stopp (z. B. nach Absturz).
 
-    Returns the number of sessions closed.
+    Paart je (user, project) per LIFO-Stack über alle Events und schließt JEDEN
+    übrig gebliebenen offenen Start mit einem Null-Dauer-Stopp am selben
+    Zeitstempel. Im Gegensatz zur früheren ``NOT EXISTS (späterer Stopp)``-Prüfung
+    erkennt das auch *verschachtelte Doppel-Starts* (start, start, stop, stop),
+    bei denen ein Start unpaarig bleibt, obwohl es einen späteren Stopp gibt.
+    Idempotent: ist alles gepaart, passiert nichts. Gibt die Anzahl geschlossener
+    Sessions zurück.
     """
     if not conn:
         return 0
     closed = 0
     try:
+        from collections import defaultdict
+
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT e.id, e.user_id, e.project, e.timestamp, e.date
-            FROM events e
-            WHERE e.event_type = 'start'
-              AND NOT EXISTS (
-                  SELECT 1 FROM events e2
-                  WHERE e2.user_id = e.user_id
-                    AND e2.project = e.project
-                    AND e2.event_type = 'stop'
-                    AND e2.timestamp > e.timestamp
-              )
-        """)
-        orphans = cursor.fetchall()
-        for event_id, user_id, project, ts_str, date_str in orphans:
-            try:
-                ts = datetime.strptime(ts_str, TIMESTAMP_FORMAT)
-            except ValueError:
-                ts = datetime.now()
+        cursor.execute(
+            "SELECT id, user_id, project, event_type, timestamp, date FROM events ORDER BY user_id, project, timestamp"
+        )
+        groups: dict[tuple, list] = defaultdict(list)
+        for eid, uid, project, etype, ts_str, date_str in cursor.fetchall():
+            groups[(uid, project)].append((eid, etype, ts_str, date_str))
+
+        leftover_starts = []  # (user_id, project, ts_str, date_str)
+        for (uid, project), evs in groups.items():
+            # Zeitstempel-String ist ISO-sortierbar; Start vor Stop bei Gleichstand.
+            evs.sort(key=lambda r: (r[2], 0 if r[1] == "start" else 1, r[0]))
+            stack = []
+            for eid, etype, ts_str, date_str in evs:
+                if etype == "start":
+                    stack.append((eid, ts_str, date_str))
+                elif etype == "stop":
+                    if stack:
+                        stack.pop()
+                    # verwaister Stop: ignorieren
+            for eid, ts_str, date_str in stack:
+                leftover_starts.append((uid, project, ts_str, date_str))
+
+        for uid, project, ts_str, date_str in leftover_starts:
             cursor.execute(
-                """
-                INSERT INTO events (user_id, project, event_type, timestamp, date)
-                VALUES (?, ?, 'stop', ?, ?)
-            """,
-                (user_id, project, ts.strftime(TIMESTAMP_FORMAT), date_str),
+                "INSERT INTO events (user_id, project, event_type, timestamp, date) VALUES (?, ?, 'stop', ?, ?)",
+                (uid, project, ts_str, date_str),
             )
             closed += 1
-            logger.info("Closed stale session: event #%s (user_id=%s, project=%s)", event_id, user_id, project)
+            logger.info("Closed stale session: open start at %s (user_id=%s, project=%s)", ts_str, uid, project)
         if closed:
             conn.commit()
     except Error as e:

@@ -110,11 +110,11 @@ def test_calculate_duration(db_conn):
     assert duration >= 0
 
 
-def test_pair_sessions_fifo_overlap():
-    """FIFO-Helper paart überschneidende Sessions wie die Anzeige (09-11, 10-12)."""
+def test_pair_sessions_lifo_overlap():
+    """LIFO-Helper: jüngster offener Start bindet den Stop (nested 09-12, 10-11)."""
     from datetime import datetime as _dt
 
-    from db_helper import pair_sessions_fifo
+    from db_helper import pair_sessions_lifo
 
     evs = [
         ("start", _dt(2026, 6, 23, 9, 0)),
@@ -122,18 +122,31 @@ def test_pair_sessions_fifo_overlap():
         ("stop", _dt(2026, 6, 23, 11, 0)),
         ("stop", _dt(2026, 6, 23, 12, 0)),
     ]
-    pairs = list(pair_sessions_fifo(evs))
-    assert pairs == [
-        (_dt(2026, 6, 23, 9, 0), _dt(2026, 6, 23, 11, 0)),
-        (_dt(2026, 6, 23, 10, 0), _dt(2026, 6, 23, 12, 0)),
+    pairs = set(pair_sessions_lifo(evs))
+    assert pairs == {
+        (_dt(2026, 6, 23, 10, 0), _dt(2026, 6, 23, 11, 0)),
+        (_dt(2026, 6, 23, 9, 0), _dt(2026, 6, 23, 12, 0)),
+    }
+
+
+def test_merge_intervals_seconds_union():
+    """merge_intervals_seconds zählt überlappende Intervalle nur einmal (Union)."""
+    from datetime import datetime as _dt
+
+    from db_helper import merge_intervals_seconds
+
+    ivs = [
+        (_dt(2026, 6, 23, 9, 0), _dt(2026, 6, 23, 12, 0)),  # 3h
+        (_dt(2026, 6, 23, 10, 0), _dt(2026, 6, 23, 11, 0)),  # genested
+        (_dt(2026, 6, 23, 13, 0), _dt(2026, 6, 23, 14, 0)),  # disjunkt 1h
     ]
+    assert merge_intervals_seconds(ivs) == 4 * 3600  # Union: 3h + 1h
 
 
-def test_daily_duration_matches_fifo_on_overlap(db_conn):
-    """Regression #9: Tages-Dauer nutzt FIFO → stimmt mit der Eintragsliste überein.
+def test_daily_duration_union_on_overlap(db_conn):
+    """Überschneidende Sessions zählen als Vereinigung, nicht doppelt.
 
-    Überschneidende Sessions 09-11 (2h) + 10-12 (2h) ergeben 4h (= 14400s),
-    statt der alten Stack-of-1-Summe von nur 1h.
+    09-11 (2h) + 10-12 (2h) überlappen 10-11 → reale Arbeitszeit 09-12 = 3h.
     """
     from datetime import datetime as _dt
 
@@ -147,7 +160,85 @@ def test_daily_duration_matches_fifo_on_overlap(db_conn):
     log_stop(project="P", name="test_user", timestamp=_dt(2026, 6, 23, 12, 0), conn=db_conn)
 
     secs = calculate_daily_duration(project="P", name="test_user", date="23-06-2026", conn=db_conn)
-    assert secs == 4 * 3600
+    assert secs == 3 * 3600
+
+
+def test_daily_duration_orphan_no_inflation(db_conn):
+    """Regression >22h: ein verwaister Start darf keine Folgetage aufblähen.
+
+    Vergessener Start am 20.06 (kein Stopp) + zwei normale 8h-Tage → 0/8/8h,
+    nicht 15/32/17h (FIFO-Cross-Day-Mega-Paar).
+    """
+    from datetime import datetime as _dt
+
+    from db_helper import calculate_daily_duration, create_events_table
+
+    create_events_table(db_conn)
+    check_user(db_conn, "test_user")
+    log_start(project="P", name="test_user", timestamp=_dt(2026, 6, 20, 9, 0), conn=db_conn)  # Waise
+    log_start(project="P", name="test_user", timestamp=_dt(2026, 6, 21, 9, 0), conn=db_conn)
+    log_stop(project="P", name="test_user", timestamp=_dt(2026, 6, 21, 17, 0), conn=db_conn)
+    log_start(project="P", name="test_user", timestamp=_dt(2026, 6, 22, 9, 0), conn=db_conn)
+    log_stop(project="P", name="test_user", timestamp=_dt(2026, 6, 22, 17, 0), conn=db_conn)
+
+    d = lambda iso: calculate_daily_duration(project="P", name="test_user", date=iso, conn=db_conn)
+    assert d("20-06-2026") == 0
+    assert d("21-06-2026") == 8 * 3600
+    assert d("22-06-2026") == 8 * 3600
+
+
+def test_daily_duration_never_exceeds_24h(db_conn):
+    """Invariante: eine Tages-Dauer kann strukturell nie > 24h sein."""
+    from datetime import datetime as _dt
+
+    from db_helper import calculate_daily_duration, create_events_table
+
+    create_events_table(db_conn)
+    check_user(db_conn, "test_user")
+    # Stark überlappende Sessions am selben Tag.
+    log_start(project="P", name="test_user", timestamp=_dt(2026, 6, 23, 0, 0), conn=db_conn)
+    log_start(project="P", name="test_user", timestamp=_dt(2026, 6, 23, 0, 30), conn=db_conn)
+    log_stop(project="P", name="test_user", timestamp=_dt(2026, 6, 23, 23, 30), conn=db_conn)
+    log_stop(project="P", name="test_user", timestamp=_dt(2026, 6, 23, 23, 59), conn=db_conn)
+
+    secs = calculate_daily_duration(project="P", name="test_user", date="23-06-2026", conn=db_conn)
+    assert secs <= 24 * 3600
+
+
+def test_close_stale_sessions_interleaved_double_open(db_conn):
+    """close_stale schließt auch einen verschachtelten Doppel-Start (start,start,stop).
+
+    Der frühere NOT-EXISTS-Detektor übersah das (beide Starts haben einen
+    späteren Stopp). LIFO erkennt den unpaarigen Start und schließt ihn.
+    """
+    from datetime import datetime as _dt
+
+    from db_helper import calculate_daily_duration, close_stale_sessions, create_events_table
+
+    create_events_table(db_conn)
+    check_user(db_conn, "test_user")
+    log_start(project="P", name="test_user", timestamp=_dt(2026, 6, 23, 9, 0), conn=db_conn)
+    log_start(project="P", name="test_user", timestamp=_dt(2026, 6, 23, 10, 0), conn=db_conn)
+    log_stop(project="P", name="test_user", timestamp=_dt(2026, 6, 23, 11, 0), conn=db_conn)
+
+    assert close_stale_sessions(db_conn) == 1
+    # Erneuter Lauf ist idempotent.
+    assert close_stale_sessions(db_conn) == 0
+    # Danach keine offene Session mehr → Dauer = reale 1h (10-11), Waise = 0.
+    assert calculate_daily_duration(project="P", name="test_user", date="23-06-2026", conn=db_conn) == 3600
+
+
+def test_close_stale_sessions_single_orphan(db_conn):
+    """Klassischer Fall: ein Start ohne Stopp wird mit Null-Dauer geschlossen."""
+    from datetime import datetime as _dt
+
+    from db_helper import close_stale_sessions, create_events_table
+
+    create_events_table(db_conn)
+    check_user(db_conn, "test_user")
+    log_start(project="P", name="test_user", timestamp=_dt(2026, 6, 23, 9, 0), conn=db_conn)
+    assert close_stale_sessions(db_conn) == 1
+    assert close_stale_sessions(db_conn) == 0
 
 
 def test_get_all_users(db_conn):
