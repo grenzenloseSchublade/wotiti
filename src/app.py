@@ -79,6 +79,7 @@ from utils import (
     DATABASE_PATH,
     PATH_TO_DATA,
     PATH_TO_SOUNDS,
+    POMODORO_INT_RANGES,
     clamp_note,
     load_config,
     save_config,
@@ -453,11 +454,23 @@ class App:
         # Configure entry frame columns — ensure combobox/entry columns are flexible.
         # Stretch geht an Name (1), Datum (3) und Projekt (7); Projekt bildet den
         # rechten Abschluss.
+        # Spalte 5 enthält ausschließlich den optionalen "+"-Button. Ohne
+        # reservierte Mindestbreite kollabiert grid_remove() die Spalte auf 0
+        # und beim Wiedereinblenden (grid()) reflowen die stretchenden Spalten
+        # (1/3/7) — die ganze Zeile verschöbe sich bei jedem Wechsel
+        # heute<->Vergangenheit. Daher feste Breite = Button-Bedarf + padx
+        # (3px je Seite) reservieren, damit die Zelle leer wie befüllt gleich
+        # breit bleibt.
+        self.entry_frame.update_idletasks()
+        plus_w = self.add_event_button.winfo_reqwidth()
+        plus_footprint = (plus_w if plus_w > 1 else 27) + 6
         for col in range(8):
             if col == 3:
                 self.entry_frame.grid_columnconfigure(col, weight=1, minsize=80)
             elif col in (1, 7):
                 self.entry_frame.grid_columnconfigure(col, weight=2, minsize=100)
+            elif col == 5:
+                self.entry_frame.grid_columnconfigure(col, weight=0, minsize=plus_footprint)
             else:
                 self.entry_frame.grid_columnconfigure(col, weight=0)
 
@@ -487,6 +500,7 @@ class App:
             command=self._on_transferred_toggled,
             bg="#C0C0C0",
             fg="black",
+            selectcolor="#C0C0C0",
             activebackground="#C0C0C0",
             font=("MS Sans Serif", 9),
         )
@@ -578,7 +592,7 @@ class App:
         self._row_entries: list[dict | None] = []
 
         self.scrollbar_listbox = Scrollbar(
-            self.db_content_frame, orient=VERTICAL, command=self.db_content_listbox.yview, bg="#C0C0C0", width=20
+            self.db_content_frame, orient=VERTICAL, command=self.db_content_listbox.yview, bg="#C0C0C0", width=16
         )
         self.scrollbar_listbox.grid(row=0, column=1, sticky="ns")
         self.db_content_listbox["yscrollcommand"] = self.scrollbar_listbox.set
@@ -624,7 +638,7 @@ class App:
         self.console.grid(row=1, column=0, sticky="nsew")
 
         self.scrollbar = Scrollbar(
-            self.console_frame, orient=VERTICAL, command=self.console.yview, bg="#C0C0C0", width=20
+            self.console_frame, orient=VERTICAL, command=self.console.yview, bg="#C0C0C0", width=16
         )
         self.scrollbar.grid(row=1, column=1, sticky="ns")
         self.console["yscrollcommand"] = self.scrollbar.set
@@ -1068,6 +1082,7 @@ class App:
         win.transient(self.master)
         win.wait_visibility()
         win.grab_set()
+        win.bind("<Escape>", lambda _e: win.destroy())
 
         label_config = {"bg": "#C0C0C0", "fg": "black", "font": ("MS Sans Serif", 10)}
         button_config = {
@@ -1085,7 +1100,7 @@ class App:
 
         user_listbox = Listbox(list_frame, bg="#FFFFFF", fg="black", font=("MS Sans Serif", 10))
         user_listbox.pack(side="left", fill="both", expand=True)
-        sb = Scrollbar(list_frame, orient=VERTICAL, command=user_listbox.yview, bg="#C0C0C0")
+        sb = Scrollbar(list_frame, orient=VERTICAL, command=user_listbox.yview, bg="#C0C0C0", width=16)
         sb.pack(side="right", fill="y")
         user_listbox["yscrollcommand"] = sb.set
 
@@ -1160,10 +1175,12 @@ class App:
         btn = {"bg": "#D4D0C8", "fg": "black", "font": ("MS Sans Serif", 10), "relief": "raised", "borderwidth": 2}
 
         # ── Datenbank ──
+        # Reihenfolge der Sektionen wird am Ende über _pack_settings_sections()
+        # festgelegt (task-basiert statt nach Code-Historie). Daher hier KEIN
+        # .pack() bei der Erstellung — nur Frame + Inhalt aufbauen.
         db_frame = LabelFrame(
             win, text="Datenbank", bg="#C0C0C0", fg="black", font=("MS Sans Serif", 10, "bold"), padx=8, pady=8
         )
-        db_frame.pack(fill="x", padx=10, pady=(10, 5))
 
         Label(db_frame, text="Aktive Datenbank:", **lbl).grid(row=0, column=0, sticky="w", pady=2)
         db_var = Combobox(db_frame, font=("MS Sans Serif", 10), width=35)
@@ -1277,7 +1294,6 @@ class App:
         user_frame = LabelFrame(
             win, text="Benutzer & Projekt", bg="#C0C0C0", fg="black", font=("MS Sans Serif", 10, "bold"), padx=8, pady=8
         )
-        user_frame.pack(fill="x", padx=10, pady=5)
 
         Label(user_frame, text="Standard-Benutzer:", **lbl).grid(row=0, column=0, sticky="w", pady=2)
         default_user_var = Combobox(user_frame, font=("MS Sans Serif", 10), width=20)
@@ -1298,14 +1314,13 @@ class App:
         # ── Dashboard ──
         dash_frame = LabelFrame(
             win,
-            text="Auswertung (Dashboard)",
+            text="Auswertung",
             bg="#C0C0C0",
             fg="black",
             font=("MS Sans Serif", 10, "bold"),
             padx=8,
             pady=8,
         )
-        dash_frame.pack(fill="x", padx=10, pady=5)
 
         Label(dash_frame, text="Port:", **lbl).grid(row=0, column=0, sticky="w", pady=2)
         port_var = Spinbox(
@@ -1334,38 +1349,36 @@ class App:
             dash_frame, textvariable=holiday_subdiv_var, font=("MS Sans Serif", 10), width=10, bg="#FFFFFF", fg="black"
         ).grid(row=3, column=1, padx=5, pady=2, sticky="w")
 
-        # Start/Stop-Liste: Gruppierung nach Projekt (Default) vs. chronologisch.
-        entry_chrono_var = BooleanVar(value=bool(self.config.get("entry_list_chronological", False)))
-        chrono_check = Checkbutton(
-            dash_frame,
-            text="Einträge chronologisch statt nach Projekt gruppieren",
-            variable=entry_chrono_var,
-            bg="#C0C0C0",
-            fg="black",
-            selectcolor="#C0C0C0",
-            activebackground="#C0C0C0",
-            font=("MS Sans Serif", 10),
-        )
-        chrono_check.grid(row=4, column=0, columnspan=2, sticky="w", pady=2)
-        # Bei laufender Session sperren: die Umstellung der Session-Darstellung
-        # soll nicht mitten in einer Session erfolgen (sonst wirkt sie verworfen).
-        if sessions_active:
-            chrono_check.config(state="disabled", fg="#888888", disabledforeground="#888888")
-            Label(
+        # Statistik-Optionen: wirken auf die Durchschnitts-/Trend-Auswertungen.
+        # Bisher nur per Hand-Edit der config.json erreichbar (cfg-4) — jetzt im
+        # Dialog, da sie konzeptuell zur Auswertung gehören (passend zu den
+        # Feiertagsfeldern darüber).
+        exclude_weekends_var = BooleanVar(value=bool(self.config.get("exclude_weekends_in_averages", True)))
+        include_holidays_var = BooleanVar(value=bool(self.config.get("include_holidays_in_exclusion", True)))
+        count_weekend_work_var = BooleanVar(value=bool(self.config.get("count_weekend_work", False)))
+        for _row, (_text, _var) in enumerate(
+            (
+                ("Wochenenden aus Durchschnitten ausschließen", exclude_weekends_var),
+                ("Feiertage ebenfalls ausschließen", include_holidays_var),
+                ("Wochenend-Arbeit in Auswertungen zählen", count_weekend_work_var),
+            ),
+            start=4,
+        ):
+            Checkbutton(
                 dash_frame,
-                text="Während einer laufenden Session nicht änderbar — bitte zuerst stoppen.",
+                text=_text,
+                variable=_var,
                 bg="#C0C0C0",
-                fg="#B00020",
-                font=("MS Sans Serif", 9, "italic"),
-                wraplength=480,
-                justify="left",
-            ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(0, 2))
+                fg="black",
+                selectcolor="#C0C0C0",
+                activebackground="#C0C0C0",
+                font=("MS Sans Serif", 10),
+            ).grid(row=_row, column=0, columnspan=2, sticky="w", pady=2)
 
         # ── Pomodoro ──
         pomodoro_frame = LabelFrame(
-            win, text="Pomodoro & Pause", bg="#C0C0C0", fg="black", font=("MS Sans Serif", 10, "bold"), padx=8, pady=8
+            win, text="Pomodoro & Pausen", bg="#C0C0C0", fg="black", font=("MS Sans Serif", 10, "bold"), padx=8, pady=8
         )
-        pomodoro_frame.pack(fill="x", padx=10, pady=5)
 
         pomodoro_enabled_var = BooleanVar(value=self.pomodoro_enabled)
         pomodoro_auto_var = BooleanVar(value=self.pomodoro_auto_break)
@@ -1382,9 +1395,16 @@ class App:
             font=("MS Sans Serif", 10),
         ).grid(row=0, column=0, columnspan=2, sticky="w", pady=2)
 
+        # Spinbox-Grenzen aus der Single Source of Truth (POMODORO_INT_RANGES),
+        # damit UI, Save-Check und Loader denselben Bereich verwenden.
+        _work_lo, _work_hi, _ = POMODORO_INT_RANGES["pomodoro_work_minutes"]
+        _break_lo, _break_hi, _ = POMODORO_INT_RANGES["pomodoro_break_minutes"]
+        _long_lo, _long_hi, _ = POMODORO_INT_RANGES["pomodoro_long_break_minutes"]
+        _every_lo, _every_hi, _ = POMODORO_INT_RANGES["pomodoro_long_break_every"]
+
         Label(pomodoro_frame, text="Arbeitszeit (min):", **lbl).grid(row=1, column=0, sticky="w", pady=2)
         pomodoro_work_var = Spinbox(
-            pomodoro_frame, from_=1, to=120, width=8, font=("MS Sans Serif", 10), bg="#FFFFFF", fg="black"
+            pomodoro_frame, from_=_work_lo, to=_work_hi, width=8, font=("MS Sans Serif", 10), bg="#FFFFFF", fg="black"
         )
         pomodoro_work_var.grid(row=1, column=1, padx=5, pady=2, sticky="w")
         pomodoro_work_var.delete(0, END)
@@ -1392,7 +1412,7 @@ class App:
 
         Label(pomodoro_frame, text="Kurze Pause (min):", **lbl).grid(row=2, column=0, sticky="w", pady=2)
         pomodoro_break_var = Spinbox(
-            pomodoro_frame, from_=1, to=60, width=8, font=("MS Sans Serif", 10), bg="#FFFFFF", fg="black"
+            pomodoro_frame, from_=_break_lo, to=_break_hi, width=8, font=("MS Sans Serif", 10), bg="#FFFFFF", fg="black"
         )
         pomodoro_break_var.grid(row=2, column=1, padx=5, pady=2, sticky="w")
         pomodoro_break_var.delete(0, END)
@@ -1400,7 +1420,7 @@ class App:
 
         Label(pomodoro_frame, text="Lange Pause (min):", **lbl).grid(row=3, column=0, sticky="w", pady=2)
         pomodoro_long_break_var = Spinbox(
-            pomodoro_frame, from_=1, to=120, width=8, font=("MS Sans Serif", 10), bg="#FFFFFF", fg="black"
+            pomodoro_frame, from_=_long_lo, to=_long_hi, width=8, font=("MS Sans Serif", 10), bg="#FFFFFF", fg="black"
         )
         pomodoro_long_break_var.grid(row=3, column=1, padx=5, pady=2, sticky="w")
         pomodoro_long_break_var.delete(0, END)
@@ -1408,30 +1428,32 @@ class App:
 
         Label(pomodoro_frame, text="Lange Pause alle N:", **lbl).grid(row=4, column=0, sticky="w", pady=2)
         pomodoro_every_var = Spinbox(
-            pomodoro_frame, from_=2, to=12, width=8, font=("MS Sans Serif", 10), bg="#FFFFFF", fg="black"
+            pomodoro_frame, from_=_every_lo, to=_every_hi, width=8, font=("MS Sans Serif", 10), bg="#FFFFFF", fg="black"
         )
         pomodoro_every_var.grid(row=4, column=1, padx=5, pady=2, sticky="w")
         pomodoro_every_var.delete(0, END)
         pomodoro_every_var.insert(0, str(self.pomodoro_long_break_every))
 
-        Label(pomodoro_frame, text="Auto-Stop bei Idle (min, 0=aus):", **lbl).grid(row=5, column=0, sticky="w", pady=2)
-        idle_timeout_var = Spinbox(
-            pomodoro_frame, from_=0, to=1440, width=8, font=("MS Sans Serif", 10), bg="#FFFFFF", fg="black"
-        )
-        idle_timeout_var.grid(row=5, column=1, padx=5, pady=2, sticky="w")
-        idle_timeout_var.delete(0, END)
-        idle_timeout_var.insert(0, str(self.idle_timeout_minutes))
+        # Hinweis: "Auto-Stop bei Idle" wurde in die Sektion "Zeiterfassung &
+        # Anzeige" verschoben (SO-3) — es ist von der Pomodoro-Technik
+        # unabhängig und wirkt auch bei deaktiviertem Pomodoro.
 
-        Checkbutton(
+        # POM-04: Diese Checkbox steuert NICHT den Pausenstart (der erfolgt bei
+        # aktivem Pomodoro immer), sondern ob die Session NACH der Pause
+        # automatisch fortgesetzt wird (_finish_break). Label entsprechend
+        # benannt, damit es das tatsächliche Verhalten beschreibt.
+        _auto_resume_cb = Checkbutton(
             pomodoro_frame,
-            text="Auto-Pause",
+            text="Nach Pause automatisch fortsetzen",
             variable=pomodoro_auto_var,
             bg="#C0C0C0",
             fg="black",
             selectcolor="#C0C0C0",
             activebackground="#C0C0C0",
             font=("MS Sans Serif", 10),
-        ).grid(row=0, column=2, columnspan=2, sticky="w", pady=2)
+        )
+        _auto_resume_cb.grid(row=0, column=2, columnspan=2, sticky="w", pady=2)
+        _ToolTip(_auto_resume_cb, "Session nach Ablauf einer Pomodoro-Pause automatisch weiterlaufen lassen")
 
         Checkbutton(
             pomodoro_frame,
@@ -1551,17 +1573,66 @@ class App:
 
         pomodoro_frame.grid_columnconfigure(3, weight=1)
 
+        # ── Zeiterfassung & Anzeige ──
+        # Bündelt verhaltensbezogene Optionen, die unabhängig von Pomodoro und
+        # vom Dashboard sind: Auto-Stop bei Inaktivität (SO-3) und die
+        # Darstellung der Start/Stop-Liste (SO-4).
+        time_frame = LabelFrame(
+            win,
+            text="Zeiterfassung & Anzeige",
+            bg="#C0C0C0",
+            fg="black",
+            font=("MS Sans Serif", 10, "bold"),
+            padx=8,
+            pady=8,
+        )
+
+        Label(time_frame, text="Auto-Stop bei Idle (min, 0=aus):", **lbl).grid(row=0, column=0, sticky="w", pady=2)
+        idle_timeout_var = Spinbox(
+            time_frame, from_=0, to=1440, width=8, font=("MS Sans Serif", 10), bg="#FFFFFF", fg="black"
+        )
+        idle_timeout_var.grid(row=0, column=1, padx=5, pady=2, sticky="w")
+        idle_timeout_var.delete(0, END)
+        idle_timeout_var.insert(0, str(self.idle_timeout_minutes))
+
+        # Start/Stop-Liste: Gruppierung nach Projekt (Default) vs. chronologisch.
+        entry_chrono_var = BooleanVar(value=bool(self.config.get("entry_list_chronological", False)))
+        chrono_check = Checkbutton(
+            time_frame,
+            text="Einträge chronologisch statt nach Projekt gruppieren",
+            variable=entry_chrono_var,
+            bg="#C0C0C0",
+            fg="black",
+            selectcolor="#C0C0C0",
+            activebackground="#C0C0C0",
+            font=("MS Sans Serif", 10),
+        )
+        chrono_check.grid(row=1, column=0, columnspan=2, sticky="w", pady=2)
+        # Bei laufender Session sperren: die Umstellung der Session-Darstellung
+        # soll nicht mitten in einer Session erfolgen (sonst wirkt sie verworfen).
+        if sessions_active:
+            chrono_check.config(state="disabled", fg="#888888", disabledforeground="#888888")
+            Label(
+                time_frame,
+                text="Während einer laufenden Session nicht änderbar — bitte zuerst stoppen.",
+                bg="#C0C0C0",
+                fg="#B00020",
+                font=("MS Sans Serif", 9, "italic"),
+                wraplength=480,
+                justify="left",
+            ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(0, 2))
+        time_frame.grid_columnconfigure(1, weight=1)
+
         # ── Entwickler ──
         dev_frame = LabelFrame(
             win, text="Entwickler", bg="#C0C0C0", fg="black", font=("MS Sans Serif", 10, "bold"), padx=8, pady=8
         )
-        dev_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
         log_text = Text(
             dev_frame, wrap="word", state="disabled", height=8, bg="black", fg="#00ff00", font=("Courier", 9)
         )
         log_text.grid(row=0, column=0, sticky="nsew")
-        log_scroll = Scrollbar(dev_frame, orient="vertical", command=log_text.yview, bg="#C0C0C0", width=14)
+        log_scroll = Scrollbar(dev_frame, orient="vertical", command=log_text.yview, bg="#C0C0C0", width=16)
         log_scroll.grid(row=0, column=1, sticky="ns")
         log_text["yscrollcommand"] = log_scroll.set
         dev_frame.grid_rowconfigure(0, weight=1)
@@ -1601,6 +1672,15 @@ class App:
 
         _load_log()
 
+        # ── Sektionen in task-basierter Reihenfolge packen (SO-9) ──
+        # Top-to-bottom nach Änderungshäufigkeit: häufig angepasste Optionen
+        # oben, einmalig/gesperrtes (Datenbank) sowie das Diagnose-Log
+        # (Entwickler) unten. Das Entwickler-Log wird bewusst OHNE expand=True
+        # gepackt (SO-2), damit es nicht die gesamte Dialoghöhe einnimmt.
+        sections = [user_frame, pomodoro_frame, time_frame, dash_frame, db_frame, dev_frame]
+        for i, section in enumerate(sections):
+            section.pack(fill="x", padx=10, pady=(10, 5) if i == 0 else 5)
+
         # ── Speichern / Abbrechen ──
         # side="bottom": Buttonleiste am unteren Rand verankern, damit sie auch
         # bei viel Inhalt / kleinem Bildschirm sichtbar bleibt (nicht abgeschnitten).
@@ -1622,15 +1702,21 @@ class App:
                 messagebox.showwarning("Ungültiger Port", "Port muss zwischen 1024 und 65535 liegen.", parent=win)
                 return
 
+            # Range-Validierung gegen die Single Source of Truth (POMODORO_INT_RANGES),
+            # damit getippte Werte nicht gespeichert und beim nächsten Start still
+            # auf den Default zurückgesetzt werden (POM-03).
             numeric_fields = [
-                (pomodoro_work_var.get().strip(), "Arbeitszeit"),
-                (pomodoro_break_var.get().strip(), "Kurze Pause"),
-                (pomodoro_long_break_var.get().strip(), "Lange Pause"),
-                (pomodoro_every_var.get().strip(), "Lange Pause alle N"),
+                (pomodoro_work_var.get().strip(), "Arbeitszeit", "pomodoro_work_minutes"),
+                (pomodoro_break_var.get().strip(), "Kurze Pause", "pomodoro_break_minutes"),
+                (pomodoro_long_break_var.get().strip(), "Lange Pause", "pomodoro_long_break_minutes"),
+                (pomodoro_every_var.get().strip(), "Lange Pause alle N", "pomodoro_long_break_every"),
             ]
-            for value, label in numeric_fields:
-                if not value.isdigit() or int(value) <= 0:
-                    messagebox.showwarning("Ungültiger Wert", f"{label} muss eine positive Zahl sein.", parent=win)
+            for value, label, cfg_key in numeric_fields:
+                lo, hi, _ = POMODORO_INT_RANGES[cfg_key]
+                if not value.isdigit() or not (lo <= int(value) <= hi):
+                    messagebox.showwarning(
+                        "Ungültiger Wert", f"{label} muss zwischen {lo} und {hi} liegen.", parent=win
+                    )
                     return
 
             idle_timeout_raw = idle_timeout_var.get().strip()
@@ -1670,6 +1756,9 @@ class App:
                 "holiday_country": holiday_country_var.get().strip() or "DE",
                 "holiday_subdiv": holiday_subdiv_var.get().strip(),
                 "entry_list_chronological": bool(entry_chrono_var.get()),
+                "exclude_weekends_in_averages": bool(exclude_weekends_var.get()),
+                "include_holidays_in_exclusion": bool(include_holidays_var.get()),
+                "count_weekend_work": bool(count_weekend_work_var.get()),
             }
             save_config(new_config)
             logger.info(
@@ -1679,6 +1768,7 @@ class App:
                 new_config["database_path"],
             )
             self.config = new_config
+            was_pomodoro_enabled = self.pomodoro_enabled
             self.pomodoro_enabled = bool(new_config.get("pomodoro_enabled", False))
             self.pomodoro_work_minutes = int(new_config.get("pomodoro_work_minutes", 25))
             self.pomodoro_break_minutes = int(new_config.get("pomodoro_break_minutes", 5))
@@ -1691,6 +1781,8 @@ class App:
             ).strip()
             self.idle_timeout_minutes = int(new_config.get("idle_timeout_minutes", 120))
             self._preload_sound()
+
+            self._reconcile_pomodoro_runtime(was_pomodoro_enabled)
 
             # Switch database if changed
             old_path = self._db_path
@@ -1750,6 +1842,7 @@ class App:
         about.transient(ref)
         about.wait_visibility()
         about.grab_set()
+        about.bind("<Escape>", lambda _e: about.destroy())
         about.resizable(False, False)
 
         lbl = {"bg": "#C0C0C0", "fg": "black"}
@@ -2059,6 +2152,23 @@ class App:
             self.write("Pause beendet.")
 
         self._force_date_refresh()
+
+    def _reconcile_pomodoro_runtime(self, was_enabled: bool):
+        """Live-Pomodoro-Zustand nach einer Settings-Änderung angleichen.
+
+        POM-01: Wird Pomodoro während einer laufenden Session deaktiviert, muss
+        ein bereits geplanter Work-Deadline verworfen und eine aktive
+        Pomodoro-Pause (nicht-manuell) beendet werden, wobei die noch offene
+        Session erhalten bleibt. Sonst liefe der getimte Pausen-Countdown weiter
+        und _finish_break würde die Session stoppen statt sie fortzusetzen
+        (stiller Session-Verlust)."""
+        if was_enabled and not self.pomodoro_enabled:
+            if self._break_active and self._current_break_kind != "manual":
+                # force_resume, da pomodoro_enabled jetzt False ist und der
+                # normale Resume-Pfad die Session sonst stoppen würde.
+                self._finish_break(force_resume=True)
+            self._pomodoro_work_deadline_ts = 0.0
+            self._paused_pomodoro_remaining_seconds = 0
 
     def _bring_main_window_to_front(self):
         """Bring the visible window to front when break starts/ends."""
@@ -3592,7 +3702,7 @@ class App:
             text="Löschen",
             command=_delete,
             bg="#D4D0C8",
-            fg="red",
+            fg="#B00020",
             font=("MS Sans Serif", 10),
             relief="raised",
             borderwidth=2,
@@ -3670,6 +3780,13 @@ class App:
                         source_label="pomodoro_break",
                         timed_break=True,
                     )
+                    if long_break_due:
+                        # POM-02: Kadenz nach jeder langen Pause auf 0 zurücksetzen,
+                        # damit "Lange Pause alle N" Intervalle SEIT der letzten
+                        # langen Pause zählt — robust gegen eine mid-session
+                        # geänderte pomodoro_long_break_every. Reset erst NACH
+                        # _start_break, damit der geloggte pomodoro_cycle stimmt.
+                        self._pomodoro_cycles = 0
 
             # Auto-Stop bei langer systemweiter Inaktivität (~alle 30 s geprüft).
             self._maybe_auto_stop_idle()

@@ -1079,7 +1079,7 @@ def update_parameters_table(param_path):
                                                     # Header
                                                     html.Tr(
                                                         [
-                                                            html.Th("User", style=header_style),
+                                                            html.Th("Benutzer", style=header_style),
                                                             *[
                                                                 html.Th(
                                                                     key.replace("_", " ").title(), style=header_style
@@ -1123,8 +1123,8 @@ def update_parameters_table(param_path):
                 ]
             )
 
-        return html.Div("No parameters found.", style={"color": _colors["text"]})
-    return html.Div("Select a directory to load parameters.", style={"color": _colors["text"]})
+        return html.Div("Keine Parameter gefunden.", style={"color": _colors["text"]})
+    return html.Div("Verzeichnis auswählen, um Parameter zu laden.", style={"color": _colors["text"]})
 
 
 # Callback für Toggle-Button
@@ -1151,7 +1151,7 @@ def update_left_pie_chart(selected_user, db_path, weekend_include):
         hours = get_cached_stat(f"hours_per_project_we={int(we)}", lambda: calculate_hours_per_project(data))
         return plot_hours_per_project(hours, selected_user)
     else:
-        return go.Figure(layout=go.Layout(plot_bgcolor=_colors["background"], paper_bgcolor=_colors["background"]))
+        return go.Figure(layout=GRAPH_LAYOUT)
 
 
 @app.callback(
@@ -1202,7 +1202,7 @@ def update_total_hours_chart(_, db_path, weekend_include):
         )
         return plot_total_hours_per_user(total_hours, date_range)
     else:
-        return go.Figure(layout=go.Layout(plot_bgcolor=_colors["background"], paper_bgcolor=_colors["background"]))
+        return go.Figure(layout=GRAPH_LAYOUT)
 
 
 @app.callback(
@@ -1219,7 +1219,7 @@ def update_average_hours_per_user_chart(_, db_path, weekend_include):
         )
         return plot_average_hours_per_user(average_hours)
     else:
-        return go.Figure(layout=go.Layout(plot_bgcolor=_colors["background"], paper_bgcolor=_colors["background"]))
+        return go.Figure(layout=GRAPH_LAYOUT)
 
 
 @app.callback(
@@ -1249,7 +1249,7 @@ def update_average_hours_per_period_chart(db_path, n_clicks, weekend_include, pe
             avg_period = get_cached_stat(key, lambda: calculate_average_hours_per_period(data, period_days))
             return plot_average_hours_per_period(avg_period, period_days)
         else:
-            return go.Figure(layout=go.Layout(plot_bgcolor=_colors["background"], paper_bgcolor=_colors["background"]))
+            return go.Figure(layout=GRAPH_LAYOUT)
     except ValueError:
         return go.Figure(
             layout=go.Layout(

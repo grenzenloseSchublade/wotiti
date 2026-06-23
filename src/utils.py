@@ -66,6 +66,17 @@ DATABASE_PATH = os.path.join(PATH_TO_DATA, "app_database.db")
 GENERATE_DATABASE_PATH = os.path.join(PATH_TO_DATA, "beispieldaten.db")
 CONFIG_PATH = os.path.join(PATH_TO_DATA, "config.json")
 
+# Single Source of Truth für die ganzzahligen Pomodoro-Minuten-Felder:
+# (min, max, default). Wird sowohl für die Spinbox-Grenzen im Einstellungen-
+# Dialog, die Save-Validierung als auch für _validate_config beim Laden genutzt,
+# damit UI, Save-Pfad und Loader nicht auseinanderdriften (POM-03/cfg-5).
+POMODORO_INT_RANGES = {
+    "pomodoro_work_minutes": (1, 240, 25),
+    "pomodoro_break_minutes": (1, 60, 5),
+    "pomodoro_long_break_minutes": (1, 240, 15),
+    "pomodoro_long_break_every": (2, 12, 4),
+}
+
 DEFAULT_CONFIG = {
     "database_path": DATABASE_PATH,
     "default_user": "Hans",
@@ -177,10 +188,11 @@ def _validate_config(cfg: dict) -> dict:
     out = dict(cfg)
     int_fields = {
         "dashboard_port": (1024, 65535, 8052),
-        "pomodoro_work_minutes": (1, 240, 25),
-        "pomodoro_break_minutes": (1, 60, 5),
-        "pomodoro_long_break_minutes": (1, 240, 15),
-        "pomodoro_long_break_every": (2, 12, 4),
+        # Untergrenze 0 = "deaktiviert" (siehe DEFAULT_CONFIG). Ohne Load-Time-
+        # Coercion würde ein hand-editierter String/Negativwert beim Start am
+        # int()-Aufruf in app.py crashen.
+        "idle_timeout_minutes": (0, 1440, 120),
+        **POMODORO_INT_RANGES,
     }
     for key, (lo, hi, default) in int_fields.items():
         try:
@@ -200,6 +212,12 @@ def _validate_config(cfg: dict) -> dict:
     for key in ("default_user", "default_project", "pomodoro_sound_local_path"):
         if not isinstance(out.get(key), str) or not out[key].strip():
             out[key] = DEFAULT_CONFIG[key]
+    # database_path ist load-bearing: ein present-but-corrupt Wert (None, "",
+    # Nicht-String) würde bis in den DB-Zugriff durchschlagen. Auf nicht-leeren
+    # String prüfen, sonst auf den Default zurückfallen.
+    if not isinstance(out.get("database_path"), str) or not out["database_path"].strip():
+        logger.warning("Config: 'database_path' ungültig (%r) — verwende Default.", out.get("database_path"))
+        out["database_path"] = DEFAULT_CONFIG["database_path"]
     # Feiertags-/Wochenend-Felder.
     for key in ("holiday_country", "holiday_subdiv"):
         v = out.get(key, DEFAULT_CONFIG[key])

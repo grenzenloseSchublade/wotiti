@@ -475,3 +475,40 @@ def test_pair_sessions_separate_projects_not_merged(app_instance):
     assert len(sessions) == 2
     by_proj = {s["project"]: (s["start_id"], s["stop_id"]) for s in sessions}
     assert by_proj == {"A": (1, 3), "B": (2, 4)}
+
+
+def test_disable_pomodoro_during_break_keeps_session(app_instance):
+    """POM-01: Pomodoro während einer aktiven Pomodoro-Pause deaktivieren darf
+    die laufende Session NICHT stoppen.
+
+    Reproduziert den stillen Session-Verlust: bei einer Pomodoro-Pause bleibt
+    die Session in der DB offen; deaktiviert der Nutzer Pomodoro, würde
+    _finish_break ohne Reconcile in den Stop-Zweig fallen. _reconcile_pomodoro_runtime
+    muss die Pause mit force_resume beenden und die Session erhalten.
+    """
+    app_instance.name_entry.set("pomo_user")
+    app_instance.project_entry.set("1")
+    app_instance.date_entry.delete(0, END)
+    app_instance.date_entry.insert(0, datetime.today().strftime("%d-%m-%Y"))
+    app_instance.start_session()
+    assert app_instance.session_active.get(("pomo_user", "1")) is True
+
+    # Pomodoro aktiv + laufende (nicht-manuelle) Pause simulieren.
+    app_instance.pomodoro_enabled = True
+    app_instance._start_break(
+        break_kind="short", break_minutes=5, is_auto=True,
+        source_label="pomodoro_break", timed_break=True,
+    )
+    assert app_instance._break_active is True
+    # Pomodoro-Pause stoppt die Session NICHT in der DB.
+    assert app_instance.session_active.get(("pomo_user", "1")) is True
+
+    # Nutzer deaktiviert Pomodoro in den Einstellungen (Config bereits gesetzt).
+    app_instance.pomodoro_enabled = False
+    app_instance._reconcile_pomodoro_runtime(was_enabled=True)
+
+    assert app_instance._break_active is False
+    assert app_instance.session_active.get(("pomo_user", "1")) is True
+    assert app_instance.timer_running is True
+    assert app_instance._pomodoro_work_deadline_ts == 0.0
+    assert app_instance._paused_pomodoro_remaining_seconds == 0
