@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import sqlite3
+from collections import deque
 from datetime import datetime, timedelta
 from sqlite3 import Error
 
@@ -836,6 +837,33 @@ def close_stale_breaks(conn: sqlite3.Connection | None = None) -> int:
             cursor.close()
 
 
+def pair_sessions_fifo(events):
+    """Paart ``(event_type, datetime)``-Events per FIFO-Queue zu Sessions.
+
+    ``events``: Iterable von ``(event_type, datetime)`` (gleiche (user, project)-
+    Gruppe). Wird intern stabil nach ``(Zeitstempel, Start-vor-Stop)`` sortiert
+    und dann gepaart: jeder Stop bindet den **frühesten offenen Start**. Damit
+    gilt exakt dieselbe Paarungs-Semantik wie in der Anzeige
+    (``App._pair_day_sessions``) — Eintragsliste und alle Summen/Dauern stimmen
+    so auch bei überschneidenden Sessions desselben Projekts überein.
+
+    Yields ``(start_dt, stop_dt)``: ``stop_dt=None`` für offene Sessions,
+    ``start_dt=None`` für verwaiste Stops.
+    """
+    ordered = sorted(events, key=lambda e: (e[1], 0 if e[0] == "start" else 1))
+    pending: deque = deque()
+    for etype, ts in ordered:
+        if etype == "start":
+            pending.append(ts)
+        elif etype == "stop":
+            if pending:
+                yield pending.popleft(), ts
+            else:
+                yield None, ts
+    while pending:
+        yield pending.popleft(), None
+
+
 def calculate_duration(project: str = "1", name: str = "Hans", conn: sqlite3.Connection | None = None) -> float:
     """Calculate the total duration of a session across all days."""
     if not conn or not name:
@@ -861,19 +889,17 @@ def calculate_duration(project: str = "1", name: str = "Hans", conn: sqlite3.Con
         )
 
         events = cursor.fetchall()
-        total_duration = 0
-        start_time = None
+        parsed = []
+        for event_type, timestamp_str in events:
+            try:
+                parsed.append((event_type, datetime.strptime(timestamp_str, TIMESTAMP_FORMAT)))
+            except ValueError:
+                continue
 
-        for event in events:
-            event_type, timestamp_str = event
-            timestamp = datetime.strptime(timestamp_str, TIMESTAMP_FORMAT)
-
-            if event_type == "start":
-                start_time = timestamp
-            elif event_type == "stop" and start_time is not None:
-                duration = (timestamp - start_time).total_seconds()
-                total_duration += duration
-                start_time = None
+        total_duration = 0.0
+        for start_time, stop_time in pair_sessions_fifo(parsed):
+            if start_time is not None and stop_time is not None:
+                total_duration += (stop_time - start_time).total_seconds()
 
         return total_duration
     except (Error, ValueError) as e:
@@ -928,26 +954,26 @@ def calculate_daily_duration(
         )
 
         events = cursor.fetchall()
-        total_seconds = 0.0
-        start_time: datetime | None = None
         from datetime import timedelta as _td
 
+        parsed = []
         for event_type, timestamp_str in events:
             try:
-                ts = datetime.strptime(timestamp_str, TIMESTAMP_FORMAT)
+                parsed.append((event_type, datetime.strptime(timestamp_str, TIMESTAMP_FORMAT)))
             except ValueError:
                 continue
-            if event_type == "start":
-                start_time = ts
-            elif event_type == "stop" and start_time is not None:
-                # Anteil dieser Session, der in ``target_day`` fällt.
-                day_start = datetime.combine(target_day, datetime.min.time())
-                day_end = day_start + _td(days=1)
-                chunk_start = max(start_time, day_start)
-                chunk_end = min(ts, day_end)
-                if chunk_end > chunk_start:
-                    total_seconds += (chunk_end - chunk_start).total_seconds()
-                start_time = None
+
+        day_start = datetime.combine(target_day, datetime.min.time())
+        day_end = day_start + _td(days=1)
+        total_seconds = 0.0
+        for start_time, stop_time in pair_sessions_fifo(parsed):
+            if start_time is None or stop_time is None:
+                continue
+            # Anteil dieser Session, der in ``target_day`` fällt (Midnight-Split).
+            chunk_start = max(start_time, day_start)
+            chunk_end = min(stop_time, day_end)
+            if chunk_end > chunk_start:
+                total_seconds += (chunk_end - chunk_start).total_seconds()
 
         return total_seconds
     except Error as e:
@@ -1046,26 +1072,26 @@ def _hours_by_project_day(conn, user_id, days, project_filter=None) -> dict[str,
         if cursor is not None:
             cursor.close()
 
-    current_project = None
-    start_time: datetime | None = None
+    # Events je Projekt sammeln und mit derselben FIFO-Paarung wie die Anzeige
+    # auswerten (konsistente Summen auch bei Überschneidungen).
+    events_by_project: dict[str, list] = {}
     for project, event_type, ts_str in rows:
-        if project != current_project:
-            current_project = project
-            start_time = None
         try:
             ts = datetime.strptime(ts_str, TIMESTAMP_FORMAT)
         except ValueError:
             continue
-        if event_type == "start":
-            start_time = ts
-        elif event_type == "stop" and start_time is not None:
+        events_by_project.setdefault(project, []).append((event_type, ts))
+
+    for project, evs in events_by_project.items():
+        for start_time, stop_time in pair_sessions_fifo(evs):
+            if start_time is None or stop_time is None:
+                continue
             for iso, day_start, day_end in day_bounds:
                 chunk_start = max(start_time, day_start)
-                chunk_end = min(ts, day_end)
+                chunk_end = min(stop_time, day_end)
                 if chunk_end > chunk_start:
                     secs = (chunk_end - chunk_start).total_seconds()
                     out[iso][project] = out[iso].get(project, 0.0) + secs
-            start_time = None
     return out
 
 
@@ -1362,7 +1388,8 @@ def validate_event_pair(conn: sqlite3.Connection | None, event_id: int) -> tuple
             # Suche das zuletzt eingefügte Start-Event desselben (User, Projekt)
             # vor diesem Stop. Wir orientieren uns an ``id`` (Insertion Order),
             # damit auch Pairs erkannt werden, deren Reihenfolge durch eine
-            # Bearbeitung verkehrt wurde (Stop-vor-Start temporär).
+            # Bearbeitung verkehrt wurde (Stop-vor-Start temporär) — eine reine
+            # Zeitstempel-Order würde genau diesen Negativ-Dauer-Fall übersehen.
             cur.execute(
                 """
                 SELECT e.timestamp FROM events e
@@ -1462,3 +1489,34 @@ def delete_event(conn: sqlite3.Connection | None, event_id: int) -> bool:
         return False
     finally:
         cur.close()
+
+
+def delete_session(
+    conn: sqlite3.Connection | None,
+    start_id: int | None,
+    stop_id: int | None,
+) -> bool:
+    """Lösche Start- und Stop-Event einer Session **atomar**.
+
+    Beide IDs werden in einer Transaktion entfernt — schlägt eine teilweise
+    fehl, wird alles zurückgerollt, damit kein verwaister Halb-Eintrag (Start
+    ohne Stop o. ä.) zurückbleibt. ``None``-IDs werden übersprungen. Liefert
+    ``True``, wenn mindestens ein Event gelöscht wurde.
+    """
+    if not conn:
+        return False
+    ids = [i for i in (start_id, stop_id) if i is not None]
+    if not ids:
+        return False
+    try:
+        with conn:
+            cur = conn.cursor()
+            deleted = 0
+            for eid in ids:
+                cur.execute("DELETE FROM events WHERE id = ?", (eid,))
+                deleted += cur.rowcount
+        logger.info("Session deleted: events %s (%d rows).", ids, deleted)
+        return deleted > 0
+    except Error as e:
+        logger.error("Error deleting session %s: %s", ids, e)
+        return False

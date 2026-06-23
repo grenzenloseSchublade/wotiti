@@ -11,6 +11,7 @@ from db_helper import (
     create_connection,
     create_main_table,
     delete_event,
+    delete_session,
     get_all_projects,
     get_all_users,
     get_event_by_id,
@@ -107,6 +108,46 @@ def test_calculate_duration(db_conn):
     log_stop(project=1, name="test_user", date="2023-10-01", conn=db_conn)
     duration = calculate_duration(project=1, name="test_user", conn=db_conn)
     assert duration >= 0
+
+
+def test_pair_sessions_fifo_overlap():
+    """FIFO-Helper paart überschneidende Sessions wie die Anzeige (09-11, 10-12)."""
+    from datetime import datetime as _dt
+
+    from db_helper import pair_sessions_fifo
+
+    evs = [
+        ("start", _dt(2026, 6, 23, 9, 0)),
+        ("start", _dt(2026, 6, 23, 10, 0)),
+        ("stop", _dt(2026, 6, 23, 11, 0)),
+        ("stop", _dt(2026, 6, 23, 12, 0)),
+    ]
+    pairs = list(pair_sessions_fifo(evs))
+    assert pairs == [
+        (_dt(2026, 6, 23, 9, 0), _dt(2026, 6, 23, 11, 0)),
+        (_dt(2026, 6, 23, 10, 0), _dt(2026, 6, 23, 12, 0)),
+    ]
+
+
+def test_daily_duration_matches_fifo_on_overlap(db_conn):
+    """Regression #9: Tages-Dauer nutzt FIFO → stimmt mit der Eintragsliste überein.
+
+    Überschneidende Sessions 09-11 (2h) + 10-12 (2h) ergeben 4h (= 14400s),
+    statt der alten Stack-of-1-Summe von nur 1h.
+    """
+    from datetime import datetime as _dt
+
+    from db_helper import calculate_daily_duration, create_events_table
+
+    create_events_table(db_conn)
+    check_user(db_conn, "test_user")
+    log_start(project="P", name="test_user", timestamp=_dt(2026, 6, 23, 9, 0), conn=db_conn)
+    log_start(project="P", name="test_user", timestamp=_dt(2026, 6, 23, 10, 0), conn=db_conn)
+    log_stop(project="P", name="test_user", timestamp=_dt(2026, 6, 23, 11, 0), conn=db_conn)
+    log_stop(project="P", name="test_user", timestamp=_dt(2026, 6, 23, 12, 0), conn=db_conn)
+
+    secs = calculate_daily_duration(project="P", name="test_user", date="23-06-2026", conn=db_conn)
+    assert secs == 4 * 3600
 
 
 def test_get_all_users(db_conn):
@@ -282,6 +323,49 @@ def test_delete_event_not_found(db_conn):
 
     create_events_table(db_conn)
     assert delete_event(db_conn, 99999) is False
+
+
+def test_delete_session_removes_both_events(db_conn):
+    """delete_session entfernt Start- und Stop-Event in einem Rutsch."""
+    from db_helper import create_events_table
+
+    create_events_table(db_conn)
+    check_user(db_conn, "test_user")
+    log_start(project="proj1", name="test_user", date="01-01-2025", conn=db_conn)
+    log_stop(project="proj1", name="test_user", date="01-01-2025", conn=db_conn)
+    cur = db_conn.cursor()
+    cur.execute("SELECT id FROM events ORDER BY id")
+    ids = [r[0] for r in cur.fetchall()]
+    cur.close()
+    assert len(ids) == 2
+
+    assert delete_session(db_conn, ids[0], ids[1]) is True
+    assert get_event_by_id(db_conn, ids[0]) is None
+    assert get_event_by_id(db_conn, ids[1]) is None
+
+
+def test_delete_session_skips_none_ids(db_conn):
+    """Eine offene Session (stop_id None) löscht nur das vorhandene Event."""
+    from db_helper import create_events_table
+
+    create_events_table(db_conn)
+    check_user(db_conn, "test_user")
+    log_start(project="proj1", name="test_user", date="01-01-2025", conn=db_conn)
+    cur = db_conn.cursor()
+    cur.execute("SELECT id FROM events ORDER BY id DESC LIMIT 1")
+    start_id = cur.fetchone()[0]
+    cur.close()
+
+    assert delete_session(db_conn, start_id, None) is True
+    assert get_event_by_id(db_conn, start_id) is None
+
+
+def test_delete_session_no_ids(db_conn):
+    """Ohne gültige IDs gibt delete_session False zurück."""
+    from db_helper import create_events_table
+
+    create_events_table(db_conn)
+    assert delete_session(db_conn, None, None) is False
 
 
 # -----------------------------------------------------------------------------

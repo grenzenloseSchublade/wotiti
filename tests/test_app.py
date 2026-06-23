@@ -326,3 +326,80 @@ def test_clear_console_with_no_text(app_instance):
     """Test clearing the console when there is no text."""
     app_instance.clear_console()
     assert app_instance.console.get("1.0", END).strip() == ""
+
+
+# --- Session-Pairing (_pair_day_sessions): FIFO-Robustheit gegen Überschneidung ---
+
+def _ev(eid, etype, hhmm, user="u", project="A"):
+    """Hilfsfunktion: Event-Tupel wie aus der DB (id, user, project, type, ts)."""
+    return (eid, user, project, etype, f"2026-06-23 {hhmm}:00")
+
+
+def test_pair_sessions_sequential(app_instance):
+    """Sequenzielle Start/Stop-Paare bleiben unverändert gepaart."""
+    events = [_ev(1, "start", "09:00"), _ev(2, "stop", "10:00"),
+              _ev(3, "start", "11:00"), _ev(4, "stop", "12:00")]
+    sessions = app_instance._pair_day_sessions(events)
+    assert len(sessions) == 2
+    assert all(s["start_id"] and s["stop_id"] for s in sessions)
+    assert [(s["start_id"], s["stop_id"]) for s in sessions] == [(1, 2), (3, 4)]
+
+
+def test_pair_sessions_overlapping_same_project(app_instance):
+    """Überschneidende Sessions desselben Projekts → zwei GESCHLOSSENE Sessions.
+
+    Regressionsschutz: früher wurde der erste Start fälschlich „offen" und ein
+    verwaister Stop erzeugt (Phantom-„läuft", Endzeit nicht editierbar).
+    """
+    events = [_ev(1, "start", "09:00"), _ev(2, "start", "10:00"),
+              _ev(3, "stop", "11:00"), _ev(4, "stop", "12:00")]
+    sessions = app_instance._pair_day_sessions(events)
+    assert len(sessions) == 2
+    # Kein offener Start, kein verwaister Stop.
+    assert all(s["start_id"] is not None and s["stop_id"] is not None for s in sessions)
+    pairs = {(s["start_id"], s["stop_id"]) for s in sessions}
+    assert pairs == {(1, 3), (2, 4)}  # FIFO: frühester Start ↔ frühester Stop
+
+
+def test_pair_sessions_unbalanced_extra_start(app_instance):
+    """Echte Unbalance (mehr Starts als Stops) → genau eine offene Session."""
+    events = [_ev(1, "start", "09:00"), _ev(2, "start", "10:00"),
+              _ev(3, "stop", "11:00")]
+    sessions = app_instance._pair_day_sessions(events)
+    assert len(sessions) == 2
+    open_sessions = [s for s in sessions if s["stop_id"] is None]
+    assert len(open_sessions) == 1
+    assert open_sessions[0]["start_id"] == 2  # erster Start wurde geschlossen
+
+
+def test_pair_sessions_orphan_stop(app_instance):
+    """Ein Stop ohne Start bleibt als verwaister Stop erhalten."""
+    events = [_ev(1, "stop", "10:00")]
+    sessions = app_instance._pair_day_sessions(events)
+    assert len(sessions) == 1
+    assert sessions[0]["start_id"] is None
+    assert sessions[0]["stop_id"] == 1
+
+
+def test_pair_sessions_equal_timestamp_pairs_not_orphans(app_instance):
+    """Gleichzeitiger Start & Stop → Null-Dauer-Paar, kein verwaister Stop.
+
+    Regression #4: deterministischer Tiebreak ordnet 'start' vor 'stop' bei
+    identischem Zeitstempel, unabhängig von der DB-Reihenfolge.
+    """
+    # Stop steht in der Eingabe absichtlich VOR dem Start (umgekehrte DB-Order).
+    events = [_ev(2, "stop", "12:00"), _ev(1, "start", "12:00")]
+    sessions = app_instance._pair_day_sessions(events)
+    assert len(sessions) == 1
+    assert sessions[0]["start_id"] == 1
+    assert sessions[0]["stop_id"] == 2
+
+
+def test_pair_sessions_separate_projects_not_merged(app_instance):
+    """Gleichzeitige Sessions verschiedener Projekte werden nicht vermischt."""
+    events = [_ev(1, "start", "09:00", project="A"), _ev(2, "start", "09:30", project="B"),
+              _ev(3, "stop", "10:00", project="A"), _ev(4, "stop", "10:30", project="B")]
+    sessions = app_instance._pair_day_sessions(events)
+    assert len(sessions) == 2
+    by_proj = {s["project"]: (s["start_id"], s["stop_id"]) for s in sessions}
+    assert by_proj == {"A": (1, 3), "B": (2, 4)}

@@ -52,7 +52,7 @@ from db_helper import (
     create_connection,
     create_events_table,
     create_main_table,
-    delete_event,
+    delete_session,
     get_all_projects,
     get_all_users,
     get_daily_meta,
@@ -2975,8 +2975,15 @@ class App:
         geparsten Zeitstempeln und Dauer; chronologisch nach Startzeit sortiert.
         Offene Sessions (Start ohne Stop) haben ``stop_id=None``; verwaiste Stops
         ``start_id=None``.
+
+        Paarung per **FIFO-Queue** je (user, project): Jeder Stop paart mit dem
+        frühesten noch offenen Start. Überschneiden sich zwei Sessions desselben
+        Projekts (z. B. ``start 09, start 10, stop 11, stop 12``), entstehen so
+        zwei *geschlossene* Sessions (09→11, 10→12) statt eines fälschlich
+        „offenen" Starts plus verwaistem Stop. Nur echte Unbalance (mehr Starts
+        als Stops) hinterlässt offene Sessions am Ende.
         """
-        from collections import defaultdict
+        from collections import defaultdict, deque
 
         by_key: dict[tuple, list] = defaultdict(list)
         for ev_id, user, project, etype, ts_str in events:
@@ -3006,22 +3013,25 @@ class App:
             )
 
         for (user, project), evs in by_key.items():
-            evs.sort(key=lambda t: t[2])
-            pending_start = None
+            # Bei gleichem Zeitstempel muss ``start`` vor ``stop`` kommen (sonst
+            # entstünden je nach DB-Reihenfolge ein verwaister Stop + offener
+            # Start statt eines Null-Dauer-Paares). id als letzter Tiebreak macht
+            # die Reihenfolge deterministisch.
+            evs.sort(key=lambda t: (t[2], 0 if t[1] == "start" else 1, t[0]))
+            pending_starts: deque = deque()
             for ev in evs:
                 etype = ev[1]
                 if etype == "start":
-                    if pending_start is not None:
-                        _emit(user, project, pending_start, None)  # vorheriger Start offen
-                    pending_start = ev
+                    pending_starts.append(ev)  # offene Starts sammeln (FIFO)
                 elif etype == "stop":
-                    if pending_start is not None:
-                        _emit(user, project, pending_start, ev)
-                        pending_start = None
+                    if pending_starts:
+                        # Stop paart mit dem frühesten offenen Start.
+                        _emit(user, project, pending_starts.popleft(), ev)
                     else:
                         _emit(user, project, None, ev)  # verwaister Stop
-            if pending_start is not None:
-                _emit(user, project, pending_start, None)
+            # Übrig gebliebene Starts (echte Unbalance) als offene Sessions.
+            while pending_starts:
+                _emit(user, project, pending_starts.popleft(), None)
 
         sessions.sort(key=lambda s: s["sort_ts"] or datetime.max)
         return sessions
@@ -3224,13 +3234,33 @@ class App:
         stop_ts = session.get("stop_ts")
         orig_iso = session.get("date_iso")
 
-        # Laufende Session (offener Start, noch live)? Warnen wie bisher.
-        is_live = stop_id is None and self.session_active.get((user, project), False)
+        # Laufende Session bestimmen. Wichtig: Seit das FIFO-Pairing mehrere
+        # offene Zeilen je (user, project) liefern kann (verwaiste Starts), darf
+        # NICHT jede offene Zeile als „live" gelten — sonst würde das Editieren
+        # einer alten verwaisten Zeile den echten Timer abräumen. Live ist nur die
+        # *neueste* offene Start-Zeile dieses (user, project), und nur wenn die
+        # Session tatsächlich aktiv ist.
+        open_starts = [
+            s["start_ts"]
+            for s in self._row_entries
+            if isinstance(s, dict)
+            and s.get("user") == user
+            and s.get("project") == project
+            and s.get("stop_id") is None
+            and s.get("start_ts") is not None
+        ]
+        is_latest_open = bool(start_ts) and all(start_ts >= o for o in open_starts)
+        is_live = (
+            stop_id is None
+            and self.session_active.get((user, project), False)
+            and is_latest_open
+        )
         if is_live and not messagebox.askyesno(
             "Aktive Session",
             "Diese Session läuft gerade (kein Stopp).\n\n"
-            "Änderungen an der Startzeit können die Live-Anzeige verfälschen.\n"
-            "Empfehlung: zuerst stoppen.\n\nTrotzdem bearbeiten?",
+            "Zeit, Datum und Projekt sind daher gesperrt — nur Notiz und\n"
+            "Übertragen-Status lassen sich ändern. Zum Bearbeiten der Zeiten\n"
+            "zuerst über den Stop-Button beenden.\n\nNotiz/Status jetzt bearbeiten?",
             parent=self.master,
         ):
             return
@@ -3281,24 +3311,43 @@ class App:
         # Datum
         Label(win, text="Datum (TT-MM-JJJJ):", **lbl_cfg).grid(row=1, column=0, padx=8, pady=4, sticky="w")
         date_var = StringVar(value=date_str)
-        Entry(win, textvariable=date_var, **entry_cfg, width=30).grid(row=1, column=1, padx=8, pady=4, sticky="ew")
+        date_entry_widget = Entry(win, textvariable=date_var, **entry_cfg, width=30)
+        date_entry_widget.grid(row=1, column=1, padx=8, pady=4, sticky="ew")
 
-        # Startzeit (nur falls ein Start-Event existiert)
+        # Echte Live-Zeile: Zeit/Datum/Projekt sind gesperrt — der laufende Timer
+        # darf nicht aus dem Editor heraus verschoben werden (sonst Desync/Geister-
+        # Timer). Nur Notiz/Übertragen-Status bleiben editierbar; zum Ändern von
+        # Zeiten zuerst über den Stop-Button beenden.
+        if is_live:
+            proj_combo.config(state="disabled")
+            date_entry_widget.config(state="readonly")
+
+        # Startzeit. Fehlt der Start (verwaister Stop), kann er hier nachgetragen
+        # werden — das Feld bleibt editierbar.
         Label(win, text="Start (HH:MM):", **lbl_cfg).grid(row=2, column=0, padx=8, pady=4, sticky="w")
         start_var = StringVar(value=start_str)
         start_entry = Entry(win, textvariable=start_var, **entry_cfg, width=30)
         start_entry.grid(row=2, column=1, padx=8, pady=4, sticky="ew")
-        if start_id is None:
+        if is_live:
             start_entry.config(state="readonly")
+            _ToolTip(start_entry, "Laufende Session — zuerst über den Stop-Button beenden.")
+        elif start_id is None:
+            _ToolTip(start_entry, "Kein Start vorhanden — Zeit eintragen, um einen Start nachzutragen.")
 
-        # Endzeit (nur falls ein Stopp-Event existiert)
+        # Endzeit. Fehlt der Stop, kann er nachgetragen werden — AUSSER die Session
+        # läuft gerade wirklich (Live-Timer). Für die echte Live-Zeile bleibt das
+        # Feld readonly (zuerst über den Stop-Button beenden); damit mutiert der
+        # Editor niemals den laufenden In-Memory-Timer/Pausen-Zustand.
         Label(win, text="Ende (HH:MM):", **lbl_cfg).grid(row=3, column=0, padx=8, pady=4, sticky="w")
         end_var = StringVar(value=stop_str)
         end_entry = Entry(win, textvariable=end_var, **entry_cfg, width=30)
         end_entry.grid(row=3, column=1, padx=8, pady=4, sticky="ew")
         if stop_id is None:
-            end_entry.config(state="readonly")
-            _ToolTip(end_entry, "Laufende Session — Ende erst nach dem Stoppen editierbar.")
+            if is_live:
+                end_entry.config(state="readonly")
+                _ToolTip(end_entry, "Laufende Session — zuerst über den Stop-Button beenden.")
+            else:
+                _ToolTip(end_entry, "Kein Ende vorhanden — Zeit eintragen, um die Session abzuschließen.")
 
         # Notiz (je Projekt/Tag)
         Label(win, text="Notiz:", **lbl_cfg).grid(row=4, column=0, padx=8, pady=4, sticky="w")
@@ -3347,26 +3396,75 @@ class App:
                 )
                 return
 
+            # Zeiten parsen. Ein leeres Feld ist nur erlaubt, wenn es noch KEIN
+            # zugehöriges Event gibt (dann bleibt die Seite einfach offen); ist
+            # ein Wert eingetragen, wo bisher kein Event war, wird er nachgetragen.
+            start_raw = start_var.get().strip()
+            end_raw = end_var.get().strip()
             start_dt = stop_dt = None
-            if start_id is not None:
-                hm = _parse_hhmm(start_var.get().strip(), "Startzeit")
+            if start_id is not None or start_raw:
+                hm = _parse_hhmm(start_raw, "Startzeit")
                 if hm is None:
                     return
                 start_dt = d_part.replace(hour=hm[0], minute=hm[1], second=0)
-            if stop_id is not None:
-                hm = _parse_hhmm(end_var.get().strip(), "Endzeit")
+            if stop_id is not None or end_raw:
+                hm = _parse_hhmm(end_raw, "Endzeit")
                 if hm is None:
                     return
                 stop_dt = d_part.replace(hour=hm[0], minute=hm[1], second=0)
+            if start_dt is None and stop_dt is None:
+                messagebox.showwarning("Fehler", "Mindestens Start- oder Endzeit angeben.", parent=win)
+                return
             if start_dt and stop_dt and stop_dt < start_dt:
                 messagebox.showwarning("Fehler", "Ende liegt vor dem Start.", parent=win)
                 return
 
+            # Überschneidung mit anderer Session desselben Projekts am selben Tag?
+            # Warnen, aber auf Wunsch erlauben (robust gepaart via FIFO-Anzeige).
+            own_ids = {i for i in (start_id, stop_id) if i is not None}
+            try:
+                ov_cur = self.db_conn.cursor()
+                ov_cur.execute(
+                    """
+                    SELECT e.id, u.name, e.project, e.event_type, e.timestamp
+                    FROM events e JOIN users u ON u.id = e.user_id
+                    WHERE u.name = ? AND e.project = ? AND e.date = ?
+                    ORDER BY e.timestamp
+                    """,
+                    (user, new_project, d_part.strftime("%d-%m-%Y")),
+                )
+                day_sessions = self._pair_day_sessions(ov_cur.fetchall())
+            except Exception:
+                day_sessions = []
+            ps = start_dt or datetime.min
+            pe = stop_dt or datetime.max
+            overlap = False
+            for s in day_sessions:
+                if (s["start_id"] in own_ids) or (s["stop_id"] in own_ids):
+                    continue  # die gerade bearbeitete Session selbst
+                es = s["start_ts"] or datetime.min
+                ee = s["stop_ts"] or datetime.max
+                if ps < ee and es < pe:  # echte Intervall-Überschneidung
+                    overlap = True
+                    break
+            if overlap and not messagebox.askyesno(
+                "Überschneidung",
+                "Diese Zeiten überschneiden sich mit einer anderen Session "
+                f"desselben Projekts ({new_project}) am selben Tag.\n\nTrotzdem speichern?",
+                parent=win,
+            ):
+                return
+
+            # Schreiben: vorhandene Events aktualisieren, fehlende nachtragen.
             ok = True
             if start_id is not None:
                 ok = update_event(self.db_conn, start_id, new_project, start_dt.strftime(TIMESTAMP_FORMAT)) and ok
+            elif start_dt is not None:
+                ok = log_start(project=new_project, name=user, timestamp=start_dt, conn=self.db_conn) and ok
             if stop_id is not None:
                 ok = update_event(self.db_conn, stop_id, new_project, stop_dt.strftime(TIMESTAMP_FORMAT)) and ok
+            elif stop_dt is not None:
+                ok = log_stop(project=new_project, name=user, timestamp=stop_dt, conn=self.db_conn) and ok
             if not ok:
                 messagebox.showerror("Fehler", "Session konnte nicht gespeichert werden.", parent=win)
                 return
@@ -3408,10 +3506,7 @@ class App:
                 parent=win,
             ):
                 return
-            ok = True
-            for eid in (start_id, stop_id):
-                if eid is not None:
-                    ok = delete_event(self.db_conn, eid) and ok
+            ok = delete_session(self.db_conn, start_id, stop_id)
             if ok:
                 self.write("Session gelöscht.")
                 self._combobox_dirty = True
