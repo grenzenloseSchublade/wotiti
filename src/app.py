@@ -485,9 +485,10 @@ class App:
         )
         self.transferred_check.grid(row=1, column=7, pady=(0, 4), padx=3, sticky="w")
         _ToolTip(self.transferred_check, "Diese Zeit (Projekt + Tag) wurde manuell ins Firmensystem übertragen")
-        # Merker für den zuletzt geladenen Notiz-Schlüssel, damit ein FocusOut
-        # ohne Änderung nicht unnötig speichert.
+        # Merker für den zuletzt geladenen Notiz-Schlüssel + Text, damit ein
+        # Flush ohne Änderung nicht unnötig speichert.
         self._note_loaded_key: tuple[str, str] | None = None
+        self._note_loaded_text: str = ""
 
         # =====================================================
         # ROW 2: Timer / Wochenübersicht (umschaltbare Kachel)
@@ -1796,6 +1797,9 @@ class App:
 
     def start_session(self):
         if self.db_conn:
+            # Getippte, noch nicht gespeicherte Notiz sichern, bevor ein Reload
+            # (Start ODER Fortsetzen) sie überschreibt.
+            self._flush_pending_note()
             if self._break_active:
                 # Start button acts as Resume during a break — always resume.
                 self._finish_break(play_sound=True, bring_to_front=True, force_resume=True)
@@ -1831,6 +1835,7 @@ class App:
 
     def stop_session(self):
         """End the session completely. If a break is active, close it first without auto-resume."""
+        self._flush_pending_note()
         if self._break_active:
             self._finish_break(play_sound=False, bring_to_front=False, auto_resume=False)
 
@@ -1865,6 +1870,7 @@ class App:
 
     def pause_session(self):
         """Start a manual break. Does not resume — use Start for that."""
+        self._flush_pending_note()
         if self._break_active:
             return
 
@@ -2261,6 +2267,9 @@ class App:
 
         Bei ungültiger aktueller Eingabe wird von heute ausgegangen.
         """
+        # Notiz des AKTUELLEN Tages sichern, bevor das Datum (und damit der
+        # Notiz-Kontext) wechselt.
+        self._flush_pending_note()
         text = self.date_entry.get().strip()
         try:
             base = datetime.strptime(text, "%d-%m-%Y").date()
@@ -2810,6 +2819,7 @@ class App:
 
     def set_today_date(self):
         """Sets the date entry to today's date."""
+        self._flush_pending_note()
         self._last_date_view_input_cache = None
         self.date_entry.delete(0, END)
         self.date_entry.insert(0, str(datetime.today().strftime("%d-%m-%Y")))
@@ -3084,25 +3094,55 @@ class App:
                     (view_date, limit),
                 )
             events = cursor.fetchall()
-            if events:
-                try:
-                    view_iso = datetime.strptime(view_date, "%d-%m-%Y").strftime("%Y-%m-%d")
-                except ValueError:
-                    view_iso = None
-                chronological = bool(self.config.get("entry_list_chronological", False))
-                sessions = self._pair_day_sessions(events)
-                # Meta (Notiz/✓) je (user, project) cachen — wenige Abfragen/Tag.
-                meta_cache: dict[tuple, dict] = {}
+            try:
+                view_iso = datetime.strptime(view_date, "%d-%m-%Y").strftime("%Y-%m-%d")
+            except ValueError:
+                view_iso = None
+            chronological = bool(self.config.get("entry_list_chronological", False))
+            sessions = self._pair_day_sessions(events) if events else []
 
-                def _meta(user, project):
-                    key = (user, project)
-                    if key not in meta_cache:
-                        meta_cache[key] = (
-                            get_daily_meta(self.db_conn, user, project, view_iso)
-                            if view_iso
-                            else {"note": "", "transferred": False, "transferred_at": None}
-                        )
-                    return meta_cache[key]
+            # Meta (Notiz/✓) je (user, project) cachen — wenige Abfragen/Tag.
+            meta_cache: dict[tuple, dict] = {}
+
+            def _meta(user, project):
+                key = (user, project)
+                if key not in meta_cache:
+                    meta_cache[key] = (
+                        get_daily_meta(self.db_conn, user, project, view_iso)
+                        if view_iso
+                        else {"note": "", "transferred": False, "transferred_at": None}
+                    )
+                return meta_cache[key]
+
+            # Projekte mit Notiz/✓ aber OHNE Events an dem Tag ermitteln, damit
+            # eine Hauptfenster-Notiz nie unsichtbar bleibt (z. B. Default-Projekt
+            # ohne Sessions). meta_cache wird dabei direkt vorbefüllt.
+            event_pairs = {(s["user"], s["project"]) for s in sessions}
+            note_only: dict[str, list] = {}
+            if view_iso:
+                if current_name:
+                    for (proj, _d), m in get_daily_meta_for_range(self.db_conn, current_name, [view_iso]).items():
+                        if (m["note"] or m["transferred"]) and (current_name, proj) not in event_pairs:
+                            meta_cache[(current_name, proj)] = m
+                            note_only.setdefault(current_name, []).append(proj)
+                else:
+                    cur2 = self.db_conn.cursor()
+                    cur2.execute(
+                        "SELECT u.name, n.project, n.note, n.transferred, n.transferred_at "
+                        "FROM daily_notes n JOIN users u ON u.id = n.user_id "
+                        "WHERE n.date = ? AND (n.note != '' OR n.transferred = 1)",
+                        (view_iso,),
+                    )
+                    for uname, proj, note, transferred, tat in cur2.fetchall():
+                        if (uname, proj) not in event_pairs:
+                            meta_cache[(uname, proj)] = {
+                                "note": note or "",
+                                "transferred": bool(transferred),
+                                "transferred_at": tat,
+                            }
+                            note_only.setdefault(uname, []).append(proj)
+
+            if events or note_only:
 
                 def _row(text, entry=None):
                     self.db_content_listbox.insert(END, text)
@@ -3110,11 +3150,14 @@ class App:
 
                 _row(f"── {view_date} ──")
 
-                # Nutzer in Erscheinungsreihenfolge.
+                # Nutzer in Erscheinungsreihenfolge (Events zuerst, dann Notiz-only).
                 users_order = []
                 for s in sessions:
                     if s["user"] not in users_order:
                         users_order.append(s["user"])
+                for uname in note_only:
+                    if uname not in users_order:
+                        users_order.append(uname)
 
                 for user in users_order:
                     _row(f"User: {user}")
@@ -3143,6 +3186,15 @@ class App:
                             mark = "  ✓" if meta["transferred"] else ""
                             _row(f"  {times}  Projekt {s['project']}  ({dur}){mark}", {**s, "date_iso": view_iso})
                             _row(f"     Notiz: {meta['note'] or '—'}")
+
+                    # Notiz/✓-Projekte ohne Zeiten ans Ende der Nutzergruppe.
+                    for project in sorted(note_only.get(user, [])):
+                        meta = _meta(user, project)
+                        head = f"  Projekt {project}   (keine Zeiten)"
+                        if meta["transferred"]:
+                            head += "   ✓ übertragen"
+                        _row(head)
+                        _row(f"    Notiz: {meta['note'] or '—'}")
 
                 # Phase 2.4: Hinweis, wenn das Listenlimit greift.
                 if total_count > limit:
@@ -3545,6 +3597,35 @@ class App:
         self._transferred_var.set(meta["transferred"])
         self.transferred_check.configure(state="normal")
         self._note_loaded_key = (project, date_iso)
+        self._note_loaded_text = meta["note"]
+
+    def _flush_pending_note(self) -> bool:
+        """Persistiert eine noch nicht gespeicherte Notiz aus dem Eingabefeld.
+
+        Wird vor Aktionen (Session-Start/Stop/Pause, Datumswechsel) aufgerufen,
+        damit eine getippte Notiz nicht durch einen folgenden ``_load_note``-Reload
+        verloren geht (FocusOut feuert nicht zuverlässig vor Button-Kommandos).
+        Speichert nur, wenn der Inhalt vom geladenen Stand abweicht. Gibt True
+        zurück, wenn tatsächlich gespeichert wurde.
+        """
+        if not getattr(self, "note_entry", None) or not self.db_conn:
+            return False
+        name = self._get_name_silent()
+        project = self._get_project_silent()
+        date_iso = self._selected_date_iso()
+        if not name or not project or not date_iso:
+            return False
+        cleaned = clamp_note(self.note_entry.get())
+        if (project, date_iso) == self._note_loaded_key and cleaned == self._note_loaded_text:
+            return False
+        # Feld auf die normalisierte Form bringen (Kürzung sichtbar machen).
+        if cleaned != self.note_entry.get():
+            self.note_entry.delete(0, END)
+            self.note_entry.insert(0, cleaned)
+        set_daily_note(self.db_conn, name, project, date_iso, cleaned)
+        self._note_loaded_key = (project, date_iso)
+        self._note_loaded_text = cleaned
+        return True
 
     def _on_transferred_toggled(self) -> None:
         """Speichert den »übertragen«-Status (mit heutigem Datum) für Projekt + Tag."""
@@ -3558,26 +3639,18 @@ class App:
         transferred = bool(self._transferred_var.get())
         today_iso = datetime.now().date().strftime("%Y-%m-%d")
         set_daily_transferred(self.db_conn, name, project, date_iso, transferred, today_iso)
+        # Start/Stop-Liste neu zeichnen, damit der ✓-Status dort sofort erscheint.
+        self.update_db_content()
         # Wochenansicht ggf. aktualisieren (Schraffur + ✓-Badge).
         if getattr(self, "_week_view_active", False):
             self._refresh_week_view()
 
     def _on_note_changed(self, _event=None) -> None:
-        """Speichert die Notiz (gekürzt auf max. 20 Wörter) für Datum + Projekt."""
-        if not getattr(self, "note_entry", None) or not self.db_conn:
+        """FocusOut/Return des Notizfeldes: speichern und Ansichten aktualisieren."""
+        if not self._flush_pending_note():
             return
-        name = self._get_name_silent()
-        project = self._get_project_silent()
-        date_iso = self._selected_date_iso()
-        if not name or not project or not date_iso:
-            return
-        cleaned = clamp_note(self.note_entry.get())
-        # Feld auf die normalisierte Form bringen (Kürzung sichtbar machen).
-        if cleaned != self.note_entry.get():
-            self.note_entry.delete(0, END)
-            self.note_entry.insert(0, cleaned)
-        set_daily_note(self.db_conn, name, project, date_iso, cleaned)
-        self._note_loaded_key = (project, date_iso)
+        # Start/Stop-Liste neu zeichnen, damit die Notiz dort sofort erscheint.
+        self.update_db_content()
         # Wochenansicht ggf. aktualisieren, damit Tooltips die Notiz zeigen.
         if getattr(self, "_week_view_active", False):
             self._refresh_week_view()

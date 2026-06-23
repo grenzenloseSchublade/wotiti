@@ -16,7 +16,7 @@ import polars as pl
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.0.1"
 APP_AUTHOR = "grenzenloseSchublade"
 APP_LICENSE = "MIT"
 
