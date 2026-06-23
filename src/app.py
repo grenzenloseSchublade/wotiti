@@ -55,7 +55,8 @@ from db_helper import (
     delete_event,
     get_all_projects,
     get_all_users,
-    get_event_by_id,
+    get_daily_meta,
+    get_daily_meta_for_range,
     get_open_break,
     log_break_start,
     log_break_stop,
@@ -64,6 +65,8 @@ from db_helper import (
     migrate_legacy_user_tables,
     migrate_projects_to_table,
     migrate_repair_dates,
+    set_daily_note,
+    set_daily_transferred,
     update_event,
     validate_event_pair,
 )
@@ -75,6 +78,7 @@ from utils import (
     DATABASE_PATH,
     PATH_TO_DATA,
     PATH_TO_SOUNDS,
+    clamp_note,
     load_config,
     save_config,
 )
@@ -455,6 +459,36 @@ class App:
             else:
                 self.entry_frame.grid_columnconfigure(col, weight=0)
 
+        # Notiz-Zeile: eine kurze Notiz je Projekt/Tag (max. ~20 Wörter). Wird
+        # automatisch zum gewählten Datum + Projekt geladen/gespeichert und in
+        # der Wochenansicht beim Hovern angezeigt.
+        self.note_label = Label(self.entry_frame, text="Notiz:", **label_config)
+        self.note_label.grid(row=1, column=0, pady=(0, 4), padx=3, sticky="w")
+        self.note_entry = Entry(self.entry_frame, **entry_config)
+        self.note_entry.grid(row=1, column=1, columnspan=6, pady=(0, 4), padx=3, sticky="ew")
+        self.note_entry.bind("<Return>", self._on_note_changed)
+        self.note_entry.bind("<FocusOut>", self._on_note_changed)
+        _ToolTip(self.note_entry, "Notiz für dieses Datum + Projekt (max. 20 Wörter)")
+        # Übertragen-Status: markiert, dass diese Zeit (Projekt+Tag) bereits
+        # manuell ins Firmensystem eingetragen wurde. Setzt beim Anhaken das
+        # heutige Datum als Übertragungsdatum.
+        self._transferred_var = BooleanVar(value=False)
+        self.transferred_check = Checkbutton(
+            self.entry_frame,
+            text="übertragen",
+            variable=self._transferred_var,
+            command=self._on_transferred_toggled,
+            bg="#C0C0C0",
+            fg="black",
+            activebackground="#C0C0C0",
+            font=("MS Sans Serif", 9),
+        )
+        self.transferred_check.grid(row=1, column=7, pady=(0, 4), padx=3, sticky="w")
+        _ToolTip(self.transferred_check, "Diese Zeit (Projekt + Tag) wurde manuell ins Firmensystem übertragen")
+        # Merker für den zuletzt geladenen Notiz-Schlüssel, damit ein FocusOut
+        # ohne Änderung nicht unnötig speichert.
+        self._note_loaded_key: tuple[str, str] | None = None
+
         # =====================================================
         # ROW 2: Timer / Wochenübersicht (umschaltbare Kachel)
         # =====================================================
@@ -531,7 +565,9 @@ class App:
         self.db_content_listbox = Listbox(self.db_content_frame, bg="#FFFFFF", fg="black", font=("MS Sans Serif", 10))
         self.db_content_listbox.grid(row=0, column=0, sticky="nsew")
         self.db_content_listbox.bind("<Double-1>", self._edit_event)
-        self._event_ids: list[int | None] = []
+        # Parallele Map zu den Listbox-Zeilen: None für Kopf-/Notiz-Zeilen, sonst
+        # ein Session-Dict {start_id, stop_id, project, user, date_iso, ...}.
+        self._row_entries: list[dict | None] = []
 
         self.scrollbar_listbox = Scrollbar(
             self.db_content_frame, orient=VERTICAL, command=self.db_content_listbox.yview, bg="#C0C0C0", width=20
@@ -658,6 +694,7 @@ class App:
                 default_project = self.config.get("default_project", "1")
                 self._set_project(default_project)
                 self.update_db_content()
+                self._load_note()
         except Exception as e:
             logger.error("Datenbankverbindung fehlgeschlagen: %s", e)
             self.write(f"Datenbankverbindung fehlgeschlagen: {e}", error=True)
@@ -951,6 +988,8 @@ class App:
             self._add_project_dialog()
         else:
             self._last_valid_project = self.project_entry.get()
+            # Notiz für das neu gewählte Projekt (am aktuellen Datum) laden.
+            self._load_note()
             # In der Einzelprojekt-Wochenansicht das gewählte Projekt sofort zeigen.
             if getattr(self, "_week_view_active", False) and not self._week_all_projects:
                 self._refresh_week_view()
@@ -1197,6 +1236,13 @@ class App:
                 except OSError as e:
                     messagebox.showerror("Fehler", f"Löschen fehlgeschlagen:\n{e}", parent=win)
 
+        Button(
+            btn_row,
+            text="Laden",
+            command=lambda: self._activate_database(db_var.get(), win),
+            **{k: v for k, v in btn.items() if k != "fg"},
+            fg="#006400",
+        ).pack(side="left", padx=(0, 5))
         Button(btn_row, text="Durchsuchen...", command=_browse_db, **btn).pack(side="left", padx=(0, 5))
         Button(btn_row, text="Neue DB", command=_new_db, **btn).pack(side="left", padx=(0, 5))
         Button(
@@ -1281,6 +1327,19 @@ class App:
         Entry(
             dash_frame, textvariable=holiday_subdiv_var, font=("MS Sans Serif", 10), width=10, bg="#FFFFFF", fg="black"
         ).grid(row=3, column=1, padx=5, pady=2, sticky="w")
+
+        # Start/Stop-Liste: Gruppierung nach Projekt (Default) vs. chronologisch.
+        entry_chrono_var = BooleanVar(value=bool(self.config.get("entry_list_chronological", False)))
+        Checkbutton(
+            dash_frame,
+            text="Einträge chronologisch statt nach Projekt gruppieren",
+            variable=entry_chrono_var,
+            bg="#C0C0C0",
+            fg="black",
+            selectcolor="#C0C0C0",
+            activebackground="#C0C0C0",
+            font=("MS Sans Serif", 10),
+        ).grid(row=4, column=0, columnspan=2, sticky="w", pady=2)
 
         # ── Pomodoro ──
         pomodoro_frame = LabelFrame(
@@ -1588,6 +1647,7 @@ class App:
                 "idle_timeout_minutes": int(idle_timeout_raw),
                 "holiday_country": holiday_country_var.get().strip() or "DE",
                 "holiday_subdiv": holiday_subdiv_var.get().strip(),
+                "entry_list_chronological": bool(entry_chrono_var.get()),
             }
             save_config(new_config)
             logger.info(
@@ -1612,29 +1672,19 @@ class App:
 
             # Switch database if changed
             old_path = self._db_path
-            if new_config["database_path"] != old_path:
-                try:
-                    if self.db_conn:
-                        self.db_conn.close()
-                    self._db_path = new_config["database_path"]
-                    self.db_conn = create_connection(self._db_path)
-                    if self.db_conn:
-                        create_main_table(self.db_conn)
-                        create_events_table(self.db_conn)
-                        create_break_events_table(self.db_conn)
-                        migrate_legacy_user_tables(self.db_conn)
-                        migrate_projects_to_table(self.db_conn)
-                        migrate_repair_dates(self.db_conn)
-                    self.write(f"Datenbank gewechselt: {self._db_path}")
-                    logger.info("Datenbank gewechselt: %s → %s", old_path, self._db_path)
-                except Exception as e:
-                    logger.error("Fehler beim DB-Wechsel: %s", e)
-                    self.write(f"Fehler beim DB-Wechsel: {e}", error=True)
+            db_changed = new_config["database_path"] != old_path
+            if db_changed and self._open_database(new_config["database_path"]):
+                self.write(f"Datenbank gewechselt: {self._db_path}")
+                logger.info("Datenbank gewechselt: %s → %s", old_path, self._db_path)
 
             self._combobox_dirty = True
             self._refresh_comboboxes(force=True)
             self.name_entry.set(new_config["default_user"])
             self._set_project(new_config["default_project"])
+            # Nach DB-Wechsel auf den jüngsten Tag mit Daten springen, damit die
+            # neue Datenbank sofort sichtbar geladen ist (nicht auf einem leeren Tag).
+            if db_changed:
+                self._jump_to_latest_data_date(new_config["default_user"])
             self._force_date_refresh()
 
             if int(new_port) != self._stats_port:
@@ -2486,6 +2536,36 @@ class App:
         self.toggle_view_button.configure(text="Woche ›", command=self._show_week_view)
         self.toggle_view_button.lift()
 
+    def _project_color(self, name: str) -> str:
+        """Liefert eine stabile, laufübergreifende Farbe für ``name``.
+
+        Die Zuordnung wird in ``config['project_colors']`` persistiert. Neue
+        Projekte erhalten die Palettenfarbe, die unter den bereits zugewiesenen
+        am seltensten vorkommt (maximiert Unterscheidbarkeit; erst ab >10
+        Projekten sind Wiederholungen unvermeidbar).
+        """
+        if not name:
+            return WEEK_PROJECT_COLORS[0]
+        mapping = self.config.get("project_colors")
+        if not isinstance(mapping, dict):
+            mapping = {}
+            self.config["project_colors"] = mapping
+        existing = mapping.get(name)
+        if existing in WEEK_PROJECT_COLORS:
+            return existing
+        # Seltenste Palettenfarbe wählen (stabile Reihenfolge bei Gleichstand).
+        usage = {c: 0 for c in WEEK_PROJECT_COLORS}
+        for c in mapping.values():
+            if c in usage:
+                usage[c] += 1
+        chosen = min(WEEK_PROJECT_COLORS, key=lambda c: (usage[c], WEEK_PROJECT_COLORS.index(c)))
+        mapping[name] = chosen
+        try:
+            save_config(self.config)
+        except OSError as e:  # noqa: BLE001
+            logger.warning("Projektfarbe konnte nicht gespeichert werden: %s", e)
+        return chosen
+
     def _refresh_week_view(self) -> None:
         """Zeichnet die letzten 7 Tage als gestapelte, projektweise eingefaerbte Balken.
 
@@ -2538,11 +2618,14 @@ class App:
         max_hours = max(max(day_totals, default=0.0), 1.0)
         BAR_BLOCKS_MAX = 14
 
-        # Distinkte Farbe je Projekt: feste Zuordnung über die in dieser Woche
-        # aktiven Projekte (Index in die Palette), damit sich Projekte zuverlässig
-        # farblich unterscheiden — der reine Hash konnte kollidieren.
+        # Distinkte, laufübergreifend stabile Farbe je Projekt. Die Zuordnung
+        # hängt NUR am Projektnamen (persistiert in der Config), nicht an der
+        # Wochenzusammensetzung — sonst springen Farben zwischen Wochen.
         all_projects = sorted({p for _, by_proj in days for p in by_proj})
-        color_map = {p: WEEK_PROJECT_COLORS[i % len(WEEK_PROJECT_COLORS)] for i, p in enumerate(all_projects)}
+        color_map = {p: self._project_color(p) for p in all_projects}
+
+        # Notiz + Übertragungs-Status je Projekt/Tag für die 7 Tage (ein Batch-Query).
+        meta_map = get_daily_meta_for_range(self.db_conn, name, [iso for iso, _ in days])
 
         from utils import is_holiday as _is_holiday
 
@@ -2577,6 +2660,9 @@ class App:
                 cell.configure(bg=cell_bg, relief="flat", borderwidth=0)
 
             day_total = sum(by_proj.values())
+            # Tag vollständig übertragen, wenn er Zeiten hat und alle Projekte
+            # dieses Tages den Übertragen-Status tragen.
+            day_transferred = bool(by_proj) and all(meta_map.get((p, iso_date), {}).get("transferred") for p in by_proj)
 
             # Wochentag (bold) und Datum als zwei Labels
             Label(cell, text=_WDAY_DE[weekday], bg=cell_bg, fg=date_fg, font=("MS Sans Serif", 8, "bold")).pack(
@@ -2584,30 +2670,55 @@ class App:
             )
             Label(cell, text=d.strftime("%d.%m"), bg=cell_bg, fg=date_fg, font=("MS Sans Serif", 8)).pack(side="top")
 
-            # Gesamtstunden des Tages ("—" wenn leer)
+            # Gesamtstunden des Tages ("—" wenn leer); ✓ wenn voll übertragen.
             if day_total == 0.0:
                 Label(cell, text="—", bg=cell_bg, fg="#888888", font=("MS Sans Serif", 8, "bold")).pack(side="top")
             else:
-                Label(cell, text=f"{day_total:.2f} h", bg=cell_bg, fg=date_fg, font=("MS Sans Serif", 8, "bold")).pack(
-                    side="top"
-                )
+                total_text = f"{day_total:.2f} h" + (" ✓" if day_transferred else "")
+                Label(
+                    cell,
+                    text=total_text,
+                    bg=cell_bg,
+                    fg=("#008000" if day_transferred else date_fg),
+                    font=("MS Sans Serif", 8, "bold"),
+                ).pack(side="top")
 
             # Gestapelte, projektweise eingefaerbte Block-Segmente (groesstes oben).
             tooltip_lines = [f"{_WDAY_DE[weekday]} {d.strftime('%d.%m')}: {day_total:.2f} h"]
             for proj, hrs in sorted(by_proj.items(), key=lambda kv: (-kv[1], kv[0])):
                 seen_projects.add(proj)
+                meta = meta_map.get((proj, iso_date), {})
+                note = meta.get("note", "")
+                transferred = bool(meta.get("transferred"))
                 n_blocks = max(1, int(round((hrs / max_hours) * BAR_BLOCKS_MAX)))
+                # Übertragen = schraffiert (▒), offen = solide (█); Projektfarbe bleibt.
+                block_char = "▒" if transferred else "█"
                 seg = Label(
                     cell,
-                    text="\n".join(["█"] * n_blocks),
+                    text="\n".join([block_char] * n_blocks),
                     bg=cell_bg,
                     fg=color_map.get(proj, WEEK_PROJECT_COLORS[0]),
                     font=("Courier New", 7),
                 )
                 seg.pack(side="top")
-                # Hover über den Balken: Projektname + getrackte Zeit dieses Tages.
-                _ToolTip(seg, f"{proj}: {hrs:.2f} h ({_WDAY_DE[weekday]} {d.strftime('%d.%m')})")
-                tooltip_lines.append(f"  {proj}: {hrs:.2f} h")
+                # Hover über den Balken: Projektname + getrackte Zeit + Status + Notiz.
+                seg_tip = f"{proj}: {hrs:.2f} h ({_WDAY_DE[weekday]} {d.strftime('%d.%m')})"
+                line = f"  {proj}: {hrs:.2f} h"
+                if transferred:
+                    at = meta.get("transferred_at")
+                    when = ""
+                    if at:
+                        try:
+                            when = " am " + datetime.strptime(at, "%Y-%m-%d").strftime("%d.%m.%Y")
+                        except ValueError:
+                            when = ""
+                    seg_tip += f"\n✓ übertragen{when}"
+                    line += f" [übertragen{when}]"
+                if note:
+                    seg_tip += f"\nNotiz: {note}"
+                    line += f" — {note}"
+                _ToolTip(seg, seg_tip)
+                tooltip_lines.append(line)
 
             _ToolTip(cell, "\n".join(tooltip_lines))
 
@@ -2636,6 +2747,8 @@ class App:
         self.update_db_content()
         self._refresh_duration_display()
         self._update_date_entry_visual()
+        # Notiz für das (ggf. geänderte) Datum + Projekt nachladen.
+        self._load_note()
         # Wochen-Kachel mitziehen, falls sie gerade sichtbar ist.
         if getattr(self, "_week_view_active", False):
             self._refresh_week_view()
@@ -2768,10 +2881,154 @@ class App:
         except Exception:
             self._fallback_write(message, error=error)
 
+    def _open_database(self, path: str) -> bool:
+        """Schließt die aktuelle DB-Verbindung und öffnet ``path`` (inkl. Schema/Migration).
+
+        Setzt ``self._db_path`` und ``self.db_conn``. Gibt True bei Erfolg zurück.
+        """
+        try:
+            if self.db_conn:
+                self.db_conn.close()
+            self._db_path = path
+            self.db_conn = create_connection(path)
+            if self.db_conn:
+                create_main_table(self.db_conn)
+                create_events_table(self.db_conn)
+                create_break_events_table(self.db_conn)
+                migrate_legacy_user_tables(self.db_conn)
+                migrate_projects_to_table(self.db_conn)
+                migrate_repair_dates(self.db_conn)
+            return self.db_conn is not None
+        except Exception as e:  # noqa: BLE001
+            logger.error("Fehler beim DB-Wechsel: %s", e)
+            self.write(f"Fehler beim DB-Wechsel: {e}", error=True)
+            return False
+
+    def _jump_to_latest_data_date(self, name: str | None = None) -> None:
+        """Setzt das Datumsfeld auf den jüngsten Tag mit Events (für ``name``)."""
+        if not self.db_conn:
+            return
+        try:
+            cur = self.db_conn.cursor()
+            if name:
+                cur.execute(
+                    "SELECT e.date FROM events e JOIN users u ON u.id = e.user_id "
+                    "WHERE u.name = ? ORDER BY e.timestamp DESC LIMIT 1",
+                    (name,),
+                )
+            else:
+                cur.execute("SELECT date FROM events ORDER BY timestamp DESC LIMIT 1")
+            row = cur.fetchone()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("jump_to_latest_data_date: %s", e)
+            return
+        if row and row[0]:
+            self.date_entry.delete(0, END)
+            self.date_entry.insert(0, row[0])
+
+    def _activate_database(self, path: str, win=None) -> None:
+        """Wechselt sofort zur Datenbank ``path`` (One-Click »Laden« aus den Einstellungen).
+
+        Öffnet die DB, speichert den Pfad in der Config, lädt Comboboxen neu,
+        springt auf den jüngsten Tag mit Daten und schließt den Dialog.
+        """
+        parent = win or self.master
+        path = (path or "").strip()
+        if not path or not os.path.isfile(path):
+            messagebox.showwarning("Keine Datenbank", "Bitte eine vorhandene .db-Datei auswählen.", parent=parent)
+            return
+        if any(self.session_active.values()):
+            messagebox.showwarning(
+                "Session aktiv", "Datenbank kann nicht gewechselt werden, solange eine Session läuft.", parent=parent
+            )
+            return
+        if os.path.abspath(path) != os.path.abspath(self._db_path) and not self._open_database(path):
+            messagebox.showerror("Fehler", "Datenbank konnte nicht geladen werden.", parent=parent)
+            return
+        self.config["database_path"] = path
+        save_config(self.config)
+        self._combobox_dirty = True
+        self._refresh_comboboxes(force=True)
+        self.name_entry.set(self.config.get("default_user", "Hans"))
+        self._set_project(self.config.get("default_project", "1"))
+        self._jump_to_latest_data_date(self.name_entry.get().strip())
+        self._force_date_refresh()
+        self.write(f"Datenbank geladen: {path}")
+        if win is not None:
+            win.destroy()
+
+    def _pair_day_sessions(self, events) -> list[dict]:
+        """Paart Start/Stop-Events je (user, project) zu Sessions.
+
+        ``events``: Liste von (id, user, project, event_type, timestamp_str),
+        zeitlich sortiert. Liefert Session-Dicts mit start/stop-Event-IDs,
+        geparsten Zeitstempeln und Dauer; chronologisch nach Startzeit sortiert.
+        Offene Sessions (Start ohne Stop) haben ``stop_id=None``; verwaiste Stops
+        ``start_id=None``.
+        """
+        from collections import defaultdict
+
+        by_key: dict[tuple, list] = defaultdict(list)
+        for ev_id, user, project, etype, ts_str in events:
+            try:
+                ts = datetime.strptime(ts_str, TIMESTAMP_FORMAT)
+            except (ValueError, TypeError):
+                continue
+            by_key[(user, project)].append((ev_id, etype, ts))
+
+        sessions: list[dict] = []
+
+        def _emit(user, project, start, stop):
+            s_ts = start[2] if start else None
+            e_ts = stop[2] if stop else None
+            dur_h = (e_ts - s_ts).total_seconds() / 3600.0 if (s_ts and e_ts) else None
+            sessions.append(
+                {
+                    "user": user,
+                    "project": project,
+                    "start_id": start[0] if start else None,
+                    "stop_id": stop[0] if stop else None,
+                    "start_ts": s_ts,
+                    "stop_ts": e_ts,
+                    "dur_h": dur_h,
+                    "sort_ts": s_ts or e_ts,
+                }
+            )
+
+        for (user, project), evs in by_key.items():
+            evs.sort(key=lambda t: t[2])
+            pending_start = None
+            for ev in evs:
+                etype = ev[1]
+                if etype == "start":
+                    if pending_start is not None:
+                        _emit(user, project, pending_start, None)  # vorheriger Start offen
+                    pending_start = ev
+                elif etype == "stop":
+                    if pending_start is not None:
+                        _emit(user, project, pending_start, ev)
+                        pending_start = None
+                    else:
+                        _emit(user, project, None, ev)  # verwaister Stop
+            if pending_start is not None:
+                _emit(user, project, pending_start, None)
+
+        sessions.sort(key=lambda s: s["sort_ts"] or datetime.max)
+        return sessions
+
+    @staticmethod
+    def _session_times_str(s: dict) -> tuple[str, str]:
+        """(»HH:MM → HH:MM«-Text, Dauer-Text) für eine Session."""
+        start = s["start_ts"].strftime("%H:%M") if s["start_ts"] else "…"
+        stop = s["stop_ts"].strftime("%H:%M") if s["stop_ts"] else "…"
+        if s["dur_h"] is None:
+            return f"{start} → {stop}", "läuft"
+        return f"{start} → {stop}", f"{s['dur_h']:.2f} h"
+
     def update_db_content(self):
         """Update the database content listbox with the latest data."""
         self.db_content_listbox.delete(0, END)
-        self._event_ids = []
+        self._row_entries = []
         if self.db_conn:
             cursor = self.db_conn.cursor()
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='events';")
@@ -2828,59 +3085,124 @@ class App:
                 )
             events = cursor.fetchall()
             if events:
-                self.db_content_listbox.insert(END, f"── {view_date} ──")
-                self._event_ids.append(None)
-                current_user = None
-                for event_id, user_name, project, event_type, timestamp in events:
-                    if user_name != current_user:
-                        current_user = user_name
-                        self.db_content_listbox.insert(END, f"User: {user_name}")
-                        self._event_ids.append(None)
-                    self.db_content_listbox.insert(END, f"  Projekt {project}: {event_type} at {timestamp}")
-                    self._event_ids.append(event_id)
+                try:
+                    view_iso = datetime.strptime(view_date, "%d-%m-%Y").strftime("%Y-%m-%d")
+                except ValueError:
+                    view_iso = None
+                chronological = bool(self.config.get("entry_list_chronological", False))
+                sessions = self._pair_day_sessions(events)
+                # Meta (Notiz/✓) je (user, project) cachen — wenige Abfragen/Tag.
+                meta_cache: dict[tuple, dict] = {}
+
+                def _meta(user, project):
+                    key = (user, project)
+                    if key not in meta_cache:
+                        meta_cache[key] = (
+                            get_daily_meta(self.db_conn, user, project, view_iso)
+                            if view_iso
+                            else {"note": "", "transferred": False, "transferred_at": None}
+                        )
+                    return meta_cache[key]
+
+                def _row(text, entry=None):
+                    self.db_content_listbox.insert(END, text)
+                    self._row_entries.append(entry)
+
+                _row(f"── {view_date} ──")
+
+                # Nutzer in Erscheinungsreihenfolge.
+                users_order = []
+                for s in sessions:
+                    if s["user"] not in users_order:
+                        users_order.append(s["user"])
+
+                for user in users_order:
+                    _row(f"User: {user}")
+                    user_sessions = [s for s in sessions if s["user"] == user]
+                    if not chronological:
+                        # Layout A: nach Projekt gruppiert.
+                        projects_order = []
+                        for s in user_sessions:
+                            if s["project"] not in projects_order:
+                                projects_order.append(s["project"])
+                        for project in projects_order:
+                            meta = _meta(user, project)
+                            head = f"  Projekt {project}"
+                            if meta["transferred"]:
+                                head += "   ✓ übertragen"
+                            _row(head)
+                            for s in [ps for ps in user_sessions if ps["project"] == project]:
+                                times, dur = self._session_times_str(s)
+                                _row(f"    {times}  ({dur})", {**s, "date_iso": view_iso})
+                            _row(f"    Notiz: {meta['note'] or '—'}")
+                    else:
+                        # Layout B: chronologisch, Projekt je Zeile.
+                        for s in user_sessions:
+                            meta = _meta(user, s["project"])
+                            times, dur = self._session_times_str(s)
+                            mark = "  ✓" if meta["transferred"] else ""
+                            _row(f"  {times}  Projekt {s['project']}  ({dur}){mark}", {**s, "date_iso": view_iso})
+                            _row(f"     Notiz: {meta['note'] or '—'}")
+
                 # Phase 2.4: Hinweis, wenn das Listenlimit greift.
                 if total_count > limit:
-                    self.db_content_listbox.insert(
-                        END, f"… {total_count - limit} weitere Einträge ausgeblendet (Limit {limit})"
-                    )
-                    self._event_ids.append(None)
+                    _row(f"… {total_count - limit} weitere Einträge ausgeblendet (Limit {limit})")
 
     def _edit_event(self, event=None):
-        """Open edit dialog for the selected event (double-click handler)."""
+        """Open the session editor for the double-clicked session row.
+
+        Eine Session bündelt Start- und Stopp-Event. Der Dialog editiert Projekt,
+        Datum, Start-/Endzeit, Notiz und Übertragen-Status in einem Rutsch.
+        """
         sel = self.db_content_listbox.curselection()
         if not sel:
             return
         idx = sel[0]
-        if idx >= len(self._event_ids):
+        if idx >= len(self._row_entries):
             return
-        event_id = self._event_ids[idx]
-        if event_id is None:
-            return  # Header row
+        session = self._row_entries[idx]
+        if not isinstance(session, dict):
+            return  # Kopf-/Notiz-/Limit-Zeile
 
-        ev = get_event_by_id(self.db_conn, event_id)
-        if ev is None:
-            self.write("Eintrag nicht gefunden.", error=True)
-            return
+        user = session["user"]
+        project = session["project"]
+        start_id = session.get("start_id")
+        stop_id = session.get("stop_id")
+        start_ts = session.get("start_ts")
+        stop_ts = session.get("stop_ts")
+        orig_iso = session.get("date_iso")
 
-        # Phase 2.2: Warnen, wenn dieser Eintrag zu einer aktiven Session
-        # gehört (offener Start ohne Stop). Bearbeiten ist möglich, aber
-        # potenziell verwirrend.
-        is_active_open_start = ev["event_type"] == "start" and self.session_active.get(
-            (ev["user"], ev["project"]), False
-        )
-        if is_active_open_start and not messagebox.askyesno(
+        # Laufende Session (offener Start, noch live)? Warnen wie bisher.
+        is_live = stop_id is None and self.session_active.get((user, project), False)
+        if is_live and not messagebox.askyesno(
             "Aktive Session",
-            "Dieser Eintrag gehört zu einer laufenden Session.\n\n"
-            "Änderungen am Zeitstempel können die Live-Anzeige verfälschen.\n"
-            "Empfehlung: Session zuerst stoppen.\n\nTrotzdem bearbeiten?",
+            "Diese Session läuft gerade (kein Stopp).\n\n"
+            "Änderungen an der Startzeit können die Live-Anzeige verfälschen.\n"
+            "Empfehlung: zuerst stoppen.\n\nTrotzdem bearbeiten?",
             parent=self.master,
         ):
             return
 
+        meta = (
+            get_daily_meta(self.db_conn, user, project, orig_iso)
+            if orig_iso
+            else {
+                "note": "",
+                "transferred": False,
+            }
+        )
+        initial_note = meta.get("note", "")
+        initial_transferred = bool(meta.get("transferred"))
+
+        date_default = start_ts or stop_ts
+        date_str = date_default.strftime("%d-%m-%Y") if date_default else self._get_selected_date()
+        start_str = start_ts.strftime("%H:%M") if start_ts else ""
+        stop_str = stop_ts.strftime("%H:%M") if stop_ts else ""
+
         win = Toplevel(self.master)
-        win.title("Eintrag bearbeiten")
+        win.title("Session bearbeiten")
         win.configure(bg="#C0C0C0")
-        w, h = 460, 240
+        w, h = 460, 320
         x = self.master.winfo_x() + (self.master.winfo_width() - w) // 2
         y = self.master.winfo_y() + (self.master.winfo_height() - h) // 2
         win.geometry(f"{w}x{h}+{x}+{y}")
@@ -2897,117 +3219,155 @@ class App:
             "borderwidth": 2,
         }
 
-        # Row 0: Event type (read-only)
-        Label(win, text="Typ:", **lbl_cfg).grid(row=0, column=0, padx=8, pady=4, sticky="w")
-        Label(win, text=ev["event_type"].upper(), bg="#C0C0C0", fg="black", font=("MS Sans Serif", 10, "bold")).grid(
-            row=0, column=1, padx=8, pady=4, sticky="w"
-        )
-
-        # Row 1: Project
-        Label(win, text="Projekt:", **lbl_cfg).grid(row=1, column=0, padx=8, pady=4, sticky="w")
+        # Projekt
+        Label(win, text="Projekt:", **lbl_cfg).grid(row=0, column=0, padx=8, pady=4, sticky="w")
         proj_combo = Combobox(win, font=("MS Sans Serif", 10), width=28)
         proj_combo["values"] = self.project_entry["values"]
-        proj_combo.set(ev["project"])
-        proj_combo.grid(row=1, column=1, padx=8, pady=4, sticky="ew")
-        if is_active_open_start:
-            proj_combo.config(state="disabled")
+        proj_combo.set(project)
+        proj_combo.grid(row=0, column=1, padx=8, pady=4, sticky="ew")
 
-        # Row 2: Datum (TT-MM-JJJJ)
-        Label(win, text="Datum (TT-MM-JJJJ):", **lbl_cfg).grid(row=2, column=0, padx=8, pady=4, sticky="w")
-        try:
-            _initial_dt = datetime.strptime(ev["timestamp"], TIMESTAMP_FORMAT)
-            _initial_date = _initial_dt.strftime("%d-%m-%Y")
-            _initial_time = _initial_dt.strftime("%H:%M")
-        except (ValueError, KeyError):
-            _initial_date = ev.get("date", "")
-            _initial_time = "09:00"
-        date_var = StringVar(value=_initial_date)
-        date_entry_edit = Entry(win, textvariable=date_var, **entry_cfg, width=30)
-        date_entry_edit.grid(row=2, column=1, padx=8, pady=4, sticky="ew")
-        if is_active_open_start:
-            date_entry_edit.config(state="readonly")
+        # Datum
+        Label(win, text="Datum (TT-MM-JJJJ):", **lbl_cfg).grid(row=1, column=0, padx=8, pady=4, sticky="w")
+        date_var = StringVar(value=date_str)
+        Entry(win, textvariable=date_var, **entry_cfg, width=30).grid(row=1, column=1, padx=8, pady=4, sticky="ew")
 
-        # Row 3: Uhrzeit (HH:MM)
-        Label(win, text="Uhrzeit (HH:MM):", **lbl_cfg).grid(row=3, column=0, padx=8, pady=4, sticky="w")
-        time_var = StringVar(value=_initial_time)
-        time_entry_edit = Entry(win, textvariable=time_var, **entry_cfg, width=30)
-        time_entry_edit.grid(row=3, column=1, padx=8, pady=4, sticky="ew")
-        if is_active_open_start:
-            time_entry_edit.config(state="readonly")
+        # Startzeit (nur falls ein Start-Event existiert)
+        Label(win, text="Start (HH:MM):", **lbl_cfg).grid(row=2, column=0, padx=8, pady=4, sticky="w")
+        start_var = StringVar(value=start_str)
+        start_entry = Entry(win, textvariable=start_var, **entry_cfg, width=30)
+        start_entry.grid(row=2, column=1, padx=8, pady=4, sticky="ew")
+        if start_id is None:
+            start_entry.config(state="readonly")
+
+        # Endzeit (nur falls ein Stopp-Event existiert)
+        Label(win, text="Ende (HH:MM):", **lbl_cfg).grid(row=3, column=0, padx=8, pady=4, sticky="w")
+        end_var = StringVar(value=stop_str)
+        end_entry = Entry(win, textvariable=end_var, **entry_cfg, width=30)
+        end_entry.grid(row=3, column=1, padx=8, pady=4, sticky="ew")
+        if stop_id is None:
+            end_entry.config(state="readonly")
+            _ToolTip(end_entry, "Laufende Session — Ende erst nach dem Stoppen editierbar.")
+
+        # Notiz (je Projekt/Tag)
+        Label(win, text="Notiz:", **lbl_cfg).grid(row=4, column=0, padx=8, pady=4, sticky="w")
+        note_var = StringVar(value=initial_note)
+        note_entry_edit = Entry(win, textvariable=note_var, **entry_cfg, width=30)
+        note_entry_edit.grid(row=4, column=1, padx=8, pady=4, sticky="ew")
+        _ToolTip(note_entry_edit, "Notiz für dieses Datum + Projekt (max. 20 Wörter)")
+
+        # Übertragen-Status
+        transferred_var = BooleanVar(value=initial_transferred)
+        Checkbutton(
+            win,
+            text="ins Firmensystem übertragen",
+            variable=transferred_var,
+            bg="#C0C0C0",
+            fg="black",
+            selectcolor="#C0C0C0",
+            activebackground="#C0C0C0",
+            font=("MS Sans Serif", 10),
+        ).grid(row=5, column=1, padx=8, pady=4, sticky="w")
 
         win.grid_columnconfigure(1, weight=1)
 
-        # Buttons
         btn_cfg = {"bg": "#D4D0C8", "fg": "black", "font": ("MS Sans Serif", 10), "relief": "raised", "borderwidth": 2}
         btn_frame = Frame(win, bg="#C0C0C0")
-        btn_frame.grid(row=5, column=0, columnspan=2, pady=10)
+        btn_frame.grid(row=6, column=0, columnspan=2, pady=10)
+
+        def _parse_hhmm(raw, label):
+            try:
+                t = datetime.strptime(raw, "%H:%M")
+                return t.hour, t.minute
+            except ValueError:
+                messagebox.showwarning("Fehler", f"Ungültige {label}: '{raw}'.\nErwartet: HH:MM", parent=win)
+                return None
 
         def _save():
             new_project = proj_combo.get().strip()
-            new_date_raw = date_var.get().strip()
-            new_time_raw = time_var.get().strip()
-            if not new_project:
+            if not new_project or new_project == NEW_PROJECT_LABEL:
                 messagebox.showwarning("Fehler", "Projekt darf nicht leer sein.", parent=win)
                 return
             try:
-                d_part = datetime.strptime(new_date_raw, "%d-%m-%Y")
+                d_part = datetime.strptime(date_var.get().strip(), "%d-%m-%Y")
             except ValueError:
                 messagebox.showwarning(
-                    "Fehler",
-                    f"Ungültiges Datum: '{new_date_raw}'.\nErwartet: TT-MM-JJJJ",
-                    parent=win,
+                    "Fehler", f"Ungültiges Datum: '{date_var.get()}'.\nErwartet: TT-MM-JJJJ", parent=win
                 )
                 return
-            try:
-                t_part = datetime.strptime(new_time_raw, "%H:%M")
-            except ValueError:
-                messagebox.showwarning(
-                    "Fehler",
-                    f"Ungültige Uhrzeit: '{new_time_raw}'.\nErwartet: HH:MM",
-                    parent=win,
-                )
-                return
-            parsed_ts = d_part.replace(hour=t_part.hour, minute=t_part.minute, second=0)
-            new_ts = parsed_ts.strftime(TIMESTAMP_FORMAT)
-            new_date = parsed_ts.strftime("%d-%m-%Y")
 
-            if update_event(self.db_conn, event_id, new_project, new_ts, new_date):
-                # Phase 3.2: Plausi-Check Start↔Stop nach dem Update.
-                ok, msg = validate_event_pair(self.db_conn, event_id)
-                if not ok:
-                    messagebox.showwarning(
-                        "Plausibilität",
-                        f"Eintrag gespeichert, aber Reihenfolge prüfen:\n{msg}",
-                        parent=win,
-                    )
-                logger.info("Event %s bearbeitet.", event_id)
-                self.write(f"Eintrag {event_id} aktualisiert.")
-                self._combobox_dirty = True
-                self._refresh_comboboxes()
-                self._force_date_refresh()
-                win.destroy()
+            start_dt = stop_dt = None
+            if start_id is not None:
+                hm = _parse_hhmm(start_var.get().strip(), "Startzeit")
+                if hm is None:
+                    return
+                start_dt = d_part.replace(hour=hm[0], minute=hm[1], second=0)
+            if stop_id is not None:
+                hm = _parse_hhmm(end_var.get().strip(), "Endzeit")
+                if hm is None:
+                    return
+                stop_dt = d_part.replace(hour=hm[0], minute=hm[1], second=0)
+            if start_dt and stop_dt and stop_dt < start_dt:
+                messagebox.showwarning("Fehler", "Ende liegt vor dem Start.", parent=win)
+                return
+
+            ok = True
+            if start_id is not None:
+                ok = update_event(self.db_conn, start_id, new_project, start_dt.strftime(TIMESTAMP_FORMAT)) and ok
+            if stop_id is not None:
+                ok = update_event(self.db_conn, stop_id, new_project, stop_dt.strftime(TIMESTAMP_FORMAT)) and ok
+            if not ok:
+                messagebox.showerror("Fehler", "Session konnte nicht gespeichert werden.", parent=win)
+                return
+
+            # Notiz/✓ auf den (ggf. neuen) Projekt+Tag-Schlüssel schreiben.
+            new_iso = d_part.strftime("%Y-%m-%d")
+            new_note = clamp_note(note_var.get())
+            new_transferred = bool(transferred_var.get())
+            today_iso = datetime.now().date().strftime("%Y-%m-%d")
+            key_changed = (new_project != project) or (new_iso != orig_iso)
+            if key_changed:
+                # Session verschoben → Notiz/✓ wandern bewusst mit.
+                set_daily_note(self.db_conn, user, new_project, new_iso, new_note)
+                set_daily_transferred(self.db_conn, user, new_project, new_iso, new_transferred, today_iso)
             else:
-                messagebox.showerror("Fehler", "Eintrag konnte nicht gespeichert werden.", parent=win)
+                if new_note != initial_note:
+                    set_daily_note(self.db_conn, user, new_project, new_iso, new_note)
+                if new_transferred != initial_transferred:
+                    set_daily_transferred(self.db_conn, user, new_project, new_iso, new_transferred, today_iso)
+
+            # Plausi-Check (auf vorhandenem Event).
+            check_id = stop_id if stop_id is not None else start_id
+            if check_id is not None:
+                okv, msg = validate_event_pair(self.db_conn, check_id)
+                if not okv:
+                    messagebox.showwarning("Plausibilität", f"Gespeichert, aber Reihenfolge prüfen:\n{msg}", parent=win)
+
+            self.write("Session aktualisiert.")
+            self._combobox_dirty = True
+            self._refresh_comboboxes()
+            self._force_date_refresh()
+            win.destroy()
 
         def _delete():
+            times, dur = self._session_times_str(session)
             if not messagebox.askyesno(
-                "Eintrag löschen",
-                f"Eintrag #{event_id} wirklich löschen?\n\n"
-                f"Typ: {ev['event_type'].upper()}\n"
-                f"Projekt: {ev['project']}\n"
-                f"Zeitstempel: {ev['timestamp']}",
+                "Session löschen",
+                f"Diese Session wirklich löschen?\n\nProjekt: {project}\n{times}  ({dur})",
                 parent=win,
             ):
                 return
-            if delete_event(self.db_conn, event_id):
-                logger.info("Event %s gelöscht.", event_id)
-                self.write(f"Eintrag {event_id} gelöscht.")
+            ok = True
+            for eid in (start_id, stop_id):
+                if eid is not None:
+                    ok = delete_event(self.db_conn, eid) and ok
+            if ok:
+                self.write("Session gelöscht.")
                 self._combobox_dirty = True
                 self._refresh_comboboxes()
                 self._force_date_refresh()
                 win.destroy()
             else:
-                messagebox.showerror("Fehler", "Eintrag konnte nicht gelöscht werden.", parent=win)
+                messagebox.showerror("Fehler", "Session konnte nicht gelöscht werden.", parent=win)
 
         Button(btn_frame, text="Speichern", command=_save, **btn_cfg).pack(side="left", padx=5)
         Button(
@@ -3022,7 +3382,6 @@ class App:
         ).pack(side="left", padx=5)
         Button(btn_frame, text="Abbrechen", command=win.destroy, **btn_cfg).pack(side="left", padx=5)
 
-        # Esc = Abbrechen, Return = Speichern (Phase 2.6).
         win.bind("<Escape>", lambda _e: win.destroy())
         win.bind("<Return>", lambda _e: _save())
 
@@ -3159,6 +3518,69 @@ class App:
         """Get name without validation errors (for timer updates)."""
         val = self.name_entry.get().strip()
         return val if val else None
+
+    def _selected_date_iso(self) -> str | None:
+        """Aktuell gewähltes Datum (DD-MM-YYYY) als ISO (YYYY-MM-DD) oder None."""
+        try:
+            return datetime.strptime(self._get_selected_date(), "%d-%m-%Y").strftime("%Y-%m-%d")
+        except ValueError:
+            return None
+
+    def _load_note(self) -> None:
+        """Lädt Notiz + Übertragungs-Status für aktuelles Datum + Projekt."""
+        if not getattr(self, "note_entry", None) or not self.db_conn:
+            return
+        name = self._get_name_silent()
+        project = self._get_project_silent()
+        date_iso = self._selected_date_iso()
+        if not name or not project or not date_iso:
+            self.note_entry.delete(0, END)
+            self._transferred_var.set(False)
+            self.transferred_check.configure(state="disabled")
+            self._note_loaded_key = None
+            return
+        meta = get_daily_meta(self.db_conn, name, project, date_iso)
+        self.note_entry.delete(0, END)
+        self.note_entry.insert(0, meta["note"])
+        self._transferred_var.set(meta["transferred"])
+        self.transferred_check.configure(state="normal")
+        self._note_loaded_key = (project, date_iso)
+
+    def _on_transferred_toggled(self) -> None:
+        """Speichert den »übertragen«-Status (mit heutigem Datum) für Projekt + Tag."""
+        if not getattr(self, "transferred_check", None) or not self.db_conn:
+            return
+        name = self._get_name_silent()
+        project = self._get_project_silent()
+        date_iso = self._selected_date_iso()
+        if not name or not project or not date_iso:
+            return
+        transferred = bool(self._transferred_var.get())
+        today_iso = datetime.now().date().strftime("%Y-%m-%d")
+        set_daily_transferred(self.db_conn, name, project, date_iso, transferred, today_iso)
+        # Wochenansicht ggf. aktualisieren (Schraffur + ✓-Badge).
+        if getattr(self, "_week_view_active", False):
+            self._refresh_week_view()
+
+    def _on_note_changed(self, _event=None) -> None:
+        """Speichert die Notiz (gekürzt auf max. 20 Wörter) für Datum + Projekt."""
+        if not getattr(self, "note_entry", None) or not self.db_conn:
+            return
+        name = self._get_name_silent()
+        project = self._get_project_silent()
+        date_iso = self._selected_date_iso()
+        if not name or not project or not date_iso:
+            return
+        cleaned = clamp_note(self.note_entry.get())
+        # Feld auf die normalisierte Form bringen (Kürzung sichtbar machen).
+        if cleaned != self.note_entry.get():
+            self.note_entry.delete(0, END)
+            self.note_entry.insert(0, cleaned)
+        set_daily_note(self.db_conn, name, project, date_iso, cleaned)
+        self._note_loaded_key = (project, date_iso)
+        # Wochenansicht ggf. aktualisieren, damit Tooltips die Notiz zeigen.
+        if getattr(self, "_week_view_active", False):
+            self._refresh_week_view()
 
     def _refresh_total_label(self, project: str | None = None, name: str | None = None):
         """Refresh the total-time and daily-break labels below the timer."""

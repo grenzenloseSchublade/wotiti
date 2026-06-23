@@ -16,7 +16,7 @@ import polars as pl
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "1.4.0"
+APP_VERSION = "2.0.0"
 APP_AUTHOR = "grenzenloseSchublade"
 APP_LICENSE = "MIT"
 
@@ -93,6 +93,12 @@ DEFAULT_CONFIG = {
     "exclude_weekends_in_averages": True,
     "include_holidays_in_exclusion": True,
     "count_weekend_work": False,
+    # Start/Stop-Liste: False = nach Projekt gruppiert (Default), True = chronologisch.
+    "entry_list_chronological": False,
+    # Stabile, laufübergreifende Projekt→Farbe-Zuordnung für die Wochenansicht
+    # ({Projektname: "#RRGGBB"}). Verhindert, dass Farben je nach Wochen-
+    # zusammensetzung springen.
+    "project_colors": {},
 }
 
 
@@ -198,7 +204,12 @@ def _validate_config(cfg: dict) -> dict:
     for key in ("holiday_country", "holiday_subdiv"):
         v = out.get(key, DEFAULT_CONFIG[key])
         out[key] = str(v).strip() if isinstance(v, str) else DEFAULT_CONFIG[key]
-    for key in ("exclude_weekends_in_averages", "include_holidays_in_exclusion", "count_weekend_work"):
+    for key in (
+        "exclude_weekends_in_averages",
+        "include_holidays_in_exclusion",
+        "count_weekend_work",
+        "entry_list_chronological",
+    ):
         if not isinstance(out.get(key), bool):
             out[key] = bool(DEFAULT_CONFIG[key])
     return out
@@ -231,6 +242,16 @@ def save_config(config: dict) -> None:
         with contextlib.suppress(OSError):
             os.fsync(f.fileno())
     os.replace(tmp_path, CONFIG_PATH)
+
+
+def clamp_note(text: str, max_words: int = 20) -> str:
+    """Normalisiert eine Notiz: einzeilig, Whitespace kollabiert, max. ``max_words`` Wörter."""
+    if not text:
+        return ""
+    words = text.split()
+    if len(words) > max_words:
+        words = words[:max_words]
+    return " ".join(words)
 
 
 def save_to_csv(data: pl.DataFrame, csv_path: str) -> None:

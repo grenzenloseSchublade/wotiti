@@ -87,6 +87,7 @@ def create_main_table(conn: sqlite3.Connection) -> bool:
         create_events_table(conn)
         create_break_events_table(conn)
         create_projects_table(conn)
+        create_daily_notes_table(conn)
     return success
 
 
@@ -170,6 +171,190 @@ def create_projects_table(conn: sqlite3.Connection) -> bool:
         );
     """
     return execute_sql(conn, sql_create_projects_table)
+
+
+def create_daily_notes_table(conn: sqlite3.Connection) -> bool:
+    """Create the daily_notes table (Notiz + Übertragungs-Status je Nutzer/Projekt/Tag).
+
+    Hält pro (user, project, day) eine kurze Notiz sowie den Status, ob die Zeit
+    bereits manuell ins Firmensystem übertragen wurde (``transferred`` +
+    ``transferred_at``). Das ``date`` wird im ISO-Format ``%Y-%m-%d`` gespeichert
+    (eindeutig sortierbar) — die UI konvertiert ihr ``%d-%m-%Y`` an der Grenze.
+    """
+    sql_create_daily_notes_table = """
+        CREATE TABLE IF NOT EXISTS daily_notes (
+            user_id INTEGER NOT NULL,
+            project TEXT NOT NULL,
+            date TEXT NOT NULL,
+            note TEXT NOT NULL DEFAULT '',
+            transferred INTEGER NOT NULL DEFAULT 0 CHECK(transferred IN (0, 1)),
+            transferred_at TEXT,
+            PRIMARY KEY (user_id, project, date),
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+    """
+    success = execute_sql(conn, sql_create_daily_notes_table)
+    if success:
+        _migrate_daily_notes_columns(conn)
+    return success
+
+
+def _migrate_daily_notes_columns(conn: sqlite3.Connection) -> None:
+    """Add transferred/transferred_at if missing (frühere note-only DBs)."""
+    try:
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(daily_notes)")
+        existing = {row[1] for row in cursor.fetchall()}
+        if "transferred" not in existing:
+            cursor.execute("ALTER TABLE daily_notes ADD COLUMN transferred INTEGER NOT NULL DEFAULT 0")
+        if "transferred_at" not in existing:
+            cursor.execute("ALTER TABLE daily_notes ADD COLUMN transferred_at TEXT")
+        conn.commit()
+        cursor.close()
+    except Error as e:
+        logger.warning("daily_notes column migration: %s", e)
+
+
+def _DAILY_META_DEFAULT() -> dict:  # noqa: N802
+    return {"note": "", "transferred": False, "transferred_at": None}
+
+
+def get_daily_meta(conn: sqlite3.Connection | None, user: str, project: str, date_iso: str) -> dict:
+    """Liefert {note, transferred, transferred_at} für (user, project, date_iso)."""
+    if not conn or not user or not project or not date_iso:
+        return _DAILY_META_DEFAULT()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT n.note, n.transferred, n.transferred_at
+            FROM daily_notes n
+            JOIN users u ON u.id = n.user_id
+            WHERE u.name = ? AND n.project = ? AND n.date = ?
+        """,
+            (user, project, date_iso),
+        )
+        row = cur.fetchone()
+        if not row:
+            return _DAILY_META_DEFAULT()
+        return {"note": row[0] or "", "transferred": bool(row[1]), "transferred_at": row[2]}
+    except Error as e:
+        logger.error("Error fetching daily meta (%s/%s/%s): %s", user, project, date_iso, e)
+        return _DAILY_META_DEFAULT()
+    finally:
+        cur.close()
+
+
+def get_daily_note(conn: sqlite3.Connection | None, user: str, project: str, date_iso: str) -> str:
+    """Liefert nur die Notiz für (user, project, date_iso) oder einen leeren String."""
+    return get_daily_meta(conn, user, project, date_iso)["note"]
+
+
+def _upsert_daily_field(
+    conn: sqlite3.Connection,
+    user: str,
+    project: str,
+    date_iso: str,
+    *,
+    note: str | None = None,
+    transferred: bool | None = None,
+    transferred_at: str | None = None,
+) -> bool:
+    """Aktualisiert einzelne Felder einer daily_notes-Zeile und räumt leere Zeilen auf.
+
+    Eine Zeile mit leerer Notiz UND ``transferred=0`` wird entfernt (kein Müll).
+    """
+    user_id = check_user(conn, user)
+    if user_id is None:
+        return False
+    with conn:
+        cur = conn.cursor()
+        # Zeile sicherstellen (Defaults: note='', transferred=0).
+        cur.execute(
+            "INSERT OR IGNORE INTO daily_notes(user_id, project, date) VALUES(?, ?, ?)",
+            (user_id, project, date_iso),
+        )
+        if note is not None:
+            cur.execute(
+                "UPDATE daily_notes SET note = ? WHERE user_id = ? AND project = ? AND date = ?",
+                (note, user_id, project, date_iso),
+            )
+        if transferred is not None:
+            cur.execute(
+                "UPDATE daily_notes SET transferred = ?, transferred_at = ? "
+                "WHERE user_id = ? AND project = ? AND date = ?",
+                (1 if transferred else 0, transferred_at if transferred else None, user_id, project, date_iso),
+            )
+        # Leere Zeile (keine Notiz, nicht übertragen) wieder löschen.
+        cur.execute(
+            "DELETE FROM daily_notes WHERE user_id = ? AND project = ? AND date = ? AND note = '' AND transferred = 0",
+            (user_id, project, date_iso),
+        )
+    return True
+
+
+def set_daily_note(conn: sqlite3.Connection | None, user: str, project: str, date_iso: str, note: str) -> bool:
+    """Speichert die Notiz; der Übertragungs-Status bleibt unangetastet."""
+    if not conn or not user or not project or not date_iso:
+        return False
+    try:
+        return _upsert_daily_field(conn, user, project, date_iso, note=(note or "").strip())
+    except Error as e:
+        logger.error("Error saving daily note (%s/%s/%s): %s", user, project, date_iso, e)
+        return False
+
+
+def set_daily_transferred(
+    conn: sqlite3.Connection | None,
+    user: str,
+    project: str,
+    date_iso: str,
+    transferred: bool,
+    transferred_at: str | None = None,
+) -> bool:
+    """Setzt/entfernt den »ins Firmensystem übertragen«-Status; Notiz bleibt erhalten."""
+    if not conn or not user or not project or not date_iso:
+        return False
+    try:
+        return _upsert_daily_field(
+            conn, user, project, date_iso, transferred=bool(transferred), transferred_at=transferred_at
+        )
+    except Error as e:
+        logger.error("Error saving daily transfer (%s/%s/%s): %s", user, project, date_iso, e)
+        return False
+
+
+def get_daily_meta_for_range(
+    conn: sqlite3.Connection | None, user: str, date_iso_list: list[str]
+) -> dict[tuple[str, str], dict]:
+    """Liefert {(project, date): {note, transferred, transferred_at}} für die ISO-Tage.
+
+    Ein Batch-Query für die Wochenansicht (vermeidet N Einzelabfragen im
+    Hover-Pfad).
+    """
+    if not conn or not user or not date_iso_list:
+        return {}
+    try:
+        cur = conn.cursor()
+        placeholders = ",".join("?" for _ in date_iso_list)
+        cur.execute(
+            f"""
+            SELECT n.project, n.date, n.note, n.transferred, n.transferred_at
+            FROM daily_notes n
+            JOIN users u ON u.id = n.user_id
+            WHERE u.name = ? AND n.date IN ({placeholders})
+        """,
+            (user, *date_iso_list),
+        )
+        return {
+            (row[0], row[1]): {"note": row[2] or "", "transferred": bool(row[3]), "transferred_at": row[4]}
+            for row in cur.fetchall()
+        }
+    except Error as e:
+        logger.error("Error fetching daily meta range for %s: %s", user, e)
+        return {}
+    finally:
+        cur.close()
 
 
 def migrate_legacy_user_tables(conn: sqlite3.Connection | None) -> bool:
