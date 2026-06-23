@@ -2703,7 +2703,7 @@ class App:
             if day_total == 0.0:
                 Label(cell, text="—", bg=cell_bg, fg="#888888", font=("MS Sans Serif", 8, "bold")).pack(side="top")
             else:
-                total_text = f"{day_total:.2f} h" + (" ✓" if day_transferred else "")
+                total_text = self._fmt_hours_hm(day_total) + (" ✓" if day_transferred else "")
                 Label(
                     cell,
                     text=total_text,
@@ -2713,7 +2713,7 @@ class App:
                 ).pack(side="top")
 
             # Gestapelte, projektweise eingefaerbte Block-Segmente (groesstes oben).
-            tooltip_lines = [f"{_WDAY_DE[weekday]} {d.strftime('%d.%m')}: {day_total:.2f} h"]
+            tooltip_lines = [f"{_WDAY_DE[weekday]} {d.strftime('%d.%m')}: {self._fmt_hours_hm(day_total)}"]
             for proj, hrs in sorted(by_proj.items(), key=lambda kv: (-kv[1], kv[0])):
                 seen_projects.add(proj)
                 meta = meta_map.get((proj, iso_date), {})
@@ -2731,8 +2731,8 @@ class App:
                 )
                 seg.pack(side="top")
                 # Hover über den Balken: Projektname + getrackte Zeit + Status + Notiz.
-                seg_tip = f"{proj}: {hrs:.2f} h ({_WDAY_DE[weekday]} {d.strftime('%d.%m')})"
-                line = f"  {proj}: {hrs:.2f} h"
+                seg_tip = f"{proj}: {self._fmt_hours_hm(hrs)} ({_WDAY_DE[weekday]} {d.strftime('%d.%m')})"
+                line = f"  {proj}: {self._fmt_hours_hm(hrs)}"
                 if transferred:
                     at = meta.get("transferred_at")
                     when = ""
@@ -3057,6 +3057,17 @@ class App:
         return sessions
 
     @staticmethod
+    def _fmt_hours_hm(hours: float) -> str:
+        """Dezimalstunden als **H:MM**-Text (echte Minuten, 60 min = 1 h).
+
+        z. B. 0.92 h → „0:55 h", 5.5 h → „5:30 h". Vermeidet die als fehlerhafte
+        Minuten missverständliche Dezimaldarstellung.
+        """
+        total_min = round(hours * 60)
+        h, m = divmod(total_min, 60)
+        return f"{h}:{m:02d} h"
+
+    @staticmethod
     def _session_times_str(s: dict) -> tuple[str, str]:
         """(»HH:MM → HH:MM«-Text, Dauer-Text) für eine Session.
 
@@ -3067,9 +3078,7 @@ class App:
         stop = s["stop_ts"].strftime("%H:%M") if s["stop_ts"] else "…"
         if s["dur_h"] is None:
             return f"{start} → {stop}", "läuft"
-        total_min = round(s["dur_h"] * 60)
-        h, m = divmod(total_min, 60)
-        return f"{start} → {stop}", f"{h}:{m:02d} h"
+        return f"{start} → {stop}", App._fmt_hours_hm(s["dur_h"])
 
     @staticmethod
     def _note_rows(note: str, indent: str, width: int = 56) -> list[str]:
