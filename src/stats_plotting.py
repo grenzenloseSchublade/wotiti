@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 import plotly.io as pio
 import polars as pl
 
-from utils import get_theme_colors
+from utils import fmt_hours_hm, get_theme_colors
 
 # Module-level theme state (initialized on first import, updated via apply_theme)
 _colors, _sequence = get_theme_colors()
@@ -97,11 +97,17 @@ def _parse_date(d):
 
 
 def _add_weekend_bands(fig: go.Figure, dates, *, weekend_included: bool = True) -> None:
-    """Adds visible gray vertical bands with Sa/So labels for weekends.
+    """Fügt dezente graue Bänder mit Sa/So-Labels für Wochenenden hinzu.
 
-    Only shown when ``weekend_included`` is True (toggle ON).
-    Bands cover the full date range including gaps.
+    Nur sichtbar, wenn ``weekend_included`` True ist (Toggle AN).
+    Die Bänder decken den gesamten Datumsbereich inkl. Lücken ab.
+    Zusammenhängende Wochenendtage (Sa+So) werden zu EINEM Band
+    zusammengefasst (Sa 00:00 → Mo 00:00), damit über lange Zeiträume
+    nicht Hunderte Layout-Shapes entstehen. Bei Zeiträumen über
+    ~120 Tagen entfallen die Sa/So-Labels komplett.
     """
+    from datetime import datetime as _dt
+    from datetime import time as _time
     from datetime import timedelta
 
     if not weekend_included or not dates:
@@ -110,29 +116,42 @@ def _add_weekend_bands(fig: go.Figure, dates, *, weekend_included: bool = True) 
     if not parsed:
         return
     d_min, d_max = min(parsed), max(parsed)
+    show_labels = (d_max - d_min).days <= 120
     _WD_LABEL = {5: "Sa", 6: "So"}
     cursor = d_min
     while cursor <= d_max:
-        wd = cursor.weekday()
-        if wd >= 5:
-            fig.add_vrect(
-                x0=cursor - timedelta(hours=12),
-                x1=cursor + timedelta(hours=12),
-                fillcolor="rgba(220,30,30,0.18)",
-                line=dict(width=2, color="rgba(255,0,0,0.5)"),
-                layer="below",
-            )
-            fig.add_annotation(
-                x=cursor.isoformat(),
-                y=1.0,
-                yref="paper",
-                text=_WD_LABEL[wd],
-                showarrow=False,
-                font=dict(size=10, color="rgba(255,80,80,0.9)", family="Arial"),
-                yanchor="bottom",
-                xanchor="center",
-            )
-        cursor += timedelta(days=1)
+        if cursor.weekday() < 5:
+            cursor += timedelta(days=1)
+            continue
+        # Wochenend-Lauf (Sa und/oder So) bestimmen und als EIN Band zeichnen.
+        run_start = cursor
+        run_end = cursor
+        while run_end + timedelta(days=1) <= d_max and (run_end + timedelta(days=1)).weekday() >= 5:
+            run_end += timedelta(days=1)
+        # Band über volle Tage: 00:00 des ersten Tags bis 00:00 des Folgetags
+        # (date ± timedelta(hours=12) wäre ein No-Op → unsichtbares Band).
+        fig.add_vrect(
+            x0=_dt.combine(run_start, _time.min),
+            x1=_dt.combine(run_end + timedelta(days=1), _time.min),
+            fillcolor="rgba(150,150,150,0.15)",
+            line_width=0,
+            layer="below",
+        )
+        if show_labels:
+            day = run_start
+            while day <= run_end:
+                fig.add_annotation(
+                    x=_dt.combine(day, _time(hour=12)),
+                    y=1.0,
+                    yref="paper",
+                    text=_WD_LABEL[day.weekday()],
+                    showarrow=False,
+                    font=dict(size=10, color="rgba(150,150,150,0.85)", family="Arial"),
+                    yanchor="bottom",
+                    xanchor="center",
+                )
+                day += timedelta(days=1)
+        cursor = run_end + timedelta(days=1)
 
 
 def plot_hours_per_project(hours: pl.DataFrame | None, user: str) -> go.Figure:
@@ -145,13 +164,16 @@ def plot_hours_per_project(hours: pl.DataFrame | None, user: str) -> go.Figure:
     labels = user_data["project"].to_list()
     # Volle Palette zyklisch über die Projektanzahl (statt fix 3 Farben).
     colors = [_sequence[i % len(_sequence)] for i in range(len(labels))]
+    vals = user_data["total_hours"].to_list()
     fig = go.Figure(
         data=[
             go.Pie(
                 labels=labels,
-                values=[round(v, 2) for v in user_data["total_hours"].to_list()],
+                values=[round(v, 2) for v in vals],
                 marker_colors=colors,
-                hovertemplate="%{label}: %{value:.2f} h<extra></extra>",
+                # H:MM wie in der App (statt Dezimalstunden), vorformatiert via customdata
+                customdata=[fmt_hours_hm(v) for v in vals],
+                hovertemplate="%{label}: %{customdata} (%{percent})<extra></extra>",
             )
         ],
         layout=go.Layout(
@@ -183,14 +205,17 @@ def plot_total_hours_per_user(total_hours: pl.DataFrame | None, date_range: str)
         pl.col("total_hours").cast(pl.Float64, strict=False).alias("total_hours")
     ).drop_nulls("total_hours")
     vals = total_hours["total_hours"].to_list()
+    hm = [fmt_hours_hm(v) for v in vals]  # H:MM wie in der App
     fig = go.Figure(
         data=[
             go.Bar(
                 x=total_hours["user"].to_list(),
                 y=vals,
                 marker_color=_colors["accent"],
-                text=[f"{v:.1f}" for v in vals],
+                text=hm,
                 textposition="auto",
+                customdata=hm,
+                hovertemplate="%{x}: %{customdata}<extra></extra>",
             )
         ],
         layout=go.Layout(
@@ -224,14 +249,17 @@ def plot_average_hours_per_user(average_hours: pl.DataFrame | None) -> go.Figure
         pl.col("average_hours").cast(pl.Float64, strict=False).alias("average_hours")
     ).drop_nulls("average_hours")
     vals = average_hours["average_hours"].to_list()
+    hm = [fmt_hours_hm(v) for v in vals]  # H:MM wie in der App
     fig = go.Figure(
         data=[
             go.Bar(
                 x=average_hours["user"].to_list(),
                 y=vals,
                 marker_color=_sequence[1] if len(_sequence) > 1 else _sequence[0],
-                text=[f"{v:.2f}" for v in vals],
+                text=hm,
                 textposition="auto",
+                customdata=hm,
+                hovertemplate="%{x}: %{customdata}<extra></extra>",
             ),
         ],
         layout=go.Layout(
@@ -252,14 +280,17 @@ def plot_average_hours_per_period(average_hours: pl.DataFrame | None, period_day
     if _is_empty(average_hours):
         return _empty_figure(f"Durchschn. Stunden ({period_days}-Tage-Zeiträume)")
     vals = average_hours["average_hours"].to_list()
+    hm = [fmt_hours_hm(v) for v in vals]  # H:MM wie in der App
     fig = go.Figure(
         data=[
             go.Bar(
                 x=average_hours["user"].to_list(),
                 y=vals,
                 marker_color=_sequence[0],
-                text=[f"{v:.2f}" for v in vals],
+                text=hm,
                 textposition="auto",
+                customdata=hm,
+                hovertemplate="%{x}: %{customdata}<extra></extra>",
             ),
         ],
         layout=go.Layout(
@@ -282,7 +313,8 @@ def plot_project_time_stats(stats: pl.DataFrame | None) -> go.Figure:
     if _is_empty(stats):
         return _empty_figure("Projektzeit-Statistiken")
 
-    for user in stats["user"].unique().to_list():
+    # Sortierte User-Reihenfolge → stabile Legenden/Farben über Requests hinweg
+    for user in sorted(stats["user"].unique().to_list()):
         user_stats = stats.filter(pl.col("user") == user)
 
         fig.add_trace(
@@ -314,19 +346,27 @@ def plot_daily_project_hours(daily_hours: pl.DataFrame | None, *, weekend_includ
     if _is_empty(daily_hours):
         return _empty_figure("Tägliche Projektstunden")
 
-    for user in daily_hours["user"].unique().to_list():
+    # Eine Linie pro (User, Projekt), nach Datum sortiert — sonst läuft die
+    # Linie rückwärts durch die Zeit (Zeilen kommen in Projekt-Blöcken) und
+    # zickzackt an Tagen mit mehreren Projekten.
+    users = sorted(daily_hours["user"].unique().to_list())
+    multi_user = len(users) > 1
+    for user in users:
         user_data = daily_hours.filter(pl.col("user") == user)
-
-        fig.add_trace(
-            go.Scatter(
-                x=user_data["date"].to_list(),
-                y=user_data["hours"].to_list(),
-                mode="lines+markers",
-                name=user,
-                text=user_data["project"].to_list(),
-                hovertemplate="%{x|%a %d.%m.%Y} — %{text}<br>%{y:.2f} h<extra>%{fullData.name}</extra>",
+        for project in sorted(user_data["project"].unique().to_list()):
+            proj_data = user_data.filter(pl.col("project") == project).sort("date")
+            hrs = proj_data["hours"].to_list()
+            fig.add_trace(
+                go.Scatter(
+                    x=proj_data["date"].to_list(),
+                    y=hrs,
+                    mode="lines+markers",
+                    # Bei nur einem User zeigt die Legende direkt die Projekte
+                    name=f"{user} · {project}" if multi_user else project,
+                    customdata=[fmt_hours_hm(h) for h in hrs],
+                    hovertemplate="%{x|%a %d.%m.%Y} — %{customdata}<extra>%{fullData.name}</extra>",
+                )
             )
-        )
 
     fig.update_layout(
         title="Tägliche Projektstunden",
@@ -352,7 +392,7 @@ def plot_project_switches(switches: pl.DataFrame | None) -> go.Figure:
     if _is_empty(switches):
         return _empty_figure("Projektwechsel")
 
-    for user in switches["user"].unique().to_list():
+    for user in sorted(switches["user"].unique().to_list()):
         user_switches = switches.filter(pl.col("user") == user)
 
         fig.add_trace(
@@ -377,7 +417,7 @@ def plot_daily_patterns(patterns: pl.DataFrame | None) -> go.Figure:
     if _is_empty(patterns):
         return _empty_figure("Arbeitsmuster")
 
-    for user in patterns["user"].unique().to_list():
+    for user in sorted(patterns["user"].unique().to_list()):
         user_patterns = patterns.filter(pl.col("user") == user)
 
         fig.add_trace(
@@ -413,15 +453,17 @@ def plot_time_series_analysis(
     # Täglicher Trend
     daily_fig = go.Figure()
     if not _is_empty(daily_df):
-        for user in daily_df["user"].unique().to_list():
+        for user in sorted(daily_df["user"].unique().to_list()):
             user_data = daily_df.filter(pl.col("user") == user)
+            hrs = user_data["hours"].to_list()
             daily_fig.add_trace(
                 go.Scatter(
                     x=user_data["date"].to_list(),
-                    y=user_data["hours"].to_list(),
+                    y=hrs,
                     name=user,
                     mode="lines+markers",
-                    hovertemplate="%{x|%a %d.%m.%Y}<br>%{y:.2f} h<extra>%{fullData.name}</extra>",
+                    customdata=[fmt_hours_hm(h) for h in hrs],
+                    hovertemplate="%{x|%a %d.%m.%Y}<br>%{customdata}<extra>%{fullData.name}</extra>",
                 )
             )
     daily_fig.update_layout(
@@ -440,18 +482,27 @@ def plot_time_series_analysis(
 
     # Wöchentlicher Trend
     weekly_fig = go.Figure()
+    weeks_are_labels = False  # True, wenn Wochen bereits als "YYYY-KWnn"-Labels vorliegen
     if not _is_empty(weekly_avg):
-        for user in weekly_avg["user"].unique().to_list():
+        weeks_are_labels = weekly_avg["week"].dtype == pl.Utf8
+        for user in sorted(weekly_avg["user"].unique().to_list()):
             user_data = weekly_avg.filter(pl.col("user") == user)
+            hrs = user_data["hours"].to_list()
             weekly_fig.add_trace(
                 go.Scatter(
-                    x=user_data["week"].to_list(), y=user_data["hours"].to_list(), name=user, mode="lines+markers"
+                    x=user_data["week"].to_list(),
+                    y=hrs,
+                    name=user,
+                    mode="lines+markers",
+                    customdata=[fmt_hours_hm(h) for h in hrs],
+                    hovertemplate="%{x}: %{customdata}<extra>%{fullData.name}</extra>",
                 )
             )
     weekly_fig.update_layout(
         title="Wöchentliche Durchschnittsstunden",
         xaxis_title="Kalenderwoche",
-        xaxis_tickprefix="KW ",
+        # Bei fertigen "YYYY-KWnn"-Labels kein zusätzliches "KW "-Präfix
+        xaxis_tickprefix="" if weeks_are_labels else "KW ",
         yaxis_title="Durchschn. Stunden",
         plot_bgcolor=_colors["background"],
         paper_bgcolor=_colors["background"],
@@ -460,26 +511,41 @@ def plot_time_series_analysis(
 
     # Wochentags-Muster
     _WE_DAYS = {"Sa", "So"}
+    _WD_ORDER = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
     weekday_fig = go.Figure()
     if not _is_empty(weekday_avg):
-        for user in weekday_avg["user"].unique().to_list():
+        # Optionale Stichproben-Spalte 'n_days' (Anzahl gearbeiteter Tage) im
+        # Hover anzeigen — macht n=1- vs n=12-Durchschnitte unterscheidbar.
+        has_n = "n_days" in weekday_avg.columns
+        for user in sorted(weekday_avg["user"].unique().to_list()):
             user_data = weekday_avg.filter(pl.col("user") == user)
             days = user_data["weekday"].to_list()
             hrs = user_data["hours"].to_list()
+            hm = [fmt_hours_hm(h) for h in hrs]
             has_weekend = any(d in _WE_DAYS for d in days)
+            if has_n:
+                customdata = list(zip(hm, user_data["n_days"].to_list(), strict=True))
+                hover = "%{x}: %{customdata[0]}<br>n=%{customdata[1]} Tage<extra>%{fullData.name}</extra>"
+            else:
+                customdata = hm
+                hover = "%{x}: %{customdata}<extra>%{fullData.name}</extra>"
             bar_kwargs = dict(
                 x=days,
                 y=hrs,
                 name=user,
-                text=[f"{h:.2f}" for h in hrs],
+                text=hm,
                 textposition="auto",
+                customdata=customdata,
+                hovertemplate=hover,
             )
             if has_weekend:
                 bar_kwargs["marker_color"] = ["rgba(150,150,150,0.5)" if d in _WE_DAYS else _sequence[0] for d in days]
             weekday_fig.add_trace(go.Bar(**bar_kwargs))
     weekday_fig.update_layout(
         title="Durchschnittliche Stunden nach Wochentag",
-        xaxis_title="Wochentag",
+        # Feste Mo–So-Reihenfolge — sonst bestimmt die erste Trace die
+        # Kategorien und die Achse startet z. B. bei "Mi".
+        xaxis=dict(title="Wochentag", categoryorder="array", categoryarray=_WD_ORDER),
         yaxis_title="Durchschn. Stunden",
         barmode="group",
         plot_bgcolor=_colors["background"],
@@ -499,7 +565,7 @@ def plot_cluster_analysis(
     if _is_empty(features_df):
         return _empty_figure("Benutzer-Cluster Übersicht"), _empty_figure("Cluster-Profile")
 
-    for cluster in features_df["cluster"].unique().to_list():
+    for cluster in sorted(features_df["cluster"].unique().to_list()):
         cluster_data = features_df.filter(pl.col("cluster") == cluster)
 
         overview_fig.add_trace(
@@ -597,65 +663,49 @@ def plot_regression_analysis(regression_results: dict | None) -> tuple[go.Figure
     return importance_fig, scatter_fig
 
 
+def _plot_anova_tukey(result: dict, title: str, xaxis_title: str) -> go.Figure:
+    """Balkendiagramm der Tukey-Paardifferenzen eines ANOVA-Ergebnisses."""
+    fig = go.Figure()
+    table = result["tukey"]._results_table.data
+    header = table[0]
+    rows = table[1:]
+    data = {col: [row[i] for row in rows] for i, col in enumerate(header)}
+    err = data.get("std err", [0] * len(data.get("meandiff", [])))
+    fig.add_trace(
+        go.Bar(
+            x=[f"{a} vs {b}" for a, b in zip(data["group1"], data["group2"], strict=False)],
+            y=data["meandiff"],
+            error_y=dict(type="data", array=err, visible=True),
+        )
+    )
+    fig.update_layout(
+        title=f"{title} (ANOVA p={result['p_value']:.3f}, explorativ)",
+        xaxis_title=xaxis_title,
+        xaxis_tickangle=-30,
+        yaxis_title="Mittlere Differenz",
+        plot_bgcolor=_colors["background"],
+        paper_bgcolor=_colors["background"],
+        font_color=_colors["text"],
+    )
+    return fig
+
+
 def plot_anova_results(anova_results: dict | None) -> tuple[go.Figure, go.Figure]:
-    """Visualisiert die Ergebnisse der ANOVA-Analyse."""
-    if not anova_results or "user_anova" not in anova_results:
-        return _empty_figure("Benutzer-ANOVA"), _empty_figure("Projekt-ANOVA")
+    """Visualisiert die ANOVA-Ergebnisse.
 
-    # User ANOVA
-    user_fig = go.Figure()
-
-    user_table = anova_results["user_anova"]["tukey"]._results_table.data
-    user_header = user_table[0]
-    user_rows = user_table[1:]
-    user_data = {col: [row[i] for row in user_rows] for i, col in enumerate(user_header)}
-
-    user_err = user_data.get("std err", [0] * len(user_data.get("meandiff", [])))
-    user_fig.add_trace(
-        go.Bar(
-            x=[f"{a} vs {b}" for a, b in zip(user_data["group1"], user_data["group2"], strict=False)],
-            y=user_data["meandiff"],
-            error_y=dict(type="data", array=user_err, visible=True),
-        )
-    )
-
-    user_fig.update_layout(
-        title=f"Benutzer-Unterschiede (ANOVA p={anova_results['user_anova']['p_value']:.3f})",
-        xaxis_title="Benutzer-Paare",
-        xaxis_tickangle=-30,
-        yaxis_title="Mittlere Differenz",
-        plot_bgcolor=_colors["background"],
-        paper_bgcolor=_colors["background"],
-        font_color=_colors["text"],
-    )
-
-    # Project ANOVA
-    project_fig = go.Figure()
-
-    project_table = anova_results["project_anova"]["tukey"]._results_table.data
-    project_header = project_table[0]
-    project_rows = project_table[1:]
-    project_data = {col: [row[i] for row in project_rows] for i, col in enumerate(project_header)}
-
-    project_err = project_data.get("std err", [0] * len(project_data.get("meandiff", [])))
-    project_fig.add_trace(
-        go.Bar(
-            x=[f"{a} vs {b}" for a, b in zip(project_data["group1"], project_data["group2"], strict=False)],
-            y=project_data["meandiff"],
-            error_y=dict(type="data", array=project_err, visible=True),
-        )
-    )
-
-    project_fig.update_layout(
-        title=f"Projekt-Unterschiede (ANOVA p={anova_results['project_anova']['p_value']:.3f})",
-        xaxis_title="Projekt-Paare",
-        xaxis_tickangle=-30,
-        yaxis_title="Mittlere Differenz",
-        plot_bgcolor=_colors["background"],
-        paper_bgcolor=_colors["background"],
-        font_color=_colors["text"],
-    )
-
+    Die Keys sind seit v2.3.0 unabhängig: ``user_anova`` existiert nur bei
+    ≥2 Benutzern, ``project_anova`` nur bei ≥2 Projekten — im Single-User-
+    Betrieb kommt typischerweise NUR ``project_anova`` an.
+    """
+    anova_results = anova_results or {}
+    if "user_anova" in anova_results:
+        user_fig = _plot_anova_tukey(anova_results["user_anova"], "Benutzer-Unterschiede", "Benutzer-Paare")
+    else:
+        user_fig = _empty_figure("Benutzer-ANOVA (braucht ≥2 Benutzer)")
+    if "project_anova" in anova_results:
+        project_fig = _plot_anova_tukey(anova_results["project_anova"], "Projekt-Unterschiede", "Projekt-Paare")
+    else:
+        project_fig = _empty_figure("Projekt-ANOVA (braucht ≥2 Projekte)")
     return user_fig, project_fig
 
 
@@ -669,23 +719,27 @@ def plot_break_analysis(break_stats: dict | None) -> go.Figure:
     per_day = break_stats["per_day"]
     totals = break_stats.get("totals", {})
     dates = per_day["date"].to_list()
+    work_hrs = per_day["work_hours"].to_list()
+    break_hrs = per_day["break_hours"].to_list()
     fig = go.Figure()
     fig.add_trace(
         go.Bar(
             x=dates,
-            y=per_day["work_hours"].to_list(),
+            y=work_hrs,
             name="Arbeit",
             marker_color=_sequence[0],
-            hovertemplate="%{x}: %{y:.2f} h Arbeit<extra></extra>",
+            customdata=[fmt_hours_hm(h) for h in work_hrs],
+            hovertemplate="%{x}: %{customdata} Arbeit<extra></extra>",
         )
     )
     fig.add_trace(
         go.Bar(
             x=dates,
-            y=per_day["break_hours"].to_list(),
+            y=break_hrs,
             name="Pause",
             marker_color=_sequence[1] if len(_sequence) > 1 else _colors["accent"],
-            hovertemplate="%{x}: %{y:.2f} h Pause<extra></extra>",
+            customdata=[fmt_hours_hm(h) for h in break_hrs],
+            hovertemplate="%{x}: %{customdata} Pause<extra></extra>",
         )
     )
     ratio_pct = totals.get("ratio", 0.0) * 100

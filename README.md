@@ -24,11 +24,13 @@ WoTiTi ist eine lokal ausführbare Desktop-Anwendung zur Erfassung von Arbeitsze
 - Tagesnotizen je Projekt/Tag (max. 44 Wörter) mit „übertragen"-Status für den manuellen Übertrag ins Firmensystem
 - Ereignisliste mit Session-Bearbeitung (Doppelklick) und manueller Nacherfassung für vergangene Tage
 - Pomodoro-Unterstützung mit konfigurierbaren Arbeits- und Pausenintervallen
-- Auto-Stop bei systemweiter Inaktivität (konfigurierbares Idle-Timeout)
+- Auto-Stop bei Inaktivität (rückdatiert, konfigurierbares Idle-Timeout) und bei **Rechner-Standby** (Session endet automatisch zum Zeitpunkt vor dem Standby)
 - Mini-Modus als separates Always-on-top Fenster mit persistenter Position
-- Zeitmaschine: scrollbare 7-Tage-Wochenansicht mit Balkendiagramm und KW-Anzeige
+- Zeitmaschine: scrollbare 7-Tage-Wochenansicht mit Balkendiagramm, KW-Anzeige und Tages-/Wochen-Übertragen-Häkchen
+- Native Menüleiste (Datei/Ansicht/Extras/Hilfe); sichtbare Buttons nur Start/Pause/Stop/Mini
+- Benutzer/Projekte in den Einstellungen **archivierbar** (ausblenden statt löschen — Daten bleiben erhalten)
 - Feiertags- und Wochenend-Erkennung (konfigurierbar: Land, Region)
-- Dashboard für deskriptive, visuelle und statistische Auswertungen
+- Dashboard für deskriptive und visuelle Auswertungen, inkl. **KW-Report** (Projekt × Wochentag in H:MM mit Übertragen-Status — die Ansicht für den Wochen-Übertrag ins Firmensystem)
 - Standalone-Builds für Linux und Windows via PyInstaller
 
 ## tl;dr - Schnellstart
@@ -36,7 +38,7 @@ WoTiTi ist eine lokal ausführbare Desktop-Anwendung zur Erfassung von Arbeitsze
 ### Vorgebaute Binärdatei (einfachste Methode)
 
 **[Releases – neueste Version herunterladen](https://github.com/grenzenloseSchublade/wotiti/releases)**  
-Dort finden sich die aktuellen ZIP-Pakete für Linux x64 und Windows x64 (Dateinamen enthalten die Versionsnummer, z. B. `wotiti_2_0_2-*`).
+Dort finden sich die aktuellen ZIP-Pakete für Linux x64 und Windows x64 (Dateinamen enthalten die Versionsnummer, z. B. `wotiti_2_3_0-*`).
 
 Entpacken → Ausführen. Fertig!
 
@@ -110,20 +112,20 @@ Zeile 2 (kompakt, Tooltip bei Hover):
 Der Timer zeigt primär die **Tagesarbeitszeit** für das **im Datumsfeld gewählte Datum** (nicht nur „heute“). **Σ** bleibt die **Gesamtzeit des Projekts über alle Tage**. **▮▮** ist die **Tages-Pausensumme** für dasselbe gewählte Datum. Weitere Tooltips u. a. am Button **Auswertung** (Status Farbe) und am Pause-Timer.
 
 **Datumsfeld (TT-MM-JJJJ)**  
-Steuert die **Ereignisliste** (nur Einträge dieses Tages) und die **angezeigten Tageswerte** (Haupttimer, ▮▮). Nach **Enter** oder beim Verlassen des Felds wird neu geladen; **Heute** setzt auf den aktuellen Tag und aktualisiert sofort. Ist ein **anderer Tag** gewählt, erscheint das Datumsfeld **leicht gelb** hinterlegt. Der **Live-Zähler** (laufende Session) läuft nur, wenn **heute** angezeigt wird; für vergangene Tage sieht man den gespeicherten Stand aus der Datenbank. Der Button **Aktualisieren** bleibt als manueller Fallback. Nach **Bearbeiten/Löschen** eines Listeneintrags werden die Zeiten ebenfalls neu berechnet.
+Steuert die **Ereignisliste** (nur Einträge dieses Tages) und die **angezeigten Tageswerte** (Haupttimer, ▮▮). Nach **Enter** oder beim Verlassen des Felds wird neu geladen; **Heute** setzt auf den aktuellen Tag und aktualisiert sofort. Ist ein **anderer Tag** gewählt, erscheint das Datumsfeld **leicht gelb** hinterlegt. Der **Live-Zähler** (laufende Session) läuft nur, wenn **heute** angezeigt wird; für vergangene Tage sieht man den gespeicherten Stand aus der Datenbank. Manuelles Neuladen über **F5** (bzw. Menü **Ansicht → Neu laden**). Nach **Bearbeiten/Löschen** eines Listeneintrags werden die Zeiten ebenfalls neu berechnet.
 
 **Mini-Modus** (▽/△): Kompakte Always-on-top Ansicht mit Tageszeit, Drag-Support und persistenter Position.
 
-**Zeitmaschine** (Wochenansicht): Zeigt die letzten 7 Tage als Balkendiagramm direkt in der Timer-Kachel. Per Pfeil-Navigation (‹ ›) durch beliebige Wochen scrollen, Titel zeigt die aktuelle Kalenderwoche. Wochenenden werden grau, Feiertage rot markiert (Land und Region konfigurierbar in den Einstellungen).
+**Zeitmaschine** (Wochenansicht): Zeigt die letzten 7 Tage als Balkendiagramm direkt in der Timer-Kachel. Per Pfeil-Navigation (‹ ›) durch beliebige Wochen scrollen, Titel zeigt die aktuelle Kalenderwoche (KW). Wochenenden werden grau, Feiertage rot markiert (Land und Region konfigurierbar in den Einstellungen). Übertragen-Häkchen pro Tag sowie ein Wochen-Häkchen erlauben, den Übertrag ins Firmensystem direkt in der Wochenansicht abzuhaken.
 
 **Ereignisliste & Bearbeitung**  
-Die Liste zeigt die Sessions des im Datumsfeld gewählten Tages, gruppiert nach Benutzer und Projekt; Dauern werden als **H:MM** dargestellt (`8:05 h`, nicht dezimal). Über eine Einstellung lässt sich die Liste auf eine **chronologische** Darstellung (Projekt je Zeile) umschalten. Ein **Doppelklick** auf eine Session öffnet den Editor (Projekt, Datum, Start-/Stop-Zeit, Notiz, Übertragungsstatus); laufende Sessions sind schreibgeschützt. Für **vergangene Tage** erlaubt der **„+"-Button** die manuelle Nacherfassung eines Start-/Stop-Paares.
+Die Liste zeigt die Sessions des im Datumsfeld gewählten Tages, gruppiert nach Benutzer und Projekt; Dauern werden als **H:MM** dargestellt (`8:05 h`, nicht dezimal). Über eine Einstellung lässt sich die Liste auf eine **chronologische** Darstellung (Projekt je Zeile) umschalten. Ein **Doppelklick** auf eine Session öffnet den Editor (Projekt, Datum, Start-/Stop-Zeit, Notiz, Übertragungsstatus); laufende Sessions sind schreibgeschützt. Für **heute und vergangene Tage** erlaubt der **„+"-Button** die manuelle Nacherfassung eines Start-/Stop-Paares.
 
 **Tagesnotizen & Übertragungsstatus**  
 Pro Benutzer, Projekt und Tag kann eine **Notiz** (max. 44 Wörter) erfasst werden, gedacht als Gedächtnisstütze für den **manuellen Übertrag der Zeiten in ein Firmensystem**. Ist der Übertrag erledigt, markiert die Checkbox **„übertragen"** den Projekt-Tag (mit Zeitstempel); der Status erscheint als `✓ übertragen` in der Ereignisliste und in der Wochenansicht. Notizen werden in der Liste lesbar umbrochen.
 
-**Auto-Stop bei Inaktivität**  
-Bleibt das System länger als das konfigurierte Idle-Timeout (Standard 120 min, `0` = aus) ohne Eingabe, wird eine laufende Session automatisch gestoppt und das Fenster in den Vordergrund geholt.
+**Auto-Stop bei Inaktivität & Standby**  
+Bleibt das System länger als das konfigurierte Idle-Timeout (Standard 120 min, `0` = aus) ohne Eingabe, wird eine laufende Session automatisch gestoppt — der Stop wird dabei auf den **Beginn der Inaktivität rückdatiert** (Idle-Zeit zählt nicht als Arbeitszeit; kurze Pausen unterhalb der Schwelle bleiben Arbeitszeit). Geht der Rechner in **Standby/Ruhezustand** (z. B. übers Wochenende), erkennt das die App beim Aufwachen und stoppt die Session rückdatiert auf den Zeitpunkt vor dem Standby.
 
 **Ein Fenster (Single-Instance)**  
 Ein erneuter Start der Anwendung (EXE/App unter Windows/Linux) beendet sich und holt stattdessen das **laufende WoTITI-Hauptfenster** (bzw. den **Mini-Modus**, falls aktiv) in den Vordergrund. Das betrifft **nicht** den Browser oder das Auswertungs-Dashboard. Zum Testen mehrerer Instanzen kann in `data/config.json` `single_instance` auf `false` gesetzt werden (optional auch `single_instance_port` für den reinen IPC-Port).
@@ -133,23 +135,24 @@ Ein erneuter Start der Anwendung (EXE/App unter Windows/Linux) beendet sich und 
 - Drei-Zustands-Logik für Arbeitssitzungen: Start, Pause, Stop
 - Mehrbenutzer-Unterstützung mit Dropdown-Auswahl
 - Projektbasierte Zeiterfassung mit Combobox (intelligentes Caching)
-- Benutzerverwaltung (eigenes Fenster zum Anlegen/Auswählen)
+- Benutzer-/Projekt-Verwaltung in den Einstellungen: Einträge archivieren (ausblenden) und wieder einblenden — Daten bleiben vollständig erhalten
 - Tagesnotizen (max. 44 Wörter) und „übertragen"-Status pro Projekt/Tag
 - Ereignisliste umschaltbar (nach Projekt gruppiert ⟷ chronologisch), Dauern als H:MM
 - Session-Bearbeitung per Doppelklick; manuelle Nacherfassung für vergangene Tage
-- Auto-Stop bei systemweiter Inaktivität (konfigurierbares Idle-Timeout)
-- **Tastenkürzel**: `Ctrl+S` Start, `Ctrl+E` Stop, `Ctrl+M` Mini-Modus, `Ctrl+P` Pause
-- **Einstellungen**: Datenbank, Defaults, Dashboard-Port, Theme, Feiertags-Land/-Region, Listen-Darstellung, Pomodoro & Pausen, Idle-Timeout, Sound, Entwickler-Konsole, Über-Dialog
+- Auto-Stop bei Inaktivität (rückdatiert) und Standby-Erkennung (Session endet automatisch, Stop vor dem Standby)
+- **Tastenkürzel**: `Strg+S` Start, `Strg+E` Stop, `Strg+P` Pause, `Strg+M` Mini-Modus, `Strg+←/→` Tag zurück/vor, `Strg+T` Heute, `F5` Neu laden
+- **Einstellungen**: Datenbank, Defaults, Dashboard-Port, Theme, Feiertags-Land/-Region, Listen-Darstellung, Pomodoro & Pausen, Idle-Timeout, Sound, Verwaltung (Benutzer/Projekte archivieren), Logdatei
+- Native Menüleiste (Datei/Ansicht/Extras/Hilfe); In-App-Konsole einklappbar mit Zeilen-Limit
 - Persistente Konfiguration (`data/config.json`)
 - SQLite-Datenbankintegration (users, projects, events, break_events, daily_notes)
 - Separate Break-Tabellenlogik für manuelle und Pomodoro-Pausen
 - Automatische Bereinigung verwaister Sessions und Pausen nach unsauberem Beenden
 - Echtzeit-Timer-Anzeige (Tageszeit bezogen auf gewähltes Datum, Σ gesamt, ▮▮ Pausen am gewählten Tag)
-- Zeitmaschine: 7-Tage-Balkendiagramm mit Wochennavigation (‹ ›) und KW-Anzeige
+- Zeitmaschine: 7-Tage-Balkendiagramm mit Wochennavigation (‹ ›), KW-Anzeige und Tages-/Wochen-Übertragen-Häkchen
 - Feiertags-Erkennung in der Wochenansicht (rot markiert, Land/Region konfigurierbar)
 - Wochenend-/Feiertags-Filter für Dashboard-Statistiken (Durchschnitte, Trends)
 - Session-Schutz bei App-Schließen
-- Eingabevalidierung (Datumsformat DD-MM-YYYY)
+- Eingabevalidierung und -normalisierung (Datumsformat TT-MM-JJJJ)
 - Log-Rotation (`data/wotiti.log`, 1 MB, 3 Backups)
 
 ### Analysekomponente (Work Time Insights)
@@ -157,12 +160,12 @@ Ein erneuter Start der Anwendung (EXE/App unter Windows/Linux) beendet sich und 
 - Durchgehend **deutschsprachige** Oberfläche (Titel, Achsen, UI-Elemente)
 - **Theme-System**: Modern (Cyan/Pink/Gelb) & Synthwave — umschaltbar in den Einstellungen
 - Eigenes Plotly-Template `wotiti` mit definierter Farbpalette und Layoutvorgaben
-- 5 Tab-Bereiche: Übersicht, Grundlagen, Projekte & Muster, Zeitreihen, Erweitert
-- Interaktive Datenvisualisierung
-- Fortgeschrittene statistische Analysen
-- Arbeitsmuster-Erkennung
-- Vorhersagemodelle
-- Vergleichsanalysen
+- 5 Tab-Bereiche: **KW-Report**, Übersicht, Grundlagen, Projekte & Muster, Zeitreihen
+- **KW-Report**: Kalenderwochen-Matrix Projekt × Mo–So in **H:MM** mit ✓ (übertragen), Notiz-Markern und Offen-Hinweis — die Ansicht für den Wochen-Übertrag ins Firmensystem
+- Zeiten in Tooltips/Beschriftungen durchgängig als **H:MM** (identisch zur App)
+- Globale Filter (Datum mit Schnellwahl „Diese/Letzte Woche/Alles", Projekte, Wochenenden) — sessionsicher angewandt (Mitternachts-Sessions bleiben ganz)
+- Interaktive Datenvisualisierung, Arbeitsmuster- und Zeitreihen-Analysen
+- Single-User-freundlich: Vergleichs-Controls erscheinen nur bei mehreren Benutzern
 
 ## Projektstruktur
 
@@ -173,6 +176,8 @@ wotiti/
 ├── src/
 │   ├── main.py              # Einstiegspunkt (GUI + Dashboard-Start, Logging, IPC)
 │   ├── app.py               # GUI-Implementation (tkinter)
+│   ├── week_view.py         # Wochenansicht (Zeitmaschine) inkl. Übertragen-Workflow
+│   ├── ui_widgets.py        # Geteilte UI-Bausteine (Tooltip, Projektfarben)
 │   ├── db_helper.py         # Datenbankoperationen (SQLite)
 │   ├── idle_monitor.py      # OS-Idle-Erkennung (Windows user32 / Linux X11)
 │   ├── single_instance.py   # Single-Instance-IPC (TCP-Port + Windows-Mutex)
@@ -187,13 +192,16 @@ wotiti/
 │       └── wotiti_preview.png
 ├── data/                    # Laufzeitdaten (DBs, config.json, sounds, Log)
 ├── tests/
+│   ├── conftest.py             # Gemeinsame Test-Fixtures
 │   ├── test_app.py             # GUI-Tests
 │   ├── test_db_helper.py       # Datenbank-Tests
 │   ├── test_idle_monitor.py    # Idle-Erkennung
 │   ├── test_stats_calculations.py # Statistik-Funktionen
-│   └── test_utils_workdays.py  # Arbeitstag-/Feiertagslogik
+│   ├── test_utils_workdays.py  # Arbeitstag-/Feiertagslogik
+│   └── test_week_view.py       # Wochenansicht & Übertragen-Status
 ├── build.sh                # Linux Build-Skript
 ├── build_windows.ps1       # Windows Build-Skript
+├── wotiti.spec             # PyInstaller-Spezifikation (von den Build-Skripten genutzt)
 ├── pyproject.toml          # uv/pyproject-Konfiguration (Feld `version` = App-Version)
 └── README.md
 ```

@@ -53,7 +53,8 @@
   ],
   "remoteEnv": {
     "GH_TOKEN": "${localEnv:GH_TOKEN}",
-    "PULSE_SERVER": "unix:/mnt/wslg/PulseServer"
+    "PULSE_SERVER": "unix:/mnt/wslg/PulseServer",
+    "WOTITI_CDN_ASSETS": "1"
   },
   "customizations": {
     "vscode": {

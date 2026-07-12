@@ -11,12 +11,19 @@ from collections.abc import Callable
 from datetime import datetime
 from functools import lru_cache
 from tkinter import Tk, filedialog
+from typing import TYPE_CHECKING
 
-import polars as pl
+if TYPE_CHECKING:  # nur für Annotations — Laufzeit-Import bleibt lazy
+    import polars as pl
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "2.0.2"
+# HINWEIS: polars wird bewusst NICHT auf Modulebene importiert — der Import
+# kostet spürbar Startzeit und wird nur von den drei Lese-/Export-Funktionen
+# unten gebraucht (Annotations bleiben dank `from __future__ import
+# annotations` unausgewertet). Der tkinter-Prozess startet so ohne polars.
+
+APP_VERSION = "2.3.0"
 APP_AUTHOR = "grenzenloseSchublade"
 APP_LICENSE = "MIT"
 
@@ -63,7 +70,6 @@ PATH_TO_DATA = os.path.join(BASE_DIR, "data")
 PATH_TO_SOUNDS = os.path.join(PATH_TO_DATA, "sounds")
 PATH_TO_DASHBOARD_DATA = PATH_TO_DATA
 DATABASE_PATH = os.path.join(PATH_TO_DATA, "app_database.db")
-GENERATE_DATABASE_PATH = os.path.join(PATH_TO_DATA, "beispieldaten.db")
 CONFIG_PATH = os.path.join(PATH_TO_DATA, "config.json")
 
 # Single Source of Truth für die ganzzahligen Pomodoro-Minuten-Felder:
@@ -179,6 +185,35 @@ def is_non_workday(d, *, country: str = "DE", subdiv: str | None = None, include
     return is_weekend(d) or (include_holidays and is_holiday(d, country=country, subdiv=subdiv))
 
 
+def fmt_hours_hm(hours: float) -> str:
+    """Dezimalstunden als **H:MM**-Text (echte Minuten, 60 min = 1 h).
+
+    z. B. 0.92 h → „0:55 h", 5.5 h → „5:30 h". Gemeinsame Formatierung für
+    App-Anzeige UND Dashboard — die ins Firmensystem übertragenen Werte sollen
+    überall identisch aussehen (keine Dezimal-/H:MM-Mischung).
+    """
+    total_min = round(hours * 60)
+    h, m = divmod(total_min, 60)
+    return f"{h}:{m:02d} h"
+
+
+def prewarm_holiday_cache(country: str = "DE", subdiv: str | None = None) -> None:
+    """Wärmt den Feiertags-Cache (aktuelles + vorheriges Jahr) im Hintergrund vor.
+
+    Der erste ``is_holiday``-Aufruf importiert sonst das ``holidays``-Paket und
+    baut die Jahres-Map synchron im UI-Thread auf (spürbarer Ruckler beim ersten
+    Öffnen der Wochenansicht). Danach sind alle Lookups O(1) im ``lru_cache``.
+    """
+    import threading  # noqa: PLC0415
+
+    def _warm() -> None:
+        year = datetime.now().year
+        for y in (year, year - 1):
+            _holiday_set_cached(country or "DE", subdiv or None, y)
+
+    threading.Thread(target=_warm, daemon=True, name="holiday-prewarm").start()
+
+
 def _validate_config(cfg: dict) -> dict:
     """Validiert geladene Konfiguration und ersetzt ungültige Werte durch Defaults.
 
@@ -274,6 +309,8 @@ def clamp_note(text: str, max_words: int = 44) -> str:
 
 def save_to_csv(data: pl.DataFrame, csv_path: str) -> None:
     """Save the DataFrame to a CSV file."""
+    import polars as pl  # noqa: PLC0415 — lazy, siehe Modul-Hinweis
+
     try:
         if isinstance(data, pl.DataFrame):
             data.write_csv(csv_path)
@@ -283,29 +320,6 @@ def save_to_csv(data: pl.DataFrame, csv_path: str) -> None:
         logger.info("Daten gespeichert: %s", csv_path)
     except (OSError, ValueError, TypeError) as e:
         logger.error("CSV-Export fehlgeschlagen: %s", e)
-
-
-def convert_timestamp_format(timestamp_str: str | None) -> datetime | None:
-    """
-    Konvertiert verschiedene Timestamp-Formate in datetime-Objekte.
-    """
-    if timestamp_str is None:
-        return None
-    for date_format in [
-        "%Y-%m-%d %H:%M:%S",  # Standardformat
-        "%d-%m-%Y %H:%M:%S",  # Altes Format
-        "%Y/%m/%d %H:%M:%S",  # Alternative Schreibweise
-        "%d/%m/%Y %H:%M:%S",  # Alternative Schreibweise
-    ]:
-        try:
-            return datetime.strptime(timestamp_str, date_format)
-        except (ValueError, TypeError):
-            continue
-    try:
-        return datetime.fromisoformat(timestamp_str)
-    except (ValueError, TypeError) as e:
-        logger.warning("Timestamp-Konvertierung fehlgeschlagen: %s — %s", timestamp_str, e)
-        return None
 
 
 def read_database(
@@ -322,6 +336,8 @@ def read_database(
     ``to_date`` werden gegen ``events.timestamp`` geprüft (ISO-Präfix); der
     User-Filter ist eine exakte Namens-Übereinstimmung.
     """
+    import polars as pl  # noqa: PLC0415 — lazy, siehe Modul-Hinweis
+
     try:
         with sqlite3.connect(db_path) as conn:
             cursor = conn.cursor()
@@ -383,6 +399,8 @@ def read_break_events(db_path: str) -> pl.DataFrame:
     duration_seconds, is_auto, pomodoro_cycle. Leere/fehlende Tabelle → leerer
     DataFrame. ``started_at`` wird in ein Datetime + ``date`` (YYYY-MM-DD) konvertiert.
     """
+    import polars as pl  # noqa: PLC0415 — lazy, siehe Modul-Hinweis
+
     try:
         with sqlite3.connect(db_path) as conn:
             cursor = conn.cursor()

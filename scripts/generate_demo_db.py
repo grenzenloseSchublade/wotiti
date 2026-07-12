@@ -135,20 +135,33 @@ def generate(target_db: str) -> dict:
                 stats["events"] += 2
                 day_projects.add(project)
 
-            # Mittagspause (~12–13 Uhr) als langer Break auf dem ersten Projekt.
-            lunch_proj = blocks[0][0]
-            lunch_start = datetime(day.year, day.month, day.day, 12, rng.choice([0, 15, 30]))
-            lunch_end = lunch_start + timedelta(minutes=rng.randint(30, 60))
-            log_break_start(lunch_proj, user, "long", is_auto=False, source="manual", started_at=lunch_start, conn=conn)
-            log_break_stop(lunch_proj, user, ended_at=lunch_end, conn=conn)
-            stats["breaks"] += 1
-            # Gelegentlich eine kurze Pomodoro-Pause am Nachmittag.
-            if rng.random() < 0.4:
-                sb_start = datetime(day.year, day.month, day.day, rng.randint(14, 16), rng.choice([0, 30]))
-                sb_end = sb_start + timedelta(minutes=5)
-                log_break_start(lunch_proj, user, "short", started_at=sb_start, conn=conn)
-                log_break_stop(lunch_proj, user, ended_at=sb_end, conn=conn)
+            # Pausen aus den tatsächlichen Lücken zwischen den Blöcken ableiten,
+            # damit Breaks nie mit Sessions überlappen.
+            gaps = [
+                (blocks[i][2], blocks[i + 1][1], blocks[i][0])  # (start, end, project davor)
+                for i in range(len(blocks) - 1)
+            ]
+            if gaps:
+                # Mittagspause = größte Lücke (die von _rand_session_blocks
+                # vergrößerte Lücke nach dem ersten/zweiten Block), exakt
+                # über die Lücke geloggt.
+                lunch_start, lunch_end, lunch_proj = max(gaps, key=lambda g: g[1] - g[0])
+                log_break_start(
+                    lunch_proj, user, "long", is_auto=False, source="manual", started_at=lunch_start, conn=conn
+                )
+                log_break_stop(lunch_proj, user, ended_at=lunch_end, conn=conn)
                 stats["breaks"] += 1
+                # Gelegentlich eine kurze Pomodoro-Pause in einer weiteren
+                # echten Lücke; ohne passende Lücke wird sie übersprungen.
+                short_gaps = [g for g in gaps if g[0] != lunch_start and (g[1] - g[0]) >= timedelta(minutes=5)]
+                if short_gaps and rng.random() < 0.4:
+                    gap_start, gap_end, gap_proj = rng.choice(short_gaps)
+                    slack_min = int((gap_end - gap_start - timedelta(minutes=5)).total_seconds() // 60)
+                    sb_start = gap_start + timedelta(minutes=rng.randint(0, slack_min))
+                    sb_end = sb_start + timedelta(minutes=5)
+                    log_break_start(gap_proj, user, "short", started_at=sb_start, conn=conn)
+                    log_break_stop(gap_proj, user, ended_at=sb_end, conn=conn)
+                    stats["breaks"] += 1
 
             # Notizen + Übertragen-Status je (Projekt, Tag).
             day_iso = day.strftime("%Y-%m-%d")

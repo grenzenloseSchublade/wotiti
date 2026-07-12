@@ -181,7 +181,9 @@ def test_daily_duration_orphan_no_inflation(db_conn):
     log_start(project="P", name="test_user", timestamp=_dt(2026, 6, 22, 9, 0), conn=db_conn)
     log_stop(project="P", name="test_user", timestamp=_dt(2026, 6, 22, 17, 0), conn=db_conn)
 
-    d = lambda iso: calculate_daily_duration(project="P", name="test_user", date=iso, conn=db_conn)
+    def d(iso):
+        return calculate_daily_duration(project="P", name="test_user", date=iso, conn=db_conn)
+
     assert d("20-06-2026") == 0
     assert d("21-06-2026") == 8 * 3600
     assert d("22-06-2026") == 8 * 3600
@@ -657,3 +659,301 @@ def test_calculate_daily_break_duration_range(db_conn):
     assert abs(total - 900) < 2
     # Anderer Tag → 0.
     assert calculate_daily_break_duration(name="u1", date="03-06-2025", conn=db_conn) == 0
+
+
+# ---------------------------------------------------------------------------
+# set_daily_transferred_bulk (Tages-/Wochen-Häkchen der Wochenansicht)
+# ---------------------------------------------------------------------------
+
+
+def test_set_daily_transferred_bulk_sets_and_counts(db_conn):
+    """Bulk-Setzen markiert alle Paare und liefert die Anzahl geänderter Zeilen."""
+    from db_helper import get_daily_meta, set_daily_transferred_bulk
+
+    check_user(db_conn, "u1")
+    items = [("A", "2025-06-02"), ("B", "2025-06-02"), ("A", "2025-06-03")]
+    changed = set_daily_transferred_bulk(db_conn, "u1", items, True, transferred_at="2025-06-05")
+    assert changed == 3
+    for project, date_iso in items:
+        meta = get_daily_meta(db_conn, "u1", project, date_iso)
+        assert meta["transferred"] is True
+        assert meta["transferred_at"] == "2025-06-05"
+
+
+def test_set_daily_transferred_bulk_preserves_existing_transferred_at(db_conn):
+    """Bereits übertragene Zeilen behalten ihr ursprüngliches transferred_at."""
+    from db_helper import get_daily_meta, set_daily_transferred, set_daily_transferred_bulk
+
+    check_user(db_conn, "u1")
+    set_daily_transferred(db_conn, "u1", "A", "2025-06-02", True, transferred_at="2025-06-01")
+
+    items = [("A", "2025-06-02"), ("B", "2025-06-02")]
+    changed = set_daily_transferred_bulk(db_conn, "u1", items, True, transferred_at="2025-06-05")
+    # Nur B ist neu — A war schon übertragen und zählt nicht als Änderung.
+    assert changed == 1
+    assert get_daily_meta(db_conn, "u1", "A", "2025-06-02")["transferred_at"] == "2025-06-01"
+    assert get_daily_meta(db_conn, "u1", "B", "2025-06-02")["transferred_at"] == "2025-06-05"
+
+
+def test_set_daily_transferred_bulk_clear_removes_empty_rows(db_conn):
+    """Zurücksetzen entfernt Zeilen ohne Notiz (Aufräum-Semantik) und erhält Notizen."""
+    from db_helper import get_daily_meta, set_daily_note, set_daily_transferred_bulk
+
+    check_user(db_conn, "u1")
+    set_daily_note(db_conn, "u1", "A", "2025-06-02", "wichtige Notiz")
+    items = [("A", "2025-06-02"), ("B", "2025-06-02")]
+    set_daily_transferred_bulk(db_conn, "u1", items, True, transferred_at="2025-06-05")
+
+    changed = set_daily_transferred_bulk(db_conn, "u1", items, False)
+    assert changed == 2
+    # A behält die Notiz, ist aber nicht mehr übertragen.
+    meta_a = get_daily_meta(db_conn, "u1", "A", "2025-06-02")
+    assert meta_a["note"] == "wichtige Notiz"
+    assert meta_a["transferred"] is False
+    # B war notizlos → Zeile weg (Default-Meta).
+    cur = db_conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM daily_notes WHERE project = 'B'")
+    assert cur.fetchone()[0] == 0
+
+
+def test_set_daily_transferred_bulk_empty_input(db_conn):
+    """Leere Liste bzw. fehlende Verbindung → 0 Änderungen, kein Fehler."""
+    from db_helper import set_daily_transferred_bulk
+
+    check_user(db_conn, "u1")
+    assert set_daily_transferred_bulk(db_conn, "u1", [], True) == 0
+    assert set_daily_transferred_bulk(None, "u1", [("A", "2025-06-02")], True) == 0
+    # Leere Projekt-/Datums-Strings im Batch werden übersprungen.
+    assert set_daily_transferred_bulk(db_conn, "u1", [("", "2025-06-02"), ("A", "")], True) == 0
+
+
+# ---------------------------------------------------------------------------
+# Timestamp-Fenster der Dauer-/Wochenberechnung (Freeze-Fix-Regression)
+# ---------------------------------------------------------------------------
+
+
+def test_week_hours_ignores_events_outside_window(db_conn):
+    """Alte Events (außerhalb des ±1-Tage-Fensters) ändern die Wochensummen nicht."""
+    from datetime import date as _date
+    from datetime import datetime as _dt
+
+    from db_helper import compute_last_n_days_hours_by_project, log_start, log_stop
+
+    check_user(db_conn, "u1")
+    # Alte Historie, 30 Tage vor dem Fenster.
+    log_start(project="P", name="u1", timestamp=_dt(2025, 5, 1, 9, 0), conn=db_conn)
+    log_stop(project="P", name="u1", timestamp=_dt(2025, 5, 1, 17, 0), conn=db_conn)
+    # Im Fenster: 2 h.
+    log_start(project="P", name="u1", timestamp=_dt(2025, 6, 2, 9, 0), conn=db_conn)
+    log_stop(project="P", name="u1", timestamp=_dt(2025, 6, 2, 11, 0), conn=db_conn)
+
+    days = dict(compute_last_n_days_hours_by_project(db_conn, "u1", n=7, end_date=_date(2025, 6, 3)))
+    assert abs(days["2025-06-02"]["P"] - 2.0) < 0.01
+    assert sum(sum(d.values()) for d in days.values()) == pytest.approx(2.0, abs=0.01)
+
+
+def test_week_hours_midnight_session_at_window_start(db_conn):
+    """Session 23:00 (Vortag des Fensters) → 01:00 (erster Fenstertag) ⇒ 1 h am ersten Tag."""
+    from datetime import date as _date
+    from datetime import datetime as _dt
+
+    from db_helper import compute_last_n_days_hours_by_project, log_start, log_stop
+
+    check_user(db_conn, "u1")
+    # Fenster = 2025-05-28 .. 2025-06-03; Session startet am 27. um 23:00.
+    log_start(project="P", name="u1", timestamp=_dt(2025, 5, 27, 23, 0), conn=db_conn)
+    log_stop(project="P", name="u1", timestamp=_dt(2025, 5, 28, 1, 0), conn=db_conn)
+
+    days = dict(compute_last_n_days_hours_by_project(db_conn, "u1", n=7, end_date=_date(2025, 6, 3)))
+    assert abs(days["2025-05-28"]["P"] - 1.0) < 0.01
+
+
+def test_week_hours_midnight_session_at_window_end(db_conn):
+    """Session 23:00 (letzter Fenstertag) → 01:00 (Folgetag) ⇒ 1 h am letzten Tag."""
+    from datetime import date as _date
+    from datetime import datetime as _dt
+
+    from db_helper import compute_last_n_days_hours_by_project, log_start, log_stop
+
+    check_user(db_conn, "u1")
+    log_start(project="P", name="u1", timestamp=_dt(2025, 6, 3, 23, 0), conn=db_conn)
+    log_stop(project="P", name="u1", timestamp=_dt(2025, 6, 4, 1, 0), conn=db_conn)
+
+    days = dict(compute_last_n_days_hours_by_project(db_conn, "u1", n=7, end_date=_date(2025, 6, 3)))
+    assert abs(days["2025-06-03"]["P"] - 1.0) < 0.01
+
+
+def test_week_hours_orphan_stop_outside_margin_dropped(db_conn):
+    """Verwaister Stop im Fenster paart nicht mehr mit Wochen-altem verwaisten Start.
+
+    Bewusste Verhaltensänderung des Timestamp-Fensters: früher hätte die
+    LIFO-Paarung über die Voll-Historie ein Phantom-Paar über Wochen gebildet
+    (bis zu 24 h pro Zwischentag); jetzt wird der Stop ohne Start verworfen.
+    """
+    from datetime import date as _date
+    from datetime import datetime as _dt
+
+    from db_helper import TIMESTAMP_FORMAT as _TS_FMT
+    from db_helper import compute_last_n_days_hours_by_project, log_start
+
+    user_id = check_user(db_conn, "u1")
+    # Verwaister Start 3 Wochen vor dem Fenster.
+    log_start(project="P", name="u1", timestamp=_dt(2025, 5, 10, 9, 0), conn=db_conn)
+    # Verwaister Stop mitten im Fenster (direkt eingefügt, um close_stale zu umgehen).
+    cur = db_conn.cursor()
+    stop_ts = _dt(2025, 6, 2, 12, 0)
+    cur.execute(
+        "INSERT INTO events (user_id, project, event_type, timestamp, date) VALUES (?, 'P', 'stop', ?, ?)",
+        (user_id, stop_ts.strftime(_TS_FMT), stop_ts.strftime("%d-%m-%Y")),
+    )
+    db_conn.commit()
+
+    days = dict(compute_last_n_days_hours_by_project(db_conn, "u1", n=7, end_date=_date(2025, 6, 3)))
+    assert sum(sum(d.values()) for d in days.values()) == 0.0
+
+
+def test_daily_duration_ignores_far_history(db_conn):
+    """calculate_daily_duration nutzt das Timestamp-Fenster (±1 Tag) statt der Voll-Historie."""
+    from datetime import datetime as _dt
+
+    from db_helper import calculate_daily_duration, log_start, log_stop
+
+    check_user(db_conn, "u1")
+    # Weit entfernte Session (gleiches Projekt) — darf den Zieltag nicht beeinflussen.
+    log_start(project="P", name="u1", timestamp=_dt(2025, 1, 15, 9, 0), conn=db_conn)
+    log_stop(project="P", name="u1", timestamp=_dt(2025, 1, 15, 17, 0), conn=db_conn)
+    # Zieltag: genau 90 min.
+    log_start(project="P", name="u1", timestamp=_dt(2025, 6, 2, 10, 0), conn=db_conn)
+    log_stop(project="P", name="u1", timestamp=_dt(2025, 6, 2, 11, 30), conn=db_conn)
+
+    assert abs(calculate_daily_duration(project="P", name="u1", date="02-06-2025", conn=db_conn) - 5400) < 2
+    assert calculate_daily_duration(project="P", name="u1", date="20-01-2025", conn=db_conn) == 0
+
+
+def test_week_hours_session_spanning_two_midnights(db_conn):
+    """Session Fr 22:00 → So 01:00 (2 Mitternächte, App lief durch) wird voll verbucht."""
+    from datetime import date as _date
+    from datetime import datetime as _dt
+
+    from db_helper import calculate_daily_duration, compute_last_n_days_hours_by_project, log_start, log_stop
+
+    check_user(db_conn, "u1")
+    # 2025-06-06 (Fr) 22:00 → 2025-06-08 (So) 01:00.
+    log_start(project="P", name="u1", timestamp=_dt(2025, 6, 6, 22, 0), conn=db_conn)
+    log_stop(project="P", name="u1", timestamp=_dt(2025, 6, 8, 1, 0), conn=db_conn)
+
+    days = dict(compute_last_n_days_hours_by_project(db_conn, "u1", n=7, end_date=_date(2025, 6, 8)))
+    assert abs(days["2025-06-06"]["P"] - 2.0) < 0.01  # Fr: 22-24 Uhr
+    assert abs(days["2025-06-07"]["P"] - 24.0) < 0.01  # Sa: kompletter Tag
+    assert abs(days["2025-06-08"]["P"] - 1.0) < 0.01  # So: 0-1 Uhr
+    # Auch am Fensterrand: Fenster endet AM Freitag → Fr braucht den So-Stop (+3-Tage-Rand).
+    assert abs(calculate_daily_duration(project="P", name="u1", date="06-06-2025", conn=db_conn) - 7200) < 2
+
+
+def test_timezone_aware_timestamp_row_is_skipped(db_conn):
+    """Eine tz-behaftete Timestamp-Zeile (hand-editierte DB) crasht die Paarung nicht."""
+    from datetime import date as _date
+    from datetime import datetime as _dt
+
+    from db_helper import calculate_daily_duration, compute_last_n_days_hours_by_project, log_start, log_stop
+
+    user_id = check_user(db_conn, "u1")
+    log_start(project="P", name="u1", timestamp=_dt(2025, 6, 2, 9, 0), conn=db_conn)
+    log_stop(project="P", name="u1", timestamp=_dt(2025, 6, 2, 10, 0), conn=db_conn)
+    cur = db_conn.cursor()
+    cur.execute(
+        "INSERT INTO events (user_id, project, event_type, timestamp, date) "
+        "VALUES (?, 'P', 'start', '2025-06-02 11:00:00+02:00', '02-06-2025')",
+        (user_id,),
+    )
+    db_conn.commit()
+
+    # Kein TypeError; die aware-Zeile wird wie früher (strptime) verworfen.
+    assert abs(calculate_daily_duration(project="P", name="u1", date="02-06-2025", conn=db_conn) - 3600) < 2
+    days = dict(compute_last_n_days_hours_by_project(db_conn, "u1", n=3, end_date=_date(2025, 6, 3)))
+    assert abs(days["2025-06-02"]["P"] - 1.0) < 0.01
+
+
+def test_set_daily_transferred_single_preserves_transferred_at(db_conn):
+    """Auch der Einzel-Writer überschreibt transferred_at bei erneutem Setzen nicht mehr.
+
+    Einheitliche Semantik mit dem Bulk-Writer (gemeinsamer Kern
+    _apply_transferred_row): das ursprüngliche Übertragungsdatum bleibt stehen.
+    """
+    from db_helper import get_daily_meta, set_daily_transferred
+
+    check_user(db_conn, "u1")
+    set_daily_transferred(db_conn, "u1", "A", "2025-06-02", True, transferred_at="2025-06-01")
+    set_daily_transferred(db_conn, "u1", "A", "2025-06-02", True, transferred_at="2025-06-09")
+    assert get_daily_meta(db_conn, "u1", "A", "2025-06-02")["transferred_at"] == "2025-06-01"
+
+
+# ---------------------------------------------------------------------------
+# Archivierung (v2.2.0): Benutzer/Projekte ausblenden statt löschen
+# ---------------------------------------------------------------------------
+
+
+def test_archived_user_hidden_from_default_list(db_conn):
+    """Archivierte Benutzer fehlen in get_all_users, erscheinen mit include_archived."""
+    from db_helper import get_all_users, set_archived
+
+    check_user(db_conn, "aktiv")
+    check_user(db_conn, "alt")
+    assert set_archived(db_conn, "user", "alt", True) is True
+    assert get_all_users(db_conn) == ["aktiv"]
+    assert get_all_users(db_conn, include_archived=True) == ["aktiv", "alt"]
+    # Wieder einblenden.
+    assert set_archived(db_conn, "user", "alt", False) is True
+    assert get_all_users(db_conn) == ["aktiv", "alt"]
+
+
+def test_archived_project_hidden_but_data_preserved(db_conn):
+    """Archivierte Projekte verschwinden aus der Auswahl; Events bleiben erhalten."""
+    from datetime import datetime as _dt
+
+    from db_helper import (
+        calculate_daily_duration,
+        check_project,
+        get_all_projects,
+        log_start,
+        log_stop,
+        set_archived,
+    )
+
+    check_user(db_conn, "u1")
+    check_project(db_conn, "Altprojekt")
+    log_start(project="Altprojekt", name="u1", timestamp=_dt(2025, 6, 2, 9, 0), conn=db_conn)
+    log_stop(project="Altprojekt", name="u1", timestamp=_dt(2025, 6, 2, 10, 0), conn=db_conn)
+
+    set_archived(db_conn, "project", "Altprojekt", True)
+    assert "Altprojekt" not in get_all_projects(db_conn)
+    assert "Altprojekt" in get_all_projects(db_conn, include_archived=True)
+    # Daten unangetastet: Dauer weiterhin berechenbar.
+    assert abs(calculate_daily_duration(project="Altprojekt", name="u1", date="02-06-2025", conn=db_conn) - 3600) < 2
+
+
+def test_archivable_overview_counts_events(db_conn):
+    """get_archivable_overview liefert Name, Flag und Event-Anzahl."""
+    from datetime import datetime as _dt
+
+    from db_helper import get_archivable_overview, log_start, log_stop, set_archived
+
+    check_user(db_conn, "u1")
+    log_start(project="P", name="u1", timestamp=_dt(2025, 6, 2, 9, 0), conn=db_conn)
+    log_stop(project="P", name="u1", timestamp=_dt(2025, 6, 2, 10, 0), conn=db_conn)
+    set_archived(db_conn, "user", "u1", True)
+
+    overview = get_archivable_overview(db_conn)
+    assert ("u1", True, 2) in overview["users"]
+    assert any(name == "P" and count == 2 for name, _a, count in overview["projects"])
+
+
+def test_set_archived_rejects_bad_input(db_conn):
+    """Ungültige Art/Name/Verbindung → False, kein Fehler."""
+    from db_helper import set_archived
+
+    check_user(db_conn, "u1")
+    assert set_archived(db_conn, "group", "u1", True) is False
+    assert set_archived(db_conn, "user", "", True) is False
+    assert set_archived(None, "user", "u1", True) is False
+    assert set_archived(db_conn, "user", "gibtsnicht", True) is False

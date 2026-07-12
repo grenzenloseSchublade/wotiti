@@ -1380,7 +1380,7 @@ wheels = [
 
 [[package]]
 name = "wotiti"
-version = "2.0.1"
+version = "2.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "holidays" },
@@ -1412,7 +1412,7 @@ requires-dist = [
     { name = "dash-bootstrap-components", marker = "extra == 'stats'", specifier = ">=1.7.1" },
     { name = "holidays", specifier = ">=0.50" },
     { name = "plotly", marker = "extra == 'stats'", specifier = ">=5.0.0" },
-    { name = "polars" },
+    { name = "polars", specifier = ">=1,<2" },
     { name = "pre-commit", marker = "extra == 'dev'" },
     { name = "pyinstaller", marker = "extra == 'dev'", specifier = ">=6.12.0" },
     { name = "pytest", marker = "extra == 'dev'" },

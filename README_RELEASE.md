@@ -42,16 +42,19 @@ Auf einem Linux-System im Repository ausführen:
 
 Erwartetes Ergebnis: ein lauffähiger Ordner unter `dist/wotiti`.
 
-Linux-Artefakt zippen:
+Linux-Artefakt zippen (Version einmal setzen, an `version` in `pyproject.toml` angleichen):
 
 ```bash
-zip -r dist/wotiti_1_3_0-linux-x64.zip dist/wotiti
+VERSION=2.3.0
+VERSION_US=${VERSION//./_}   # für Dateinamen: 2.3.0 → 2_3_0
+
+zip -r "dist/wotiti_${VERSION_US}-linux-x64.zip" dist/wotiti
 ```
 
 Optional prüfen:
 
 ```bash
-ls -lh dist/wotiti_1_3_0-linux-x64.zip
+ls -lh "dist/wotiti_${VERSION_US}-linux-x64.zip"
 ```
 
 ## Schritt 2: Windows-Build erstellen
@@ -66,20 +69,25 @@ Erwartetes Ergebnis: ein lauffähiger Ordner unter `dist\wotiti`.
 
 ## Schritt 3: Windows-Artefakt zippen
 
+Version einmal setzen (an `version` in `pyproject.toml` angleichen):
+
 ```powershell
-Compress-Archive -Path dist\wotiti -DestinationPath dist\wotiti_1_3_0-win-x64.zip
+$version = "2.3.0"
+$versionUs = $version -replace '\.', '_'   # für Dateinamen: 2.3.0 → 2_3_0
+
+Compress-Archive -Path dist\wotiti -DestinationPath "dist\wotiti_${versionUs}-win-x64.zip"
 ```
 
 Optional prüfen:
 
 ```powershell
-Get-Item dist\wotiti_1_3_0-win-x64.zip
+Get-Item "dist\wotiti_${versionUs}-win-x64.zip"
 ```
 
-Hinweis: Für ein gemeinsames Release werden zwei Dateien benötigt:
+Hinweis: Für ein gemeinsames Release werden zwei Dateien benötigt (`<VERSION>` steht für die Version mit Unterstrichen, z. B. `2_2_0`):
 
-- `dist/wotiti_1_3_0-linux-x64.zip`
-- `dist/wotiti_1_3_0-win-x64.zip`
+- `dist/wotiti_<VERSION>-linux-x64.zip`
+- `dist/wotiti_<VERSION>-win-x64.zip`
 
 Wenn beide Builds auf unterschiedlichen Rechnern erstellt werden, eine der ZIP-Dateien auf den Release-Rechner kopieren.
 
@@ -88,16 +96,18 @@ Wenn beide Builds auf unterschiedlichen Rechnern erstellt werden, eine der ZIP-D
 Auf deinem Entwicklungsrechner:
 
 ```bash
+VERSION=2.3.0   # falls noch nicht gesetzt (siehe Schritt 1)
+
 git status
 git add -A
-git commit -m "release: v1.3.0"
+git commit -m "release: v${VERSION}"
 git push origin main
 
-git tag v1.3.0
-git push origin v1.3.0
+git tag "v${VERSION}"
+git push origin "v${VERSION}"
 ```
 
-Hinweis: Ersetze `main` und `v1.3.0` durch deinen tatsächlichen Branch/Versionsstand.
+Hinweis: Ersetze `main` und `VERSION` durch deinen tatsächlichen Branch/Versionsstand.
 
 ## Schritt 5: GitHub Release erstellen (beide Assets direkt downloadbar)
 
@@ -106,17 +116,20 @@ Hinweis: Ersetze `main` und `v1.3.0` durch deinen tatsächlichen Branch/Versions
 Wenn beide ZIP-Dateien lokal vorliegen:
 
 ```bash
-gh release create v1.3.0 \
-	dist/wotiti_1_3_0-win-x64.zip \
-	dist/wotiti_1_3_0-linux-x64.zip \
-	--title "WoTiTi v1.3.0" \
+VERSION=2.3.0   # falls noch nicht gesetzt (siehe Schritt 1)
+VERSION_US=${VERSION//./_}
+
+gh release create "v${VERSION}" \
+	"dist/wotiti_${VERSION_US}-win-x64.zip" \
+	"dist/wotiti_${VERSION_US}-linux-x64.zip" \
+	--title "WoTiTi v${VERSION}" \
 	--notes "Direktdownload: Windows- und Linux-Build (--onedir)"
 ```
 
 Falls das Release bereits existiert, können Assets nachträglich ergänzt werden:
 
 ```bash
-gh release upload v1.3.0 dist/wotiti_1_3_0-win-x64.zip dist/wotiti_1_3_0-linux-x64.zip --clobber
+gh release upload "v${VERSION}" "dist/wotiti_${VERSION_US}-win-x64.zip" "dist/wotiti_${VERSION_US}-linux-x64.zip" --clobber
 ```
 
 Wenn ZIP-Dateien noch nicht auf dem Rechner liegen, zuerst übertragen (SCP, Cloud, USB), dann obigen Befehl nutzen.
@@ -126,12 +139,12 @@ Wenn ZIP-Dateien noch nicht auf dem Rechner liegen, zuerst übertragen (SCP, Clo
 1. Repository auf GitHub öffnen.
 2. Rechts in der Seitenleiste auf „Releases" klicken.
 3. „Draft a new release" wählen.
-4. Tag auswählen oder neu anlegen (`v1.3.0`).
-5. Release-Titel vergeben (z. B. `WoTiTi v1.3.0`).
+4. Tag auswählen oder neu anlegen (z. B. `v2.3.0` — aktuelle Version einsetzen).
+5. Release-Titel vergeben (z. B. `WoTiTi v2.3.0`).
 6. Changelog/Notizen eintragen.
 7. Unter „Attach binaries" beide Dateien hochladen:
-	- `wotiti_1_3_0-win-x64.zip`
-	- `wotiti_1_3_0-linux-x64.zip`
+	- `wotiti_<VERSION>-win-x64.zip`
+	- `wotiti_<VERSION>-linux-x64.zip`
 8. „Publish release" klicken.
 
 ## Datei in GitHub veröffentlichen: Welche Wege gibt es?
@@ -199,8 +212,8 @@ Nutze das für große Binärdateien (ZIP, EXE, Installer):
 
 1. Tests/Lint laufen lokal sauber.
 2. Versionsänderungen und Changelog aktualisiert.
-3. Linux-Build erstellt und `wotiti_1_3_0-linux-x64.zip` erzeugt.
-4. Windows-Build erstellt und `wotiti_1_3_0-win-x64.zip` erzeugt.
+3. Linux-Build erstellt und `wotiti_<VERSION>-linux-x64.zip` erzeugt.
+4. Windows-Build erstellt und `wotiti_<VERSION>-win-x64.zip` erzeugt.
 5. Beide ZIPs getestet (Start, Datenpfade, Assets).
 6. Commit + Tag + Push ausgeführt.
 7. GitHub Release inkl. beider Assets veröffentlicht.

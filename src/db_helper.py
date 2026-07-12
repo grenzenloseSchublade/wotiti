@@ -4,13 +4,10 @@ import logging
 import os
 import re
 import sqlite3
-from collections import deque
 from datetime import datetime, timedelta
 from sqlite3 import Error
 
-import polars as pl
-
-from utils import DATABASE_PATH, PATH_TO_DATA
+from utils import DATABASE_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -19,22 +16,6 @@ TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 DATE_FORMAT = "%Y-%m-%d"
 # In der ``events.date``-Spalte verwendete UI-Darstellung (Tag-Reiter, Listbox).
 UI_DATE_FORMAT = "%d-%m-%Y"
-
-
-def derive_date_from_timestamp(timestamp: str | datetime | None) -> str | None:
-    """Leitet aus einem Zeitstempel den UI-Datums-String (DD-MM-YYYY) ab.
-
-    Akzeptiert ``datetime``-Objekte sowie Strings im Standardformat
-    ``%Y-%m-%d %H:%M:%S``. Liefert ``None`` bei ungültiger Eingabe.
-    """
-    if timestamp is None:
-        return None
-    if isinstance(timestamp, datetime):
-        return timestamp.strftime(UI_DATE_FORMAT)
-    try:
-        return datetime.strptime(str(timestamp), TIMESTAMP_FORMAT).strftime(UI_DATE_FORMAT)
-    except (ValueError, TypeError):
-        return None
 
 
 def create_connection(db_file: str = DATABASE_PATH) -> sqlite3.Connection | None:
@@ -59,6 +40,7 @@ def execute_sql(conn: sqlite3.Connection | None, sql_statement: str, params: tup
         logger.error("No database connection.")
         return False
 
+    cursor = None
     try:
         cursor = conn.cursor()
         if params:
@@ -71,7 +53,8 @@ def execute_sql(conn: sqlite3.Connection | None, sql_statement: str, params: tup
         logger.error("Error executing SQL: %s", e)
         return False
     finally:
-        cursor.close()
+        if cursor is not None:
+            cursor.close()
 
 
 def create_main_table(conn: sqlite3.Connection) -> bool:
@@ -85,11 +68,32 @@ def create_main_table(conn: sqlite3.Connection) -> bool:
     success = execute_sql(conn, sql_create_main_table)
     if success:
         logger.debug("Main table created successfully.")
+        _migrate_archived_column(conn, "users")
         create_events_table(conn)
         create_break_events_table(conn)
         create_projects_table(conn)
         create_daily_notes_table(conn)
     return success
+
+
+def _migrate_archived_column(conn: sqlite3.Connection, table: str) -> None:
+    """Ergänzt die ``archived``-Spalte (0/1) idempotent (Bestands-DBs).
+
+    Archivierte Benutzer/Projekte verschwinden nur aus den Auswahl-Listen —
+    ihre Daten (Events, Notizen, Statistik) bleiben vollständig erhalten.
+    """
+    if table not in ("users", "projects"):
+        return
+    try:
+        cursor = conn.cursor()
+        cursor.execute(f"PRAGMA table_info({table})")
+        existing = {row[1] for row in cursor.fetchall()}
+        if "archived" not in existing:
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+        cursor.close()
+    except Error as e:
+        logger.warning("archived-Migration für %s fehlgeschlagen: %s", table, e)
 
 
 def create_events_table(conn: sqlite3.Connection) -> bool:
@@ -112,6 +116,8 @@ def create_events_table(conn: sqlite3.Connection) -> bool:
         execute_sql(conn, "CREATE INDEX IF NOT EXISTS idx_events_project_user ON events(project, user_id);")
         # Häufiger Filter: Listbox-Tagessicht und Tagesdauer-Berechnung.
         execute_sql(conn, "CREATE INDEX IF NOT EXISTS idx_events_user_date ON events(user_id, date);")
+        # Timestamp-Range-Queries der Dauer-/Wochenberechnung (siehe _timestamp_window).
+        execute_sql(conn, "CREATE INDEX IF NOT EXISTS idx_events_user_ts ON events(user_id, timestamp);")
     return success
 
 
@@ -171,7 +177,10 @@ def create_projects_table(conn: sqlite3.Connection) -> bool:
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
     """
-    return execute_sql(conn, sql_create_projects_table)
+    success = execute_sql(conn, sql_create_projects_table)
+    if success:
+        _migrate_archived_column(conn, "projects")
+    return success
 
 
 def create_daily_notes_table(conn: sqlite3.Connection) -> bool:
@@ -251,6 +260,39 @@ def get_daily_note(conn: sqlite3.Connection | None, user: str, project: str, dat
     return get_daily_meta(conn, user, project, date_iso)["note"]
 
 
+def _apply_transferred_row(cur, user_id: int, project: str, date_iso: str, transferred: bool, transferred_at) -> int:
+    """Setzt/entfernt den Übertragen-Status EINER Zeile (gemeinsamer Kern).
+
+    Bereits übertragene Zeilen behalten beim erneuten Setzen ihr ursprüngliches
+    ``transferred_at`` (kein Überschreiben des Übertragungsdatums). Beim
+    Entfernen werden leere Zeilen (keine Notiz) aufgeräumt. Läuft in der
+    Transaktion des Aufrufers; Rückgabe: tatsächlich geänderte Zeilen.
+    """
+    if transferred:
+        cur.execute(
+            "INSERT OR IGNORE INTO daily_notes(user_id, project, date) VALUES(?, ?, ?)",
+            (user_id, project, date_iso),
+        )
+        cur.execute(
+            "UPDATE daily_notes SET transferred = 1, transferred_at = ? "
+            "WHERE user_id = ? AND project = ? AND date = ? AND transferred = 0",
+            (transferred_at, user_id, project, date_iso),
+        )
+        return max(cur.rowcount, 0)
+    cur.execute(
+        "UPDATE daily_notes SET transferred = 0, transferred_at = NULL "
+        "WHERE user_id = ? AND project = ? AND date = ? AND transferred = 1",
+        (user_id, project, date_iso),
+    )
+    changed = max(cur.rowcount, 0)
+    # Leere Zeile (keine Notiz, nicht übertragen) wieder löschen.
+    cur.execute(
+        "DELETE FROM daily_notes WHERE user_id = ? AND project = ? AND date = ? AND note = '' AND transferred = 0",
+        (user_id, project, date_iso),
+    )
+    return changed
+
+
 def _upsert_daily_field(
     conn: sqlite3.Connection,
     user: str,
@@ -281,11 +323,7 @@ def _upsert_daily_field(
                 (note, user_id, project, date_iso),
             )
         if transferred is not None:
-            cur.execute(
-                "UPDATE daily_notes SET transferred = ?, transferred_at = ? "
-                "WHERE user_id = ? AND project = ? AND date = ?",
-                (1 if transferred else 0, transferred_at if transferred else None, user_id, project, date_iso),
-            )
+            _apply_transferred_row(cur, user_id, project, date_iso, bool(transferred), transferred_at)
         # Leere Zeile (keine Notiz, nicht übertragen) wieder löschen.
         cur.execute(
             "DELETE FROM daily_notes WHERE user_id = ? AND project = ? AND date = ? AND note = '' AND transferred = 0",
@@ -323,6 +361,41 @@ def set_daily_transferred(
     except Error as e:
         logger.error("Error saving daily transfer (%s/%s/%s): %s", user, project, date_iso, e)
         return False
+
+
+def set_daily_transferred_bulk(
+    conn: sqlite3.Connection | None,
+    user: str,
+    items: list[tuple[str, str]],
+    transferred: bool,
+    transferred_at: str | None = None,
+) -> int:
+    """Setzt/entfernt den Übertragen-Status für mehrere (project, date_iso)-Paare.
+
+    Eine Transaktion für den ganzen Batch (Tages-/Wochen-Häkchen der
+    Wochenansicht). Gleicher Zeilen-Kern wie :func:`set_daily_transferred`
+    (:func:`_apply_transferred_row`): bereits übertragene Zeilen behalten ihr
+    ``transferred_at``, beim Entfernen werden leere Zeilen aufgeräumt.
+
+    Rückgabe: Anzahl tatsächlich geänderter Zeilen (0 bei Fehler/leerem Input).
+    """
+    if not conn or not user or not items:
+        return 0
+    user_id = check_user(conn, user)
+    if user_id is None:
+        return 0
+    changed = 0
+    try:
+        with conn:
+            cur = conn.cursor()
+            for project, date_iso in items:
+                if not project or not date_iso:
+                    continue
+                changed += _apply_transferred_row(cur, user_id, project, date_iso, transferred, transferred_at)
+    except Error as e:
+        logger.error("Error bulk-saving daily transfer for %s (%d items): %s", user, len(items), e)
+        return 0
+    return changed
 
 
 def get_daily_meta_for_range(
@@ -402,26 +475,30 @@ def migrate_legacy_user_tables(conn: sqlite3.Connection | None) -> bool:
             if cursor.fetchone() is not None:
                 continue
 
+            # User-Auflösung VOR der Kopier-Transaktion (check_user committet
+            # für sich — mitten in der Kopie würde das Teilzustände persistieren).
             user_name = table_name[:-7]
             user_id = check_user(conn, user_name)
             if user_id is None:
                 continue
 
-            cursor.execute(
-                f"""
-                INSERT INTO events (user_id, project, event_type, timestamp, date)
-                SELECT ?, project, event_type, timestamp, date
-                FROM "{table_name}"
-            """,
-                (user_id,),
-            )
+            # Kopie + Migrations-Marker atomar je Tabelle: entweder landen
+            # Events UND Marker in der DB oder (bei Fehler) keines von beiden —
+            # sonst könnten Events ohne Marker doppelt migriert werden.
+            with conn:
+                cursor.execute(
+                    f"""
+                    INSERT INTO events (user_id, project, event_type, timestamp, date)
+                    SELECT ?, project, event_type, timestamp, date
+                    FROM "{table_name}"
+                """,
+                    (user_id,),
+                )
+                cursor.execute(
+                    "INSERT INTO migration_log (table_name, migrated_at) VALUES (?, ?);",
+                    (table_name, datetime.now().strftime(TIMESTAMP_FORMAT)),
+                )
 
-            cursor.execute(
-                "INSERT INTO migration_log (table_name, migrated_at) VALUES (?, ?);",
-                (table_name, datetime.now().strftime(TIMESTAMP_FORMAT)),
-            )
-
-        conn.commit()
         return True
     except Error as e:
         logger.error("Error migrating legacy tables: %s", e)
@@ -488,14 +565,17 @@ def check_project(conn: sqlite3.Connection | None, name: str) -> int | None:
         cur.close()
 
 
-def get_all_users(conn: sqlite3.Connection | None) -> list[str]:
-    """Return list of all user names from the database."""
+def get_all_users(conn: sqlite3.Connection | None, include_archived: bool = False) -> list[str]:
+    """Return list of user names; archivierte werden standardmäßig ausgeblendet."""
     if not conn:
         return []
     cur = None
     try:
         cur = conn.cursor()
-        cur.execute("SELECT name FROM users ORDER BY name")
+        if include_archived:
+            cur.execute("SELECT name FROM users ORDER BY name")
+        else:
+            cur.execute("SELECT name FROM users WHERE archived = 0 ORDER BY name")
         return [row[0] for row in cur.fetchall()]
     except Error as e:
         logger.error("Error reading users: %s", e)
@@ -505,18 +585,72 @@ def get_all_users(conn: sqlite3.Connection | None) -> list[str]:
             cur.close()
 
 
-def get_all_projects(conn: sqlite3.Connection | None) -> list[str]:
-    """Return list of all project names from the projects table."""
+def get_all_projects(conn: sqlite3.Connection | None, include_archived: bool = False) -> list[str]:
+    """Return list of project names; archivierte werden standardmäßig ausgeblendet."""
     if not conn:
         return []
     cur = None
     try:
         cur = conn.cursor()
-        cur.execute("SELECT name FROM projects ORDER BY name")
+        if include_archived:
+            cur.execute("SELECT name FROM projects ORDER BY name")
+        else:
+            cur.execute("SELECT name FROM projects WHERE archived = 0 ORDER BY name")
         return [row[0] for row in cur.fetchall()]
     except Error as e:
         logger.error("Error reading projects: %s", e)
         return []
+    finally:
+        if cur is not None:
+            cur.close()
+
+
+def set_archived(conn: sqlite3.Connection | None, kind: str, name: str, archived: bool) -> bool:
+    """Setzt/entfernt das Archiv-Flag für einen Benutzer (kind='user') oder ein Projekt.
+
+    Archivieren blendet den Eintrag nur aus den Auswahl-Listen aus — sämtliche
+    Daten (Events, Notizen, Statistik) bleiben unangetastet und Historie/
+    Auswertung zeigen ihn weiterhin.
+    """
+    if not conn or not name or kind not in ("user", "project"):
+        return False
+    table = "users" if kind == "user" else "projects"
+    try:
+        with conn:
+            cur = conn.cursor()
+            cur.execute(f"UPDATE {table} SET archived = ? WHERE name = ?", (1 if archived else 0, name))
+            return cur.rowcount > 0
+    except Error as e:
+        logger.error("Error setting archived=%s for %s '%s': %s", archived, kind, name, e)
+        return False
+
+
+def get_archivable_overview(conn: sqlite3.Connection | None) -> dict[str, list[tuple[str, bool, int]]]:
+    """Liefert {'users': [(name, archived, event_count)], 'projects': [...]}.
+
+    Grundlage für die Verwaltungs-Sektion in den Einstellungen (Event-Anzahl
+    macht sichtbar, wie viele Daten hinter einem Eintrag stehen).
+    """
+    if not conn:
+        return {"users": [], "projects": []}
+    out: dict[str, list[tuple[str, bool, int]]] = {"users": [], "projects": []}
+    cur = None
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT u.name, u.archived, COUNT(e.id) FROM users u "
+            "LEFT JOIN events e ON e.user_id = u.id GROUP BY u.id ORDER BY u.name"
+        )
+        out["users"] = [(row[0], bool(row[1]), row[2]) for row in cur.fetchall()]
+        cur.execute(
+            "SELECT p.name, p.archived, COUNT(e.id) FROM projects p "
+            "LEFT JOIN events e ON e.project = p.name GROUP BY p.id ORDER BY p.name"
+        )
+        out["projects"] = [(row[0], bool(row[1]), row[2]) for row in cur.fetchall()]
+        return out
+    except Error as e:
+        logger.error("Error reading archivable overview: %s", e)
+        return {"users": [], "projects": []}
     finally:
         if cur is not None:
             cur.close()
@@ -561,6 +695,7 @@ def log_event(
     project = str(project).strip()
     name = str(name).strip()
 
+    cursor = None
     try:
         cursor = conn.cursor()
         user_id = check_user(conn, name)
@@ -609,7 +744,8 @@ def log_event(
         logger.error("Error logging %s event: %s", event_type, e)
         return False
     finally:
-        cursor.close()
+        if cursor is not None:
+            cursor.close()
 
 
 def log_start(
@@ -805,7 +941,13 @@ def get_open_break(project: str, name: str, conn: sqlite3.Connection | None = No
 
 
 def close_stale_breaks(conn: sqlite3.Connection | None = None) -> int:
-    """Close all open breaks left over from a previous session (e.g. after crash)."""
+    """Close all open breaks left over from a previous session (e.g. after crash).
+
+    Verwaiste Pausen werden mit ``ended_at = started_at`` und Dauer 0
+    geschlossen (Spiegel von ``close_stale_sessions``): die Wanduhr-Zeit über
+    einen Crash/Neustart hinweg ist keine Pause und würde die Pausenstatistik
+    sonst um Stunden/Tage verfälschen.
+    """
     if not conn:
         return 0
     cursor = None
@@ -817,17 +959,13 @@ def close_stale_breaks(conn: sqlite3.Connection | None = None) -> int:
             return 0
         now_str = datetime.now().strftime(TIMESTAMP_FORMAT)
         for break_id, started_at_str in stale:
-            try:
-                start_dt = datetime.strptime(started_at_str, TIMESTAMP_FORMAT)
-                duration = max(0, int((datetime.now() - start_dt).total_seconds()))
-            except (ValueError, TypeError):
-                duration = 0
+            ended_at = started_at_str if started_at_str else now_str
             cursor.execute(
-                "UPDATE break_events SET ended_at = ?, duration_seconds = ? WHERE id = ?",
-                (now_str, duration, break_id),
+                "UPDATE break_events SET ended_at = ?, duration_seconds = 0 WHERE id = ?",
+                (ended_at, break_id),
             )
         conn.commit()
-        logger.info("Closed %d stale open break(s) from previous session.", len(stale))
+        logger.info("Closed %d stale open break(s) from previous session (duration 0).", len(stale))
         return len(stale)
     except Error as e:
         logger.warning("Error closing stale breaks: %s", e)
@@ -967,17 +1105,19 @@ def calculate_daily_duration(
         if row is None:
             return 0
         user_id = row[0]
-        # Lade alle Events für (user, project) und paare start/stop. Damit
-        # können auch Sessions korrekt verbucht werden, deren Start- bzw.
-        # Stop-Event auf einen anderen Tag fällt (Mitternachts-Split).
+        # Events für (user, project) im Timestamp-Fenster ±1 Tag laden und
+        # start/stop paaren. Der Rand deckt Sessions ab, deren Start- bzw.
+        # Stop-Event auf den Nachbartag fällt (Mitternachts-Split); Begründung
+        # und Paarungs-Invarianten siehe _timestamp_window.
+        ts_lo, ts_hi = _timestamp_window(target_day, target_day)
         cursor.execute(
             """
             SELECT event_type, timestamp
             FROM events
-            WHERE project = ? AND user_id = ?
+            WHERE project = ? AND user_id = ? AND timestamp >= ? AND timestamp < ?
             ORDER BY timestamp
         """,
-            (project, user_id),
+            (project, user_id, ts_lo, ts_hi),
         )
 
         events = cursor.fetchall()
@@ -985,10 +1125,9 @@ def calculate_daily_duration(
 
         parsed = []
         for event_type, timestamp_str in events:
-            try:
-                parsed.append((event_type, datetime.strptime(timestamp_str, TIMESTAMP_FORMAT)))
-            except ValueError:
-                continue
+            ts = _parse_ts(timestamp_str)
+            if ts is not None:
+                parsed.append((event_type, ts))
 
         day_start = datetime.combine(target_day, datetime.min.time())
         day_end = day_start + _td(days=1)
@@ -1013,35 +1152,53 @@ def calculate_daily_duration(
             cursor.close()
 
 
-def get_last_start_date(conn: sqlite3.Connection | None, name: str, project: str) -> str | None:
-    """Return the ``date`` column of the most recent unmatched start event."""
-    if not conn or not name or not project:
-        return None
+# Rand des Timestamp-Fensters: deckt Sessions ab, die bis zu N Mitternächte
+# überspannen (z. B. übers Wochenende laufen gelassen, App nie neu gestartet).
+_WINDOW_MARGIN_DAYS = 3
+
+
+def _timestamp_window(first_day, last_day) -> tuple[str, str]:
+    """Timestamp-Grenzen ``[lo, hi)`` für Dauer-Berechnungen über ``first_day..last_day``.
+
+    Der Rand von ``_WINDOW_MARGIN_DAYS`` Tagen stellt sicher, dass Start UND
+    Stop einer Session, die in die Fenstertage hineinragt, mitgelesen werden —
+    auch wenn sie mehrere Mitternächte überspannt (z. B. Fr 22:00 → So 01:00
+    bei durchgehend laufender App). Noch längere Sessions entstehen im
+    Normalbetrieb nicht: der Idle-Monitor stoppt verwaiste Sessions und
+    ``close_stale_sessions`` räumt bei jedem App-Start auf; eine Session über
+    mehr als ``_WINDOW_MARGIN_DAYS`` Mitternächte würde an den Fensterrändern
+    beschnitten (bewusste, dokumentierte Grenze).
+
+    Die LIFO-Paarung bleibt im Fenster identisch zur Voll-Historie: verwaiste
+    Starts außerhalb lägen ohnehin am Stack-Boden und würden nie von einem
+    Stop im Fenster gebunden; ein verwaister Stop im Fenster wird ohne seinen
+    (uralten) Start zu ``(None, ts)`` und verworfen — das verhindert
+    Phantom-Paare über Wochen hinweg (bewusste Verbesserung).
+
+    ``TIMESTAMP_FORMAT`` (``YYYY-MM-DD HH:MM:SS``) ist lexikografisch sortier-
+    bar, daher funktioniert der String-Vergleich in SQL direkt und nutzt
+    ``idx_events_user_ts``. Die ``date``-Spalte (``DD-MM-YYYY``) ist dafür
+    ungeeignet.
+    """
+    lo = datetime.combine(first_day - timedelta(days=_WINDOW_MARGIN_DAYS), datetime.min.time())
+    hi = datetime.combine(last_day + timedelta(days=_WINDOW_MARGIN_DAYS + 1), datetime.min.time())
+    return lo.strftime(TIMESTAMP_FORMAT), hi.strftime(TIMESTAMP_FORMAT)
+
+
+def _parse_ts(timestamp_str: str) -> datetime | None:
+    """Parst einen DB-Timestamp; ``None`` bei ungültigem Format.
+
+    ``fromisoformat`` ist ~10× schneller als ``strptime`` und akzeptiert das
+    gespeicherte Format ``YYYY-MM-DD HH:MM:SS`` direkt. Timezone-behaftete
+    Werte (z. B. aus hand-editierten DBs) werden wie früher bei ``strptime``
+    verworfen — ein einzelner aware-Timestamp würde sonst beim Sortieren
+    gegen naive Timestamps mit ``TypeError`` crashen.
+    """
     try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM users WHERE name = ?", (name,))
-        row = cursor.fetchone()
-        if row is None:
-            return None
-        user_id = row[0]
-        cursor.execute(
-            """
-            SELECT e.date FROM events e
-            WHERE e.user_id = ? AND e.project = ? AND e.event_type = 'start'
-              AND NOT EXISTS (
-                  SELECT 1 FROM events e2
-                  WHERE e2.user_id = e.user_id AND e2.project = e.project
-                    AND e2.event_type = 'stop' AND e2.timestamp > e.timestamp
-              )
-            ORDER BY e.timestamp DESC LIMIT 1
-        """,
-            (user_id, project),
-        )
-        row = cursor.fetchone()
-        return row[0] if row else None
-    except Error as e:
-        logger.error("Error fetching last start date: %s", e)
+        ts = datetime.fromisoformat(timestamp_str)
+    except (ValueError, TypeError):
         return None
+    return None if ts.tzinfo is not None else ts
 
 
 def _resolve_user_id(conn, name) -> int | None:
@@ -1063,10 +1220,11 @@ def _resolve_user_id(conn, name) -> int | None:
 def _hours_by_project_day(conn, user_id, days, project_filter=None) -> dict[str, dict[str, float]]:
     """Verteilt abgeschlossene Sessions sekundengenau auf ``days`` je Projekt.
 
-    Ein **einziger** Scan über die Events des Nutzers (optional auf ein Projekt
-    gefiltert). Start/Stop werden je Projekt gepaart; jede Session wird anteilig
-    auf die Ziel-Tage verteilt (Mitternachts-Split), identisch zur Semantik von
-    :func:`calculate_daily_duration`.
+    Ein **einziger**, per Timestamp-Fenster begrenzter Scan über die Events des
+    Nutzers (optional auf ein Projekt gefiltert; Fenster-Rationale siehe
+    :func:`_timestamp_window`). Start/Stop werden je Projekt gepaart; jede
+    Session wird anteilig auf die Ziel-Tage verteilt (Mitternachts-Split),
+    identisch zur Semantik von :func:`calculate_daily_duration`.
 
     Rückgabe: ``{YYYY-MM-DD: {project: seconds}}`` (nur belegte Einträge).
     """
@@ -1080,18 +1238,26 @@ def _hours_by_project_day(conn, user_id, days, project_filter=None) -> dict[str,
     ]
     out: dict[str, dict[str, float]] = {iso: {} for iso, _, _ in day_bounds}
 
+    # Timestamp-Fenster ±1 Tag um die angefragten Tage — deckt Mitternachts-
+    # Sessions an den Fensterrändern ab; Begründung siehe _timestamp_window.
+    ts_lo, ts_hi = _timestamp_window(min(days), max(days))
+
     cursor = None
     try:
         cursor = conn.cursor()
         if project_filter is not None:
             cursor.execute(
-                "SELECT project, event_type, timestamp FROM events WHERE user_id = ? AND project = ? ORDER BY project, timestamp",
-                (user_id, project_filter),
+                "SELECT project, event_type, timestamp FROM events"
+                " WHERE user_id = ? AND project = ? AND timestamp >= ? AND timestamp < ?"
+                " ORDER BY project, timestamp",
+                (user_id, project_filter, ts_lo, ts_hi),
             )
         else:
             cursor.execute(
-                "SELECT project, event_type, timestamp FROM events WHERE user_id = ? ORDER BY project, timestamp",
-                (user_id,),
+                "SELECT project, event_type, timestamp FROM events"
+                " WHERE user_id = ? AND timestamp >= ? AND timestamp < ?"
+                " ORDER BY project, timestamp",
+                (user_id, ts_lo, ts_hi),
             )
         rows = cursor.fetchall()
     except Error as e:
@@ -1101,15 +1267,18 @@ def _hours_by_project_day(conn, user_id, days, project_filter=None) -> dict[str,
         if cursor is not None:
             cursor.close()
 
-    # Events je Projekt sammeln und mit derselben FIFO-Paarung wie die Anzeige
-    # auswerten (konsistente Summen auch bei Überschneidungen).
+    # Events je Projekt sammeln und mit derselben LIFO-Paarung wie die übrigen
+    # Dauer-Berechnungen (calculate_duration/calculate_daily_duration) auswerten.
+    # Hinweis: Die Tagesliste der App (_pair_day_sessions) paart bewusst FIFO —
+    # dort geht es um die Anzeige einzelner Sessions in Erfassungsreihenfolge;
+    # für SUMMEN ist LIFO robuster (verwaiste Starts bilden keine Mega-Paare,
+    # siehe pair_sessions_lifo-Docstring). Beide liefern für saubere Daten
+    # identische Ergebnisse.
     events_by_project: dict[str, list] = {}
     for project, event_type, ts_str in rows:
-        try:
-            ts = datetime.strptime(ts_str, TIMESTAMP_FORMAT)
-        except ValueError:
-            continue
-        events_by_project.setdefault(project, []).append((event_type, ts))
+        ts = _parse_ts(ts_str)
+        if ts is not None:
+            events_by_project.setdefault(project, []).append((event_type, ts))
 
     # Zugeschnittene Intervalle je (Tag, Projekt) sammeln, dann als Vereinigung
     # summieren (LIFO-Paarung + Union → robust gegen Waisen, kein Doppelzählen,
@@ -1224,11 +1393,11 @@ def close_stale_sessions(conn: sqlite3.Connection | None) -> int:
             for eid, etype, ts_str, date_str in evs:
                 if etype == "start":
                     stack.append((eid, ts_str, date_str))
-                elif etype == "stop":
-                    if stack:
-                        stack.pop()
-                    # verwaister Stop: ignorieren
-            for eid, ts_str, date_str in stack:
+                # Stop bindet den jüngsten offenen Start; verwaister Stop
+                # (leerer Stack) wird ignoriert.
+                elif etype == "stop" and stack:
+                    stack.pop()
+            for _eid, ts_str, date_str in stack:
                 leftover_starts.append((uid, project, ts_str, date_str))
 
         for uid, project, ts_str, date_str in leftover_starts:
@@ -1294,29 +1463,6 @@ def calculate_daily_break_duration(
     finally:
         if cursor is not None:
             cursor.close()
-
-
-def read_database(db_path: str = PATH_TO_DATA) -> pl.DataFrame:
-    """Read the SQLite database and return the data as a pandas DataFrame."""
-    try:
-        with sqlite3.connect(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='events';")
-            if cursor.fetchone() is None:
-                return pl.DataFrame()
-
-            query = """
-                SELECT u.name AS user, e.project, e.event_type, e.timestamp, e.date
-                FROM events e
-                JOIN users u ON u.id = e.user_id
-            """
-            cursor.execute(query)
-            rows = cursor.fetchall()
-            columns = [desc[0] for desc in cursor.description]
-            return pl.DataFrame(rows, schema=columns)
-    except sqlite3.Error as e:
-        logger.error("Error reading database: %s", e)
-        return pl.DataFrame()
 
 
 def get_event_by_id(conn: sqlite3.Connection | None, event_id: int) -> dict | None:
