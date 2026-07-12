@@ -8,7 +8,14 @@ Wer aus eigenen Reports / SQL-Abfragen heraus konsequent ISO 8601 in der
 Das Skript:
 - legt eine Backup-Datei ``<db>.backup-<timestamp>`` an,
 - konvertiert ``date`` von ``DD-MM-YYYY`` nach ``YYYY-MM-DD``,
-- markiert den Vorgang in ``migration_log`` (Marker: ``date_format_iso_v1``).
+- markiert den Vorgang in ``migration_log`` (Marker: ``date_format_iso_v1``),
+- löscht den Marker ``repair_dates_v1``, damit die App-seitige Migration
+  ``migrate_repair_dates`` beim nächsten Start erneut laufen darf (siehe unten).
+
+Das Skript ist idempotent und darf mehrfach ausgeführt werden: Das UPDATE
+betrifft ausschließlich Zeilen im Muster ``DD-MM-YYYY``; bereits konvertierte
+(ISO-)Zeilen bleiben unberührt. Wiederholte Läufe sind sogar nötig, solange
+die App weiterhin ``DD-MM-YYYY`` schreibt.
 
 ACHTUNG: Nach Ausführung muss die App-seitige Logik (UI-Felder, Filter,
 Stats-Gruppierung) ebenfalls auf ISO umgestellt werden — siehe Hinweis am
@@ -52,11 +59,6 @@ def _ensure_log(conn: sqlite3.Connection) -> None:
     )
 
 
-def _already_migrated(conn: sqlite3.Connection) -> bool:
-    cur = conn.execute("SELECT 1 FROM migration_log WHERE table_name = ?", (ISO_MARKER,))
-    return cur.fetchone() is not None
-
-
 def to_iso(conn: sqlite3.Connection, dry_run: bool) -> int:
     """Konvertiert ``DD-MM-YYYY`` → ``YYYY-MM-DD`` für alle ``events.date``-Zeilen."""
     expr = "substr(date,7,4) || '-' || substr(date,4,2) || '-' || substr(date,1,2)"
@@ -69,6 +71,11 @@ def to_iso(conn: sqlite3.Connection, dry_run: bool) -> int:
         "INSERT OR REPLACE INTO migration_log (table_name, migrated_at) VALUES (?, ?)",
         (ISO_MARKER, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
     )
+    # Marker der App-seitigen Reparatur-Migration löschen: ``migrate_repair_dates``
+    # läuft nur, solange dieser Marker fehlt. Nur so greift der dokumentierte
+    # Auto-Revert (Rückstellung auf ``DD-MM-YYYY``) beim nächsten App-Start,
+    # falls die App noch in der Default-Konfiguration läuft.
+    conn.execute("DELETE FROM migration_log WHERE table_name = 'repair_dates_v1'")
     return affected
 
 
@@ -108,9 +115,9 @@ def main(argv: list[str] | None = None) -> int:
             count = revert(conn, args.dry_run)
             verb = "würden zurückkonvertiert" if args.dry_run else "zurückkonvertiert"
         else:
-            if _already_migrated(conn) and not args.dry_run:
-                print("Bereits ISO-migriert (Marker vorhanden). Nichts zu tun.")
-                return 0
+            # Kein Marker-Early-Exit: Das UPDATE ist idempotent (nur Zeilen im
+            # Muster DD-MM-YYYY) und muss wiederholbar sein, solange die App
+            # weiterhin DD-MM-YYYY schreibt.
             count = to_iso(conn, args.dry_run)
             verb = "würden konvertiert" if args.dry_run else "konvertiert"
         if not args.dry_run:

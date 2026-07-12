@@ -94,6 +94,7 @@ def main():
     """Main function to start both the Tkinter app and the statistics dashboard."""
     multiprocessing.freeze_support()
     stats_process = None  # To store the statistics dashboard process
+    stats_launcher: dict = {"thread": None}  # Lazy-Launcher-Thread (siehe start_stats_dashboard)
     root = None
     config = load_config()
     stats_port = _find_available_port(config.get("dashboard_port", 8052))
@@ -104,22 +105,10 @@ def main():
         sys.exit(0)
 
     try:
-        # Start the Tkinter app in the main thread
-        root = tk.Tk()
-        _configure_windows_taskbar_icon(root)
-        app = App(root, stats_port=stats_port)  # noqa: F841
-
-        if si.listen_socket and si.stop_event:
-            logger.info("Single-Instance aktiv (IPC 127.0.0.1:%s, nur Hauptfenster).", si.port)
-            start_ipc_server_thread(
-                si.listen_socket,
-                si.stop_event,
-                lambda fn: root.after(0, fn),
-                app.raise_main_window_from_second_instance,
-                logger,
-            )
-
-        # Start the statistics dashboard in a separate thread/process
+        # Statistik-Dashboard NICHT eager starten: der Dash/Plotly/sklearn-Stack
+        # kostet Sekunden an Importzeit und dauerhaft ~200 MB Speicher — auch
+        # wenn die Auswertung nie geöffnet wird. Die App startet ihn lazy beim
+        # ersten Klick auf "Auswertung" über diesen Callback.
         def run_stats():
             nonlocal stats_process
             try:
@@ -141,13 +130,39 @@ def main():
                     stats_process.wait()
                     logger.debug("Dashboard-Subprocess beendet.")
             except Exception as e:
-                logger.error("Fehler im Dashboard: %s", e)
+                logger.exception("Fehler im Dashboard: %s", e)
             finally:
                 stats_process = None
 
-        stats_thread = threading.Thread(target=run_stats)
-        stats_thread.daemon = True  # Allow the main thread to exit even if this thread is running
-        stats_thread.start()
+        def start_stats_dashboard():
+            """Startet das Dashboard, falls es nicht schon läuft/startet.
+
+            Kein Einmal-Guard: Wenn der letzte Startversuch fehlschlug (Thread
+            beendet, Server nicht erreichbar), darf ein erneuter Klick einen
+            frischen Versuch starten — sonst wäre das Dashboard bis zum
+            App-Neustart dauerhaft unerreichbar.
+            """
+            thread = stats_launcher["thread"]
+            if thread is not None and thread.is_alive():
+                return
+            thread = threading.Thread(target=run_stats, daemon=True, name="stats-dashboard")
+            stats_launcher["thread"] = thread
+            thread.start()
+
+        # Start the Tkinter app in the main thread
+        root = tk.Tk()
+        _configure_windows_taskbar_icon(root)
+        app = App(root, stats_port=stats_port, start_stats_dashboard=start_stats_dashboard)  # noqa: F841
+
+        if si.listen_socket and si.stop_event:
+            logger.info("Single-Instance aktiv (IPC 127.0.0.1:%s, nur Hauptfenster).", si.port)
+            start_ipc_server_thread(
+                si.listen_socket,
+                si.stop_event,
+                lambda fn: root.after(0, fn),
+                app.raise_main_window_from_second_instance,
+                logger,
+            )
 
         root.mainloop()  # Start Tkinter main loop
 
@@ -161,9 +176,20 @@ def main():
 
     except Exception as e:
         messagebox.showerror("Error", f"An unexpected error occurred: {e}")
-        logger.error("Unerwarteter Fehler: %s", e)
+        logger.exception("Unerwarteter Fehler: %s", e)
     finally:
         shutdown_ipc(si.listen_socket, si.stop_event)
+        # Race beim Sofort-Schließen nach "Auswertung"-Klick: der Launcher-Thread
+        # lebt, aber Popen ist noch nicht zugewiesen → kurz (max. 2 s) nachwarten,
+        # damit der frisch gespawnte Dashboard-Prozess nicht verwaist.
+        launcher = stats_launcher["thread"]
+        if launcher is not None and launcher.is_alive() and stats_process is None:
+            import time as _time
+
+            for _ in range(20):
+                _time.sleep(0.1)
+                if stats_process is not None:
+                    break
         if stats_process:
             logger.info("Dashboard-Subprocess wird beendet...")
             try:

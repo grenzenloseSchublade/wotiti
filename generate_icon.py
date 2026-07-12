@@ -11,18 +11,18 @@ def draw_stopwatch(size: int) -> Image.Image:
     d = ImageDraw.Draw(img)
 
     # Win98 colors
-    face_color = (192, 192, 192)       # #C0C0C0 — classic Win98 gray
-    highlight = (255, 255, 255)         # top-left highlight
-    shadow = (128, 128, 128)            # bottom-right shadow
-    dark_shadow = (64, 64, 64)          # darkest edge
-    outline = (0, 0, 0)                 # black outline
-    hand_color = (0, 0, 0)             # clock hand
-    tick_color = (64, 64, 64)          # hour marks
-    button_color = (212, 208, 200)     # #D4D0C8 — Win98 button face
-    cyan_accent = (0, 255, 255)        # Synthwave cyan accent
+    face_color = (192, 192, 192)  # #C0C0C0 — classic Win98 gray
+    highlight = (255, 255, 255)  # top-left highlight
+    shadow = (128, 128, 128)  # bottom-right shadow
+    dark_shadow = (64, 64, 64)  # darkest edge
+    outline = (0, 0, 0)  # black outline
+    hand_color = (0, 0, 0)  # clock hand
+    tick_color = (64, 64, 64)  # hour marks
+    button_color = (212, 208, 200)  # #D4D0C8 — Win98 button face
+    cyan_accent = (0, 255, 255)  # Synthwave cyan accent
 
     cx, cy = 32, 35  # center of clock face (shifted down for button on top)
-    r = 22           # radius of clock face
+    r = 22  # radius of clock face
 
     # --- Top button (stopwatch crown) ---
     d.rectangle([28, 6, 36, 14], fill=button_color, outline=outline)
@@ -54,6 +54,7 @@ def draw_stopwatch(size: int) -> Image.Image:
 
     # --- Hour tick marks (12 positions) ---
     import math
+
     for i in range(12):
         angle = math.radians(i * 30 - 90)
         inner_r = r - 7
@@ -82,11 +83,17 @@ def draw_stopwatch(size: int) -> Image.Image:
 
     # --- Side buttons (left and right, typical stopwatch) ---
     # Right button (start/stop)
-    d.polygon([(cx + r + 1, cy - 6), (cx + r + 5, cy - 8), (cx + r + 5, cy - 2), (cx + r + 1, cy - 2)],
-              fill=button_color, outline=outline)
+    d.polygon(
+        [(cx + r + 1, cy - 6), (cx + r + 5, cy - 8), (cx + r + 5, cy - 2), (cx + r + 1, cy - 2)],
+        fill=button_color,
+        outline=outline,
+    )
     # Left button (reset)
-    d.polygon([(cx - r - 1, cy - 6), (cx - r - 5, cy - 8), (cx - r - 5, cy - 2), (cx - r - 1, cy - 2)],
-              fill=button_color, outline=outline)
+    d.polygon(
+        [(cx - r - 1, cy - 6), (cx - r - 5, cy - 8), (cx - r - 5, cy - 2), (cx - r - 1, cy - 2)],
+        fill=button_color,
+        outline=outline,
+    )
 
     # Scale to target size with nearest-neighbor for pixel-art look at small sizes
     if size <= 32:

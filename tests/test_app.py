@@ -1,7 +1,7 @@
 import contextlib
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from tkinter import END, Tk
 
 import pytest
@@ -330,6 +330,7 @@ def test_clear_console_with_no_text(app_instance):
 
 # --- Session-Pairing (_pair_day_sessions): FIFO-Robustheit gegen Überschneidung ---
 
+
 def _ev(eid, etype, hhmm, user="u", project="A"):
     """Hilfsfunktion: Event-Tupel wie aus der DB (id, user, project, type, ts)."""
     return (eid, user, project, etype, f"2026-06-23 {hhmm}:00")
@@ -337,8 +338,7 @@ def _ev(eid, etype, hhmm, user="u", project="A"):
 
 def test_pair_sessions_sequential(app_instance):
     """Sequenzielle Start/Stop-Paare bleiben unverändert gepaart."""
-    events = [_ev(1, "start", "09:00"), _ev(2, "stop", "10:00"),
-              _ev(3, "start", "11:00"), _ev(4, "stop", "12:00")]
+    events = [_ev(1, "start", "09:00"), _ev(2, "stop", "10:00"), _ev(3, "start", "11:00"), _ev(4, "stop", "12:00")]
     sessions = app_instance._pair_day_sessions(events)
     assert len(sessions) == 2
     assert all(s["start_id"] and s["stop_id"] for s in sessions)
@@ -351,8 +351,7 @@ def test_pair_sessions_overlapping_same_project(app_instance):
     Regressionsschutz: früher wurde der erste Start fälschlich „offen" und ein
     verwaister Stop erzeugt (Phantom-„läuft", Endzeit nicht editierbar).
     """
-    events = [_ev(1, "start", "09:00"), _ev(2, "start", "10:00"),
-              _ev(3, "stop", "11:00"), _ev(4, "stop", "12:00")]
+    events = [_ev(1, "start", "09:00"), _ev(2, "start", "10:00"), _ev(3, "stop", "11:00"), _ev(4, "stop", "12:00")]
     sessions = app_instance._pair_day_sessions(events)
     assert len(sessions) == 2
     # Kein offener Start, kein verwaister Stop.
@@ -363,8 +362,7 @@ def test_pair_sessions_overlapping_same_project(app_instance):
 
 def test_pair_sessions_unbalanced_extra_start(app_instance):
     """Echte Unbalance (mehr Starts als Stops) → genau eine offene Session."""
-    events = [_ev(1, "start", "09:00"), _ev(2, "start", "10:00"),
-              _ev(3, "stop", "11:00")]
+    events = [_ev(1, "start", "09:00"), _ev(2, "start", "10:00"), _ev(3, "stop", "11:00")]
     sessions = app_instance._pair_day_sessions(events)
     assert len(sessions) == 2
     open_sessions = [s for s in sessions if s["stop_id"] is None]
@@ -469,9 +467,339 @@ def test_pair_sessions_equal_timestamp_pairs_not_orphans(app_instance):
 
 def test_pair_sessions_separate_projects_not_merged(app_instance):
     """Gleichzeitige Sessions verschiedener Projekte werden nicht vermischt."""
-    events = [_ev(1, "start", "09:00", project="A"), _ev(2, "start", "09:30", project="B"),
-              _ev(3, "stop", "10:00", project="A"), _ev(4, "stop", "10:30", project="B")]
+    events = [
+        _ev(1, "start", "09:00", project="A"),
+        _ev(2, "start", "09:30", project="B"),
+        _ev(3, "stop", "10:00", project="A"),
+        _ev(4, "stop", "10:30", project="B"),
+    ]
     sessions = app_instance._pair_day_sessions(events)
     assert len(sessions) == 2
     by_proj = {s["project"]: (s["start_id"], s["stop_id"]) for s in sessions}
     assert by_proj == {"A": (1, 3), "B": (2, 4)}
+
+
+def test_disable_pomodoro_during_break_keeps_session(app_instance):
+    """POM-01: Pomodoro während einer aktiven Pomodoro-Pause deaktivieren darf
+    die laufende Session NICHT stoppen.
+
+    Reproduziert den stillen Session-Verlust: bei einer Pomodoro-Pause bleibt
+    die Session in der DB offen; deaktiviert der Nutzer Pomodoro, würde
+    _finish_break ohne Reconcile in den Stop-Zweig fallen. _reconcile_pomodoro_runtime
+    muss die Pause mit force_resume beenden und die Session erhalten.
+    """
+    app_instance.name_entry.set("pomo_user")
+    app_instance.project_entry.set("1")
+    app_instance.date_entry.delete(0, END)
+    app_instance.date_entry.insert(0, datetime.today().strftime("%d-%m-%Y"))
+    app_instance.start_session()
+    assert app_instance.session_active.get(("pomo_user", "1")) is True
+
+    # Pomodoro aktiv + laufende (nicht-manuelle) Pause simulieren.
+    app_instance.pomodoro_enabled = True
+    app_instance._start_break(
+        break_kind="short",
+        break_minutes=5,
+        is_auto=True,
+        source_label="pomodoro_break",
+        timed_break=True,
+    )
+    assert app_instance._break_active is True
+    # Pomodoro-Pause stoppt die Session NICHT in der DB.
+    assert app_instance.session_active.get(("pomo_user", "1")) is True
+
+    # Nutzer deaktiviert Pomodoro in den Einstellungen (Config bereits gesetzt).
+    app_instance.pomodoro_enabled = False
+    app_instance._reconcile_pomodoro_runtime(was_enabled=True)
+
+    assert app_instance._break_active is False
+    assert app_instance.session_active.get(("pomo_user", "1")) is True
+    assert app_instance.timer_running is True
+    assert app_instance._pomodoro_work_deadline_ts == 0.0
+    assert app_instance._paused_pomodoro_remaining_seconds == 0
+
+
+# ---------------------------------------------------------------------------
+# v2.2.0: Idle-Backdating, Pomodoro-Timer-Anzeige, Standby-Erkennung
+# ---------------------------------------------------------------------------
+
+
+def _start_test_session(app_instance, name="t_user", project="1"):
+    app_instance.name_entry.set(name)
+    app_instance.project_entry.set(project)
+    app_instance.date_entry.delete(0, END)
+    app_instance.date_entry.insert(0, datetime.today().strftime("%d-%m-%Y"))
+    app_instance.start_session()
+    assert app_instance.session_active.get((name, project)) is True
+    return name, project
+
+
+def test_idle_auto_stop_backdates_stop_event(app_instance, monkeypatch):
+    """Der Idle-Auto-Stop bucht den Stop auf den Beginn der Inaktivität zurück."""
+    import app as app_module
+
+    name, project = _start_test_session(app_instance, name="idle_bd")
+    app_instance.idle_timeout_minutes = 120
+    idle_seconds = 3 * 3600
+    monkeypatch.setattr(app_module, "get_idle_seconds", lambda: idle_seconds)
+    app_instance._idle_check_counter = 29
+    before = datetime.now()
+    app_instance._maybe_auto_stop_idle()
+    assert app_instance.session_active.get((name, project)) is False
+
+    cur = app_instance.db_conn.cursor()
+    row = cur.execute(
+        "SELECT e.timestamp FROM events e JOIN users u ON u.id = e.user_id "
+        "WHERE u.name = ? AND e.event_type = 'stop' ORDER BY e.id DESC LIMIT 1",
+        (name,),
+    ).fetchone()
+    stop_ts = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
+    expected = before - timedelta(seconds=idle_seconds)
+    # Rückdatiert auf ~now−idle, aber nie vor den Session-Start (Clamp).
+    start_dt = datetime.fromtimestamp(app_instance._session_started_ts) if app_instance._session_started_ts else None
+    assert abs((stop_ts - max(expected, stop_ts)).total_seconds()) < 6
+    assert stop_ts <= datetime.now()
+    if start_dt:
+        assert stop_ts >= start_dt
+
+
+def test_pomodoro_break_display_keeps_running(app_instance):
+    """Während einer Pomodoro-Pause zählt die Timer-Anzeige weiter (Pause = Arbeitszeit)."""
+    import time as _time
+
+    _start_test_session(app_instance, name="pomo_disp")
+    app_instance.pomodoro_enabled = True
+    # Vor-Pausen-Zeit simulieren: Session läuft "seit 10 min".
+    app_instance.timer_start_time = _time.time() - 600
+    app_instance._start_break(
+        break_kind="short",
+        break_minutes=5,
+        is_auto=True,
+        source_label="pomodoro_break",
+        timed_break=True,
+    )
+    assert app_instance._break_active is True
+    app_instance.update_timer_realtime()
+    label = app_instance.timer_time_label.cget("text")
+    h, m, s = (int(x) for x in label.split(":"))
+    assert h * 3600 + m * 60 + s >= 600  # Vor-Pausen-Zeit bleibt sichtbar
+
+
+def test_finish_pomodoro_break_preserves_timer_start(app_instance):
+    """Resume nach Pomodoro-Pause setzt timer_start_time NICHT zurück (zählt nicht ab null)."""
+    import time as _time
+
+    _start_test_session(app_instance, name="pomo_keep")
+    app_instance.pomodoro_enabled = True
+    original_start = _time.time() - 600
+    app_instance.timer_start_time = original_start
+    app_instance._start_break(
+        break_kind="short",
+        break_minutes=5,
+        is_auto=True,
+        source_label="pomodoro_break",
+        timed_break=True,
+    )
+    app_instance._finish_break(play_sound=False, bring_to_front=False, force_resume=True)
+    assert app_instance.timer_running is True
+    assert app_instance.timer_start_time == original_start
+
+
+def test_finish_manual_break_resets_timer_start(app_instance):
+    """Nach manueller Pause (Session war in DB gestoppt) zählt die Anzeige ab dem Resume."""
+    import time as _time
+
+    name, project = _start_test_session(app_instance, name="man_break")
+    app_instance.timer_start_time = _time.time() - 600
+    app_instance.pause_session()
+    assert app_instance.session_active.get((name, project)) is False  # manuell = DB-Stop
+    before_resume = _time.time()
+    app_instance._finish_break(play_sound=False, bring_to_front=False, force_resume=True)
+    assert app_instance.session_active.get((name, project)) is True
+    assert app_instance.timer_start_time >= before_resume - 1
+
+
+def test_suspend_gap_stops_session_backdated(app_instance):
+    """Wanduhr-Sprung ohne Monotonic-Sprung (= Standby) stoppt die Session rückdatiert."""
+    import time as _time
+
+    name, project = _start_test_session(app_instance, name="susp")
+    # Session lief schon vor dem Standby; Start weiter zurücklegen als den Gap.
+    app_instance._session_started_ts = _time.time() - 3 * 3600
+    # Standby von 2 h simulieren: letzter Tick (Wanduhr) 2 h her, Monotonic aktuell.
+    app_instance._last_tick_wall = _time.time() - 7200
+    app_instance._last_tick_monotonic = _time.monotonic()
+    app_instance._check_suspend_gap()
+
+    assert app_instance.session_active.get((name, project)) is False
+    assert app_instance.timer_running is False
+    cur = app_instance.db_conn.cursor()
+    row = cur.execute(
+        "SELECT e.timestamp FROM events e JOIN users u ON u.id = e.user_id "
+        "WHERE u.name = ? AND e.event_type = 'stop' ORDER BY e.id DESC LIMIT 1",
+        (name,),
+    ).fetchone()
+    stop_ts = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
+    expected = datetime.now() - timedelta(seconds=7200)
+    assert abs((stop_ts - expected).total_seconds()) < 10  # rückdatiert auf letzten Tick
+
+
+def test_suspend_gap_ignores_ui_freeze(app_instance):
+    """Springen BEIDE Uhren (UI-Freeze), passiert nichts."""
+    import time as _time
+
+    name, project = _start_test_session(app_instance, name="freeze")
+    app_instance._last_tick_wall = _time.time() - 7200
+    app_instance._last_tick_monotonic = _time.monotonic() - 7200
+    app_instance._check_suspend_gap()
+    assert app_instance.session_active.get((name, project)) is True
+    assert app_instance.timer_running is True
+
+
+def test_suspend_gap_noop_without_session(app_instance):
+    """Ohne aktive Session/Pause ist der Standby-Detektor ein No-op."""
+    import time as _time
+
+    app_instance._last_tick_wall = _time.time() - 7200
+    app_instance._last_tick_monotonic = _time.monotonic()
+    app_instance._check_suspend_gap()  # darf nicht crashen, nichts zu stoppen
+    assert app_instance.timer_running is False
+
+
+def test_suspend_gap_closes_open_pomodoro_break(app_instance):
+    """Standby während einer Pomodoro-Pause: Break-Row rückdatiert geschlossen, Session gestoppt."""
+    import time as _time
+
+    name, project = _start_test_session(app_instance, name="susp_brk")
+    app_instance.pomodoro_enabled = True
+    app_instance._start_break(
+        break_kind="short",
+        break_minutes=5,
+        is_auto=True,
+        source_label="pomodoro_break",
+        timed_break=True,
+    )
+    assert app_instance._break_active is True
+    app_instance._session_started_ts = _time.time() - 3 * 3600
+    app_instance._last_tick_wall = _time.time() - 7200
+    app_instance._last_tick_monotonic = _time.monotonic()
+    app_instance._check_suspend_gap()
+
+    assert app_instance._break_active is False
+    assert app_instance.session_active.get((name, project)) is False
+    cur = app_instance.db_conn.cursor()
+    row = cur.execute(
+        "SELECT b.ended_at FROM break_events b JOIN users u ON u.id = b.user_id "
+        "WHERE u.name = ? ORDER BY b.id DESC LIMIT 1",
+        (name,),
+    ).fetchone()
+    assert row is not None and row[0] is not None
+    ended = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
+    expected = datetime.now() - timedelta(seconds=7200)
+    assert abs((ended - expected).total_seconds()) < 10
+
+
+def test_note_flush_saves_under_loaded_key_on_user_switch(app_instance):
+    """Getippte Notiz wird beim Benutzerwechsel unter dem ALTEN Benutzer gespeichert."""
+    from db_helper import check_user, get_daily_meta
+
+    check_user(app_instance.db_conn, "user_a")
+    check_user(app_instance.db_conn, "user_b")
+    app_instance.name_entry.set("user_a")
+    app_instance.project_entry.set("1")
+    app_instance.set_today_date()
+    app_instance._load_note()
+    app_instance.note_entry.delete("1.0", END)
+    app_instance.note_entry.insert("1.0", "Notiz für A")
+
+    # Benutzerwechsel: Flush muss unter user_a speichern, nicht unter user_b.
+    app_instance.name_entry.set("user_b")
+    app_instance._on_name_selected()
+
+    iso_today = datetime.now().strftime("%Y-%m-%d")
+    assert get_daily_meta(app_instance.db_conn, "user_a", "1", iso_today)["note"] == "Notiz für A"
+    assert get_daily_meta(app_instance.db_conn, "user_b", "1", iso_today)["note"] == ""
+
+
+def test_name_combobox_locked_during_session(app_instance):
+    """Die Benutzer-Combobox ist während einer laufenden Session gesperrt."""
+    _start_test_session(app_instance, name="lock_user")
+    assert str(app_instance.name_entry.cget("state")) == "disabled"
+    app_instance.stop_session()
+    assert str(app_instance.name_entry.cget("state")) == "normal"
+
+
+def test_date_entry_normalizes_unpadded_input(app_instance):
+    """'1-7-2026' wird zu '01-07-2026' normalisiert (Anzeige + Vergleiche konsistent)."""
+    app_instance.date_entry.delete(0, END)
+    app_instance.date_entry.insert(0, "1-7-2026")
+    app_instance._last_date_view_input_cache = None
+    app_instance._on_date_changed()
+    assert app_instance.date_entry.get() == "01-07-2026"
+    assert app_instance._get_selected_date() == "01-07-2026"
+
+
+def test_transfer_toggle_flushes_pending_note(app_instance):
+    """Der Wochen-Toggle sichert eine getippte Notiz, bevor er das Feld neu lädt."""
+    from db_helper import get_daily_meta, log_start, log_stop
+
+    name = "wk_note"
+    today = datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
+    log_start(project="1", name=name, timestamp=today, conn=app_instance.db_conn)
+    log_stop(project="1", name=name, timestamp=today.replace(hour=10), conn=app_instance.db_conn)
+    app_instance.name_entry.set(name)
+    app_instance.project_entry.set("1")
+    app_instance.set_today_date()
+    app_instance._load_note()
+    app_instance.note_entry.delete("1.0", END)
+    app_instance.note_entry.insert("1.0", "wichtig nicht verlieren")
+
+    iso_today = today.strftime("%Y-%m-%d")
+    app_instance.week_view._transfer_toggle([("1", iso_today)], "Test")
+    assert get_daily_meta(app_instance.db_conn, name, "1", iso_today)["note"] == "wichtig nicht verlieren"
+
+
+def test_get_name_accepts_umlauts(app_instance):
+    """Bestandsnutzer mit Umlauten (z. B. 'Jörg') dürfen nicht ausgesperrt werden."""
+    app_instance.name_entry.set("Jörg Müller")
+    assert app_instance.get_name() == "Jörg Müller"
+    app_instance.name_entry.set("Ева")  # beliebige Unicode-Buchstaben
+    assert app_instance.get_name() == "Ева"
+    app_instance.name_entry.set("böse/zeichen")
+    assert app_instance.get_name() is None
+
+
+def test_suspend_gap_flushes_pending_note(app_instance):
+    """Standby-Stop sichert eine getippte Notiz, bevor das Feld neu geladen wird."""
+    import time as _time
+
+    from db_helper import get_daily_meta
+
+    name, project = _start_test_session(app_instance, name="susp_note")
+    app_instance._load_note()
+    app_instance.note_entry.delete("1.0", END)
+    app_instance.note_entry.insert("1.0", "vor dem standby getippt")
+    app_instance._session_started_ts = _time.time() - 3600
+    app_instance._last_tick_wall = _time.time() - 7200
+    app_instance._last_tick_monotonic = _time.monotonic()
+    app_instance._check_suspend_gap()
+
+    iso_today = datetime.now().strftime("%Y-%m-%d")
+    assert get_daily_meta(app_instance.db_conn, name, project, iso_today)["note"] == "vor dem standby getippt"
+
+
+def test_shortcut_guard_skips_text_widgets(app_instance):
+    """Strg+←/→ greift nicht, wenn der Fokus in einem Eingabefeld liegt."""
+
+    class _Ev:
+        def __init__(self, widget):
+            self.widget = widget
+
+    before = app_instance.date_entry.get()
+    # Fokus im Notiz-Text-Widget → Shortcut wird NICHT ausgeführt.
+    app_instance._shortcut_guard(_Ev(app_instance.note_entry), lambda: app_instance._step_date(-1))
+    assert app_instance.date_entry.get() == before
+    # Fokus auf einem Button-artigen Widget → Shortcut wird ausgeführt.
+    app_instance.set_today_date()
+    app_instance._shortcut_guard(_Ev(app_instance.start_button), lambda: app_instance._step_date(-1))
+    assert app_instance.date_entry.get() != datetime.today().strftime("%d-%m-%Y")

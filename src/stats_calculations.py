@@ -15,11 +15,11 @@ from datetime import datetime
 
 import numpy as np
 import polars as pl
-from scipy import stats
-from sklearn.cluster import KMeans
-from sklearn.linear_model import LinearRegression
-from sklearn.preprocessing import StandardScaler
 
+# Hinweis: scipy/sklearn/statsmodels werden bewusst NICHT auf Modulebene
+# importiert (kosten >1s Startzeit), sondern lokal in den perform_*-Funktionen
+# — das Modul muss auch ohne diese Pakete importierbar sein.
+from db_helper import merge_intervals_seconds, pair_sessions_lifo
 from utils import is_non_workday, load_config
 
 logger = logging.getLogger(__name__)
@@ -33,41 +33,104 @@ def _unique_list(data, column):
     return data.select(pl.col(column).unique()).to_series().to_list()
 
 
-def _paired_durations_hours(group):
-    starts = group.filter(pl.col("event_type") == "start").select("timestamp").to_series().to_list()
-    stops = group.filter(pl.col("event_type") == "stop").select("timestamp").to_series().to_list()
-    min_length = min(len(starts), len(stops))
-    if len(starts) != len(stops):
+def _paired_sessions(group) -> list[tuple[datetime, datetime]]:
+    """LIFO-gepaarte, vollständige Sessions einer (User, Projekt)-Gruppe.
+
+    Nutzt die **kanonische** Paarung aus :func:`db_helper.pair_sessions_lifo`,
+    damit Statistik und Anzeige identisch paaren (Invariante des Projekts).
+    Verwaiste Starts/Stops werden übersprungen und nur geloggt — sie
+    verschieben die Paarung der übrigen Sessions nicht.
+
+    Returns:
+        list[tuple]: ``(start_dt, stop_dt)`` je vollständiger Session.
+    """
+    events = [
+        (etype, ts)
+        for etype, ts in zip(group["event_type"].to_list(), group["timestamp"].to_list(), strict=True)
+        if ts is not None
+    ]
+    sessions = []
+    orphans = 0
+    for start_ts, stop_ts in pair_sessions_lifo(events):
+        if start_ts is None or stop_ts is None:
+            orphans += 1
+            continue
+        sessions.append((start_ts, stop_ts))
+    if orphans:
         logger.debug(
-            "_paired_durations_hours: ungepaarte Events (%d Start / %d Stop) — %d Paare gezählt.",
-            len(starts),
-            len(stops),
-            min_length,
+            "_paired_sessions: %d ungepaarte Events übersprungen — %d vollständige Sessions gezählt.",
+            orphans,
+            len(sessions),
         )
-    if min_length == 0:
-        return []
-    durations = []
-    neg_count = 0
-    for i in range(min_length):
-        hours = (stops[i] - starts[i]).total_seconds() / 3600
-        if hours < 0:
-            neg_count += 1
-            hours = 0.0
-        durations.append(hours)
-    if neg_count:
-        logger.warning(
-            "_paired_durations_hours: %d negative Dauern auf 0 gesetzt (von %d Paaren) — "
-            "Stop vor Start? Bitte Einträge prüfen.",
-            neg_count,
-            min_length,
-        )
-    return durations
+    return sessions
+
+
+def _paired_durations_hours(group):
+    """Dauern (in Stunden) der LIFO-gepaarten Sessions einer Gruppe."""
+    return [(stop_ts - start_ts).total_seconds() / 3600 for start_ts, stop_ts in _paired_sessions(group)]
+
+
+def _merged_total_hours(group) -> float:
+    """Gesamtstunden einer (User, Projekt)-Gruppe als **Vereinigung** der
+    gepaarten Intervalle (überlappende Sessions zählen nicht doppelt).
+
+    Bewusst dieselbe Semantik wie die Dauer-Summen der App
+    (``db_helper.calculate_duration``/``calculate_daily_duration``: LIFO +
+    Intervall-Union). Die Tages-LISTE der App paart dagegen FIFO und zeigt
+    Sessions einzeln — bei (nur durch manuelle Edits möglichen) überlappenden
+    Sessions desselben Projekts kann die Summe der Listenzeilen daher über
+    diesem Union-Total liegen. Maßgeblich für Stunden-Summen ist die Union
+    (keine Doppelzählung), identisch in Timer-Anzeige und Dashboard.
+    """
+    return merge_intervals_seconds(_paired_sessions(group)) / 3600.0
 
 
 # ---------------------------------------------------------------------------
 # Wochenend-/Feiertags-Filter für Durchschnitts- & Trendberechnungen.
 # Summen, Pies und Daily-Breakdown bleiben unverändert.
 # ---------------------------------------------------------------------------
+
+
+def _filter_complete_sessions(data: pl.DataFrame, keep_session) -> pl.DataFrame:
+    """Filtert Events **sessionweise** statt eventweise.
+
+    Events werden je (User, Projekt) per LIFO gepaart (kanonisch, identisch
+    zur Anzeige — siehe :func:`db_helper.pair_sessions_lifo`). ``keep_session``
+    erhält den Anker-Zeitstempel einer Session (den Start; bei verwaisten
+    Stops den Stop) und entscheidet, ob **beide** Events des Paares behalten
+    werden. So kann der Filter nie eine Paar-Hälfte verwerfen und die Paarung
+    nachgelagerter Berechnungen verschieben (z. B. bei Mitternachts-Sessions
+    am Bereichsrand).
+    """
+    if data.is_empty():
+        return data
+    keep_mask = [True] * data.height
+    data_idx = data.with_row_index("_row_idx")
+    for _key, group in data_idx.partition_by(["user", "project"], as_dict=True).items():
+        rows = list(group.select(["_row_idx", "event_type", "timestamp"]).iter_rows())
+        events = [(etype, ts) for _idx, etype, ts in rows if etype in ("start", "stop") and ts is not None]
+        # Verworfene Sessions als Multimenge (event_type, timestamp) zählen —
+        # identische Events sind austauschbar, die Zuordnung ist damit exakt.
+        drop_counts: dict[tuple, int] = {}
+        for start_ts, stop_ts in pair_sessions_lifo(events):
+            anchor = start_ts if start_ts is not None else stop_ts
+            if keep_session(anchor):
+                continue
+            for etype, ts in (("start", start_ts), ("stop", stop_ts)):
+                if ts is not None:
+                    key = (etype, ts)
+                    drop_counts[key] = drop_counts.get(key, 0) + 1
+        for row_idx, etype, ts in rows:
+            if ts is None:
+                continue
+            if etype in ("start", "stop"):
+                key = (etype, ts)
+                if drop_counts.get(key, 0) > 0:
+                    drop_counts[key] -= 1
+                    keep_mask[row_idx] = False
+            elif not keep_session(ts):
+                keep_mask[row_idx] = False
+    return data.filter(pl.Series(keep_mask))
 
 
 def _filter_workdays(
@@ -78,17 +141,57 @@ def _filter_workdays(
     include_holidays: bool = True,
     count_weekend_work: bool = False,
 ) -> pl.DataFrame:
-    """Filtert Events auf Werktage. ``count_weekend_work=True`` umgeht den Filter."""
+    """Filtert **Sessions** auf Werktage. ``count_weekend_work=True`` umgeht den Filter.
+
+    Gefiltert wird sessionweise (Zuordnung über den Session-Start), nicht
+    eventweise: Start und Stop eines Paares bleiben immer zusammen, damit
+    sich die LIFO-Paarung nachgelagerter Berechnungen nicht verschiebt.
+    """
     if data.is_empty() or count_weekend_work:
         return data
+
+    def _keep(ts) -> bool:
+        return not is_non_workday(ts, country=country, subdiv=subdiv, include_holidays=include_holidays)
+
     try:
-        timestamps = data.select("timestamp").to_series().to_list()
+        return _filter_complete_sessions(data, _keep)
     except Exception:  # noqa: BLE001
+        # Sichtbar scheitern statt still UNGEFILTERTE Daten liefern — die
+        # Zahlen wandern ins Firmensystem; leere Charts + Log-Traceback sind
+        # dem stillen Falschwert vorzuziehen.
+        logger.exception("Sessionweiser Filter fehlgeschlagen — liefere leeres Ergebnis.")
+        return data.clear()
+
+
+def filter_sessions_by_date_range(
+    data: pl.DataFrame,
+    start_date: str | None,
+    end_date: str | None,
+) -> pl.DataFrame:
+    """Filtert Events sessionweise auf einen Datumsbereich (``YYYY-MM-DD``).
+
+    Eine Session gehört per **Start-Zeitstempel** zu einem Tag; Start und
+    Stop werden gemeinsam behalten oder verworfen. Gedacht als Ersatz für
+    eventweise ``date``-Spalten-Filter (die bei Mitternachts-Sessions am
+    Bereichsrand eine Paar-Hälfte abschneiden und die Paarung verschieben).
+    """
+    if data.is_empty() or (not start_date and not end_date):
         return data
-    keep_mask = [
-        not is_non_workday(ts, country=country, subdiv=subdiv, include_holidays=include_holidays) for ts in timestamps
-    ]
-    return data.filter(pl.Series(keep_mask))
+
+    def _keep(ts) -> bool:
+        day = ts.strftime("%Y-%m-%d")
+        if start_date and day < start_date:
+            return False
+        return not (end_date and day > end_date)
+
+    try:
+        return _filter_complete_sessions(data, _keep)
+    except Exception:  # noqa: BLE001
+        # Sichtbar scheitern statt still UNGEFILTERTE Daten liefern — die
+        # Zahlen wandern ins Firmensystem; leere Charts + Log-Traceback sind
+        # dem stillen Falschwert vorzuziehen.
+        logger.exception("Sessionweiser Filter fehlgeschlagen — liefere leeres Ergebnis.")
+        return data.clear()
 
 
 def _workday_settings() -> dict:
@@ -104,15 +207,24 @@ def _workday_settings() -> dict:
 
 
 def _apply_workday_filter(data: pl.DataFrame, override_count_weekend_work: bool | None = None) -> pl.DataFrame:
-    """Wendet den Workday-Filter gemäß Config an. ``override_count_weekend_work``
-    erlaubt der UI (Checkbox), die Config zur Laufzeit zu übersteuern.
+    """Wendet den Workday-Filter an. Ein expliziter UI-Override gewinnt IMMER.
+
+    ``override_count_weekend_work`` kommt vom Dashboard-Schalter
+    "Wochenenden einbeziehen" (``True``/``False``); die Config-Flags
+    (``exclude_weekends_in_averages``, ``count_weekend_work``) liefern nur den
+    **Default**, wenn kein Override (``None``) übergeben wird. Früher wurde bei
+    ``exclude_weekends_in_averages=False`` der Override ignoriert — der
+    Schalter war dann wirkungslos.
     """
     s = _workday_settings()
-    if not s["exclude_weekends_in_averages"]:
-        return data
-    count_weekend = (
-        bool(override_count_weekend_work) if override_count_weekend_work is not None else s["count_weekend_work"]
-    )
+    if override_count_weekend_work is not None:
+        count_weekend = bool(override_count_weekend_work)
+    else:
+        # Kein Override: Config entscheidet. Ist das Ausschließen von
+        # Wochenenden in Durchschnitten deaktiviert, bleibt alles ungefiltert.
+        if not s["exclude_weekends_in_averages"]:
+            return data
+        count_weekend = s["count_weekend_work"]
     return _filter_workdays(
         data,
         country=s["country"],
@@ -129,9 +241,7 @@ def calculate_hours_per_project(data):
     data = data.sort(["user", "project", "timestamp"])
     hours = []
     for (user, project), group in data.partition_by(["user", "project"], as_dict=True).items():
-        durations = _paired_durations_hours(group)
-        total_hours = sum(durations) if durations else 0
-        hours.append({"user": user, "project": project, "total_hours": total_hours})
+        hours.append({"user": user, "project": project, "total_hours": _merged_total_hours(group)})
     return pl.DataFrame(hours)
 
 
@@ -150,9 +260,12 @@ def calculate_total_hours_per_user(data):
     for user in _unique_list(data, "user"):
         if user == "users":
             continue
-        group = data.filter(pl.col("user") == user)
-        durations = _paired_durations_hours(group)
-        total_hours_user = sum(durations) if durations else 0
+        # Paarung immer je (User, Projekt) — projektübergreifendes Paaren
+        # würde parallele Projekte falsch verketten.
+        user_data = data.filter(pl.col("user") == user)
+        total_hours_user = sum(
+            _merged_total_hours(group) for group in user_data.partition_by(["project"], as_dict=True).values()
+        )
         total_hours.append({"user": user, "total_hours": total_hours_user})
 
     return pl.DataFrame(total_hours), date_range
@@ -169,12 +282,22 @@ def calculate_average_hours_per_user(data, count_weekend_work: bool | None = Non
         if user == "users":
             continue
         group = data.filter(pl.col("user") == user)
-        durations = _paired_durations_hours(group)
-        if not durations:
+        # Paarung je (User, Projekt), Summe über die Projekte des Users.
+        total_hours_user = sum(
+            _merged_total_hours(project_group)
+            for project_group in group.partition_by(["project"], as_dict=True).values()
+        )
+        if total_hours_user <= 0:
             average_hours.append({"user": user, "average_hours": 0})
             continue
-        total_hours_user = sum(durations)
-        num_days = max(1, group.select(pl.col("date").unique()).height)
+        # Nenner: nur Tage mit SESSION-STARTS. Der sessionweise Wochenend-
+        # Filter behält Mitternachts-Paare komplett — der Stop-Tag einer
+        # Übernacht-Session ist aber kein zusätzlicher Arbeitstag und würde
+        # den Durchschnitt sonst drücken (Session-Anker = Start-Tag).
+        num_days = max(
+            1,
+            group.filter(pl.col("event_type") == "start").select(pl.col("date").unique()).height,
+        )
         average_hours_user = total_hours_user / num_days
         average_hours.append({"user": user, "average_hours": average_hours_user})
 
@@ -182,7 +305,17 @@ def calculate_average_hours_per_user(data, count_weekend_work: bool | None = Non
 
 
 def calculate_average_hours_per_period(data, period_days, count_weekend_work: bool | None = None):
-    """Calculates average hours per user for a given period in days."""
+    """Kalenderbasierter Perioden-Durchschnitt der Stunden je User.
+
+    Semantik: Gesamtstunden geteilt durch die Anzahl der Perioden im
+    **Kalender-Zeitraum** (erster bis letzter Zeitstempel des Users,
+    inklusive), nicht durch die Zahl der Tage mit Einträgen. Nur Tage mit
+    Einträgen zu zählen würde den Schnitt systematisch aufblähen (z. B.
+    21 aktive Tage über 29 Kalendertage: ~+40 % pro Woche).
+
+    Args:
+        period_days: Periodenlänge in Tagen (7 = Woche, 30 = Monat, ...).
+    """
     if data.is_empty():
         return pl.DataFrame()
     data = data.sort(["user", "timestamp"])
@@ -191,10 +324,16 @@ def calculate_average_hours_per_period(data, period_days, count_weekend_work: bo
         if user == "users":
             continue
         group = data.filter(pl.col("user") == user)
-        durations = _paired_durations_hours(group)
-        total_hours = sum(durations) if durations else 0
-        num_days = group.select(pl.col("date").unique()).height
-        num_periods = max(1, num_days / period_days)
+        # Paarung je (User, Projekt), Summe über die Projekte des Users.
+        total_hours = sum(
+            _merged_total_hours(project_group)
+            for project_group in group.partition_by(["project"], as_dict=True).values()
+        )
+        # Kalender-Spanne (inkl. Randtage) statt Anzahl aktiver Tage.
+        min_ts = group.select(pl.col("timestamp").min()).to_series()[0]
+        max_ts = group.select(pl.col("timestamp").max()).to_series()[0]
+        span_days = (max_ts.date() - min_ts.date()).days + 1 if min_ts and max_ts else 1
+        num_periods = max(1.0, span_days / period_days)
         average_hours_user = total_hours / num_periods
         average_hours.append({"user": user, "average_hours": average_hours_user, "period_days": period_days})
     return pl.DataFrame(average_hours)
@@ -255,30 +394,30 @@ def calculate_daily_project_hours(data):
     if data.is_empty():
         return pl.DataFrame()
     data = data.sort(["user", "project", "timestamp"])
-    # Aggregiere in dict mit Schlüssel (user, day_str, project).
+    # Aggregiere Teil-Intervalle in dict mit Schlüssel (user, day_str, project).
     # ``day_str`` wird hier konsequent aus dem Zeitstempel abgeleitet, nicht
     # aus der gespeicherten ``date``-Spalte (siehe Bugfix Tag-Zuordnung).
-    bucket: dict[tuple, float] = {}
+    bucket: dict[tuple, list] = {}
 
     for (user, project), group in data.partition_by(["user", "project"], as_dict=True).items():
-        starts = group.filter(pl.col("event_type") == "start").select("timestamp").to_series().to_list()
-        stops = group.filter(pl.col("event_type") == "stop").select("timestamp").to_series().to_list()
-        for start_ts, stop_ts in zip(starts, stops, strict=False):
-            if start_ts is None or stop_ts is None or stop_ts <= start_ts:
+        for start_ts, stop_ts in _paired_sessions(group):
+            if stop_ts <= start_ts:
                 continue
             _split_session_into_days(bucket, user, project, start_ts, stop_ts)
 
     if not bucket:
         return pl.DataFrame()
+    # Vereinigung der Intervalle pro Tag — identisch zur Semantik von
+    # ``db_helper.calculate_daily_duration`` (kein Doppelzählen, 24h-Deckel).
     rows = [
-        {"user": user, "date": day, "project": project, "hours": hours}
-        for (user, day, project), hours in bucket.items()
+        {"user": user, "date": day, "project": project, "hours": merge_intervals_seconds(intervals) / 3600.0}
+        for (user, day, project), intervals in bucket.items()
     ]
     return pl.DataFrame(rows)
 
 
 def _split_session_into_days(bucket, user, project, start_ts, stop_ts):
-    """Verteilt die Dauer einer Session anteilig auf jeden überspannten Tag."""
+    """Schneidet eine Session an Tagesgrenzen und sammelt die Teil-Intervalle je Tag."""
     from datetime import datetime as _dt
     from datetime import timedelta as _td
 
@@ -287,12 +426,86 @@ def _split_session_into_days(bucket, user, project, start_ts, stop_ts):
     while cursor < end:
         day_end = _dt.combine(cursor.date(), _dt.min.time()) + _td(days=1)
         chunk_end = min(day_end, end)
-        seconds = (chunk_end - cursor).total_seconds()
-        if seconds > 0:
+        if chunk_end > cursor:
             day_str = cursor.strftime("%Y-%m-%d")
             key = (user, day_str, project)
-            bucket[key] = bucket.get(key, 0.0) + seconds / 3600.0
+            bucket.setdefault(key, []).append((cursor, chunk_end))
         cursor = chunk_end
+
+
+def available_iso_weeks(data: pl.DataFrame) -> list[tuple[int, int]]:
+    """Sortierte ISO-Kalenderwochen ``(iso_year, iso_week)``, die in den Daten vorkommen.
+
+    Grundlage sind die Tages-Daten aus :func:`calculate_daily_project_hours`
+    (Mitternachts-Split inklusive) — eine Session, die in eine neue Woche
+    hineinragt, macht auch diese Woche verfügbar.
+    """
+    if data is None or data.is_empty():
+        return []
+    daily = calculate_daily_project_hours(data.filter(pl.col("user") != "users") if not data.is_empty() else data)
+    if daily.is_empty():
+        return []
+    weeks: set[tuple[int, int]] = set()
+    for day in daily.select(pl.col("date").unique()).to_series().to_list():
+        iso = datetime.strptime(day, "%Y-%m-%d").date().isocalendar()
+        weeks.add((iso.year, iso.week))
+    return sorted(weeks)
+
+
+def calculate_week_matrix(data: pl.DataFrame, iso_year: int, iso_week: int) -> dict:
+    """KW-Report-Daten: Projekt × Wochentag-Matrix einer ISO-Kalenderwoche.
+
+    Wochen sind ISO-Wochen (Montag bis Sonntag). Basis ist
+    :func:`calculate_daily_project_hours` (LIFO-Paarung, Mitternachts-Split,
+    Intervall-Union) — eine Session Di 23:00 → Mi 01:00 zählt also anteilig
+    auf beide Tage. Vereinfachung für den Ein-User-Fall: Es wird über ALLE
+    User in ``data`` aggregiert (das Dashboard filtert vorgelagert).
+
+    Rückgabe:
+    {
+      "days": ["2026-07-06", ..., "2026-07-12"],           # ISO-Daten Mo..So der KW
+      "projects": ["Backend API", ...],                      # sortiert, nur Projekte mit Stunden in der KW
+      "hours": {(project, iso_date): float},                 # Dezimalstunden > 0
+      "day_totals": {iso_date: float},                       # alle 7 Tage, 0.0 ohne Einträge
+      "project_totals": {project: float},
+      "total": float,
+    }
+    """
+    from datetime import date as _date
+    from datetime import timedelta as _td
+
+    monday = _date.fromisocalendar(int(iso_year), int(iso_week), 1)
+    days = [(monday + _td(days=i)).isoformat() for i in range(7)]
+
+    result = {
+        "days": days,
+        "projects": [],
+        "hours": {},
+        "day_totals": dict.fromkeys(days, 0.0),
+        "project_totals": {},
+        "total": 0.0,
+    }
+    if data is None or data.is_empty():
+        return result
+
+    daily = calculate_daily_project_hours(data)
+    if daily.is_empty():
+        return result
+
+    week_rows = daily.filter(pl.col("user") != "users").filter(pl.col("date").is_in(days))
+    hours: dict[tuple[str, str], float] = {}
+    for row in week_rows.iter_rows(named=True):
+        key = (row["project"], row["date"])
+        hours[key] = hours.get(key, 0.0) + float(row["hours"])
+    hours = {k: v for k, v in hours.items() if v > 0}
+
+    result["hours"] = hours
+    result["projects"] = sorted({project for project, _day in hours})
+    for (project, day), h in hours.items():
+        result["day_totals"][day] += h
+        result["project_totals"][project] = result["project_totals"].get(project, 0.0) + h
+    result["total"] = sum(result["project_totals"].values())
+    return result
 
 
 def calculate_project_switches(data):
@@ -363,7 +576,12 @@ def analyze_daily_patterns(data):
         data (pl.DataFrame): Arbeitszeitdaten
 
     Returns:
-        pl.DataFrame: Tagesmuster mit [user, project, avg_start_hour, most_common_start_hour]
+        pl.DataFrame: Tagesmuster mit [user, project, avg_start_hour,
+            most_common_start_hour, earliest_start, latest_start].
+            ``avg_start_hour``, ``earliest_start`` und ``latest_start`` sind
+            **Dezimalstunden** (9:30 → 9.5) — volle Stunden zu mitteln wäre
+            systematisch ~30 min zu früh. ``most_common_start_hour`` bleibt
+            die volle Stunde (Modus über Stunden-Bins).
     """
     if data.is_empty():
         return pl.DataFrame()
@@ -383,7 +601,12 @@ def analyze_daily_patterns(data):
             ).alias("timestamp")
         )
         data = data.filter(pl.col("timestamp").is_not_null())
-    data = data.with_columns(pl.col("timestamp").dt.hour().alias("hour"))
+    # Dezimalstunden (9:30 → 9.5) für Durchschnitt/Min/Max; volle Stunde nur
+    # für den Modus (most_common_start_hour).
+    data = data.with_columns(
+        pl.col("timestamp").dt.hour().alias("hour"),
+        (pl.col("timestamp").dt.hour() + pl.col("timestamp").dt.minute() / 60.0).alias("decimal_hour"),
+    )
     patterns = []
 
     for (user, project), group in data.partition_by(["user", "project"], as_dict=True).items():
@@ -402,15 +625,16 @@ def analyze_daily_patterns(data):
             continue
 
         hours = [h for h in starts.select("hour").to_series().to_list() if h is not None]
+        decimal_hours = [h for h in starts.select("decimal_hour").to_series().to_list() if h is not None]
         most_common = max(set(hours), key=hours.count) if hours else None
         patterns.append(
             {
                 "user": user,
                 "project": project,
-                "avg_start_hour": float(np.mean(hours)) if hours else None,
+                "avg_start_hour": float(np.mean(decimal_hours)) if decimal_hours else None,
                 "most_common_start_hour": most_common,
-                "earliest_start": min(hours) if hours else None,
-                "latest_start": max(hours) if hours else None,
+                "earliest_start": min(decimal_hours) if decimal_hours else None,
+                "latest_start": max(decimal_hours) if decimal_hours else None,
             }
         )
 
@@ -418,39 +642,59 @@ def analyze_daily_patterns(data):
 
 
 def analyze_time_series(data, count_weekend_work: bool | None = None):
-    """Analysiert Zeitreihen-Muster in den Arbeitsdaten."""
+    """Analysiert Zeitreihen-Muster in den Arbeitsdaten.
+
+    Die Tagesstunden werden aus den Zeitstempeln der LIFO-gepaarten Sessions
+    abgeleitet (``calculate_daily_project_hours``) statt aus der pro Event
+    gespeicherten ``date``-Spalte: Bei Mitternachts-Sessions tragen Start und
+    Stop verschiedene ``date``-Werte — ein Partitionieren danach würde die
+    Paarung zerreißen. So wird die Session korrekt anteilig auf beide Tage
+    verteilt.
+
+    Semantik der Durchschnitte: **Ø je gearbeitetem Tag** (bedingter
+    Mittelwert) — Tage ohne Einträge fließen nicht als 0 ein. Die Spalte
+    ``n_days`` (Stichprobengröße je Gruppe) macht das sichtbar, z. B. für
+    Hover-Texte.
+
+    Returns:
+        tuple: ``(daily_df, weekly_avg, weekday_avg)``
+            - daily_df: [user, date, weekday, iso_year, iso_week, week, hours]
+            - weekly_avg: [user, iso_year, iso_week, week, hours, n_days] —
+              gruppiert nach **(ISO-Jahr, ISO-Woche)**, chronologisch sortiert.
+              ``week`` ist ein eindeutiges Label wie ``"2026-KW01"`` (die
+              Wochennummer allein würde KW1/2025 mit KW1/2026 vermischen).
+            - weekday_avg: [user, weekday, hours, n_days] — Mo..So sortiert.
+    """
     if data.is_empty():
         return pl.DataFrame(), pl.DataFrame(), pl.DataFrame()
 
+    daily = calculate_daily_project_hours(data)
+    if daily.is_empty():
+        return pl.DataFrame(), pl.DataFrame(), pl.DataFrame()
+
+    per_day = (
+        daily.filter(pl.col("user") != "users")
+        .group_by(["user", "date"])
+        .agg(pl.col("hours").sum().alias("hours"))
+        .sort(["user", "date"])
+    )
+
+    _WDAY_DE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
     daily_hours = []
-    for (user, date), group in data.partition_by(["user", "date"], as_dict=True).items():
-        if user == "users":
-            continue
-
-        durations = _paired_durations_hours(group)
-        if not durations:
-            continue
-        total_hours = sum(durations)
-
-        date_obj = None
-        for fmt in ("%Y-%m-%d", "%d-%m-%Y"):
-            try:
-                date_obj = datetime.strptime(date, fmt)
-                break
-            except ValueError:
-                continue
-        if not date_obj:
-            print(f"Warnung: Datum '{date}' konnte nicht geparst werden")
-            continue
-
-        _WDAY_DE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
+    for row in per_day.iter_rows(named=True):
+        date_obj = datetime.strptime(row["date"], "%Y-%m-%d")
+        iso = date_obj.isocalendar()
         daily_hours.append(
             {
-                "user": user,
-                "date": date_obj.strftime("%Y-%m-%d"),
+                "user": row["user"],
+                "date": row["date"],
                 "weekday": _WDAY_DE[date_obj.weekday()],
-                "week": date_obj.isocalendar().week,
-                "hours": total_hours,
+                "iso_year": iso.year,
+                "iso_week": iso.week,
+                # Eindeutiges, chronologisch sortierbares Wochen-Label —
+                # die Wochennummer allein würde Jahre vermischen.
+                "week": f"{iso.year}-KW{iso.week:02d}",
+                "hours": row["hours"],
             }
         )
 
@@ -458,8 +702,16 @@ def analyze_time_series(data, count_weekend_work: bool | None = None):
     if daily_df.is_empty():
         return daily_df, pl.DataFrame(), pl.DataFrame()
 
-    weekly_avg = daily_df.group_by(["user", "week"]).agg(pl.col("hours").mean().alias("hours")).sort(["user", "week"])
-    weekday_avg = daily_df.group_by(["user", "weekday"]).agg(pl.col("hours").mean().alias("hours"))
+    # Ø je gearbeitetem Tag; n_days = Zahl der eingeflossenen Tage (Ehrlichkeit
+    # der bedingten Mittelwerte, s. Docstring).
+    weekly_avg = (
+        daily_df.group_by(["user", "iso_year", "iso_week", "week"])
+        .agg(pl.col("hours").mean().alias("hours"), pl.len().alias("n_days"))
+        .sort(["user", "iso_year", "iso_week"])
+    )
+    weekday_avg = daily_df.group_by(["user", "weekday"]).agg(
+        pl.col("hours").mean().alias("hours"), pl.len().alias("n_days")
+    )
     weekday_order = {"Mo": 1, "Di": 2, "Mi": 3, "Do": 4, "Fr": 5, "Sa": 6, "So": 7}
     weekday_avg = (
         weekday_avg.with_columns(
@@ -501,6 +753,11 @@ def perform_cluster_analysis(data):
     """
     if data.is_empty():
         return pl.DataFrame(), []
+
+    # Lokale Imports: sklearn kostet >1s Startzeit und wird nur hier gebraucht
+    # (Muster wie der statsmodels-Import in perform_anova_analysis).
+    from sklearn.cluster import KMeans
+    from sklearn.preprocessing import StandardScaler
 
     # Feature-Extraktion für Clustering
     user_features = []
@@ -579,29 +836,35 @@ def perform_regression_analysis(data):
     Führt Regressionsanalyse für Arbeitsdauer durch.
 
     Prädiktoren:
-    - User-ID (kategorisch)
-    - Projekt (kategorisch)
-    - Startstunde (numerisch)
-    - Wochentag (kategorisch)
+    - User-ID (kategorisch, One-Hot)
+    - Projekt (kategorisch, One-Hot)
+    - Startstunde (numerisch, volle Stunde des Session-Starts)
+    - Wochentag (kategorisch, One-Hot)
 
     Modelldetails:
     - Lineare Regression
-    - One-Hot-Encoding für kategorische Variablen
-    - R²-Score für Modellbewertung
+    - One-Hot-Encoding nur für die kategorischen Variablen
+    - R² ist die **In-Sample-Modellanpassung** (auf den Trainingsdaten),
+      keine Vorhersagegenauigkeit — es gibt kein Holdout/keine
+      Kreuzvalidierung. Deshalb liefert das Ergebnis das ehrliche Label
+      ``r2_label`` ("Modellanpassung (in-sample R²)") mit.
 
     Anwendungsfälle:
-    1. Vorhersage von Arbeitsdauern
-    2. Identifikation wichtiger Einflussfaktoren
-    3. Planung von Ressourcen
+    1. Explorative Identifikation wichtiger Einflussfaktoren
+    2. Grobe Einordnung, wie viel Varianz die Prädiktoren erklären
 
     Args:
         data (pl.DataFrame): Arbeitszeitdaten
 
     Returns:
-        dict: Regressionsergebnisse mit Model, Importance, R², Predictions
+        dict: Regressionsergebnisse mit model, importance, r2_score,
+            r2_label, actual_vs_predicted
     """
     if data.is_empty():
         return {}
+
+    # Lokaler Import: sklearn nur bei Bedarf laden (Startzeit).
+    from sklearn.linear_model import LinearRegression
 
     # Feature-Vorbereitung
     work_sessions = []
@@ -610,13 +873,7 @@ def perform_regression_analysis(data):
         if user == "users":
             continue
 
-        starts = group.filter(pl.col("event_type") == "start").select("timestamp").to_series().to_list()
-        stops = group.filter(pl.col("event_type") == "stop").select("timestamp").to_series().to_list()
-        min_length = min(len(starts), len(stops))
-        if min_length == 0:
-            continue
-
-        for start, stop in zip(starts[:min_length], stops[:min_length], strict=False):
+        for start, stop in _paired_sessions(group):
             duration = (stop - start).total_seconds() / 3600
             work_sessions.append(
                 {
@@ -632,8 +889,11 @@ def perform_regression_analysis(data):
     if sessions_df.is_empty():
         return {}
 
-    # Dummy-Variablen für kategorische Features
-    X_df = sessions_df.select(["user", "project", "start_hour", "weekday"]).to_dummies()
+    # Dummy-Variablen NUR für die kategorischen Features — start_hour bleibt
+    # numerisch (wie im Docstring beschrieben).
+    X_df = sessions_df.select(["user", "project", "start_hour", "weekday"]).to_dummies(
+        columns=["user", "project", "weekday"]
+    )
     X = X_df.to_numpy()
     y = sessions_df["duration"].to_numpy()
 
@@ -657,6 +917,8 @@ def perform_regression_analysis(data):
         "model": model,
         "importance": importance,
         "r2_score": r2_score,
+        # Ehrliches Label: in-sample-Anpassung, keine Vorhersagegenauigkeit.
+        "r2_label": "Modellanpassung (in-sample R²)",
         "actual_vs_predicted": pl.DataFrame(
             {
                 "actual": y,
@@ -670,25 +932,29 @@ def perform_anova_analysis(data):
     """
     Führt ANOVA-Tests für Gruppenunterschiede durch.
 
-    Analysierte Unterschiede:
-    1. Zwischen Usern
-    2. Zwischen Projekten
+    Analysierte Unterschiede (unabhängig voneinander gegated):
+    1. Zwischen Usern — nur wenn ≥2 User vorhanden sind
+    2. Zwischen Projekten — nur wenn ≥2 Projekte vorhanden sind
+
+    Im (realen) Ein-User-Fall enthält das Ergebnis also nur ``project_anova``;
+    ``user_anova`` fehlt dann. Konsumenten müssen die Schlüssel einzeln prüfen.
 
     Statistische Tests:
     - Einfaktorielle ANOVA
     - Tukey's HSD Post-hoc Test
-    - p-Wert Analyse
 
-    Interpretationshilfen:
-    - p < 0.05: Signifikante Unterschiede
-    - Tukey-Gruppen für paarweise Vergleiche
-    - Effektgrößen für praktische Relevanz
+    Ehrlichkeits-Hinweis: Die Ergebnisse sind **explorativ**. Die
+    Beobachtungseinheiten sind einzelne Sessions desselben Users/Projekts und
+    damit nicht unabhängig (Messwiederholung) — die p-Werte sind formal nicht
+    belastbar und nur als grobe Orientierung zu lesen.
 
     Args:
         data (pl.DataFrame): Arbeitszeitdaten
 
     Returns:
-        dict: ANOVA-Ergebnisse mit F-Statistik, p-Werten und Tukey-Tests
+        dict: ANOVA-Ergebnisse; Schlüssel ``user_anova`` und/oder
+            ``project_anova`` (je mit f_statistic, p_value, tukey), nur
+            sofern die jeweilige Analyse möglich war. Leeres dict sonst.
     """
     if data.is_empty():
         return {}
@@ -717,35 +983,44 @@ def perform_anova_analysis(data):
     durations_df = pl.DataFrame(work_durations)
 
     try:
-        if durations_df.is_empty() or durations_df["user"].n_unique() < 2 or durations_df["project"].n_unique() < 2:
+        if durations_df.is_empty():
             return {}
 
-        # ANOVA zwischen Usern
-        user_groups = [
-            group["duration"].to_numpy() for group in durations_df.partition_by("user", as_dict=True).values()
-        ]
-        f_stat_users, p_value_users = stats.f_oneway(*user_groups)
-
-        # ANOVA zwischen Projekten
-        project_groups = [
-            group["duration"].to_numpy() for group in durations_df.partition_by("project", as_dict=True).values()
-        ]
-        f_stat_projects, p_value_projects = stats.f_oneway(*project_groups)
-
-        # Post-hoc Tests (Tukey's HSD)
+        # Lokale Imports: scipy/statsmodels nur bei Bedarf laden (Startzeit).
+        from scipy import stats
         from statsmodels.stats.multicomp import pairwise_tukeyhsd
 
-        tukey_users = pairwise_tukeyhsd(durations_df["duration"].to_numpy(), durations_df["user"].to_numpy())
-        tukey_projects = pairwise_tukeyhsd(durations_df["duration"].to_numpy(), durations_df["project"].to_numpy())
+        results = {}
 
-        return {
-            "user_anova": {"f_statistic": float(f_stat_users), "p_value": float(p_value_users), "tukey": tukey_users},
-            "project_anova": {
+        # ANOVA zwischen Usern — braucht ≥2 User. Getrennt von der
+        # Projekt-ANOVA gegated: Im Ein-User-Fall (Normalfall dieser App)
+        # bleibt die Projekt-Analyse sonst grundlos leer.
+        if durations_df["user"].n_unique() >= 2:
+            user_groups = [
+                group["duration"].to_numpy() for group in durations_df.partition_by("user", as_dict=True).values()
+            ]
+            f_stat_users, p_value_users = stats.f_oneway(*user_groups)
+            tukey_users = pairwise_tukeyhsd(durations_df["duration"].to_numpy(), durations_df["user"].to_numpy())
+            results["user_anova"] = {
+                "f_statistic": float(f_stat_users),
+                "p_value": float(p_value_users),
+                "tukey": tukey_users,
+            }
+
+        # ANOVA zwischen Projekten — braucht ≥2 Projekte (User-Anzahl egal).
+        if durations_df["project"].n_unique() >= 2:
+            project_groups = [
+                group["duration"].to_numpy() for group in durations_df.partition_by("project", as_dict=True).values()
+            ]
+            f_stat_projects, p_value_projects = stats.f_oneway(*project_groups)
+            tukey_projects = pairwise_tukeyhsd(durations_df["duration"].to_numpy(), durations_df["project"].to_numpy())
+            results["project_anova"] = {
                 "f_statistic": float(f_stat_projects),
                 "p_value": float(p_value_projects),
                 "tukey": tukey_projects,
-            },
-        }
+            }
+
+        return results
     except Exception as e:
         print(f"Fehler in ANOVA-Analyse: {str(e)}")
         return None
@@ -785,26 +1060,34 @@ def calculate_overview(data: pl.DataFrame) -> dict:
     projects = sorted(p for p in _unique_list(data, "project") if p)
     users = sorted(u for u in _unique_list(data, "user") if u and u != "users")
 
-    # Gesamtstunden + Sessions (gepaart) und ungepaarte Starts (open sessions).
+    # Gesamtstunden + Sessions (LIFO-gepaart) und offene Starts (open sessions).
     total_hours = 0.0
     n_sessions = 0
     open_sessions = 0
     for (user, _project), group in data.partition_by(["user", "project"], as_dict=True).items():
         if user == "users":
             continue
-        starts = group.filter(pl.col("event_type") == "start").height
-        stops = group.filter(pl.col("event_type") == "stop").height
-        n_sessions += min(starts, stops)
-        open_sessions += max(0, starts - stops)
-        durations = _paired_durations_hours(group)
-        total_hours += float(sum(durations)) if durations else 0.0
+        events = [
+            (etype, ts)
+            for etype, ts in zip(group["event_type"].to_list(), group["timestamp"].to_list(), strict=True)
+            if ts is not None
+        ]
+        intervals = []
+        for start_ts, stop_ts in pair_sessions_lifo(events):
+            if start_ts is not None and stop_ts is not None:
+                intervals.append((start_ts, stop_ts))
+            elif start_ts is not None:
+                open_sessions += 1
+        n_sessions += len(intervals)
+        total_hours += merge_intervals_seconds(intervals) / 3600.0
 
     # Zeitraum.
     try:
         min_ts = data.select(pl.col("timestamp").min()).to_series()[0]
         max_ts = data.select(pl.col("timestamp").max()).to_series()[0]
-        date_min = min_ts.strftime("%d-%m-%Y") if min_ts else ""
-        date_max = max_ts.strftime("%d-%m-%Y") if max_ts else ""
+        # Einheitliches Anzeigeformat der App: TT.MM.JJJJ
+        date_min = min_ts.strftime("%d.%m.%Y") if min_ts else ""
+        date_max = max_ts.strftime("%d.%m.%Y") if max_ts else ""
     except Exception:  # noqa: BLE001
         date_min, date_max = "", ""
 
@@ -918,10 +1201,8 @@ def calculate_hour_weekday_matrix(data) -> pl.DataFrame:
     data = data.sort(["user", "project", "timestamp"])
     bucket: dict[tuple, float] = {}
     for (_u, _p), group in data.partition_by(["user", "project"], as_dict=True).items():
-        starts = group.filter(pl.col("event_type") == "start").select("timestamp").to_series().to_list()
-        stops = group.filter(pl.col("event_type") == "stop").select("timestamp").to_series().to_list()
-        for start_ts, stop_ts in zip(starts, stops, strict=False):
-            if start_ts is None or stop_ts is None or stop_ts <= start_ts:
+        for start_ts, stop_ts in _paired_sessions(group):
+            if stop_ts <= start_ts:
                 continue
             cursor = start_ts
             while cursor < stop_ts:

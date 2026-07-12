@@ -33,11 +33,19 @@ _win_mutex_handle: int | None = None
 
 def ipc_port_from_config(config: dict) -> int:
     """Port used only for single-instance signalling (not the dashboard port)."""
+    derived = int(config.get("dashboard_port", 8052)) + 9731
     explicit = config.get("single_instance_port")
     if explicit is not None:
-        p = int(explicit)
+        # single_instance_port ist ein optionaler Hand-Edit-Override und nicht
+        # Teil von DEFAULT_CONFIG/_validate_config. Ein Nicht-Zahl-Wert darf den
+        # Start nicht crashen — bei ungültiger Eingabe auf den abgeleiteten Port
+        # zurückfallen.
+        try:
+            p = int(explicit)
+        except (TypeError, ValueError):
+            p = derived
     else:
-        p = int(config.get("dashboard_port", 8052)) + 9731
+        p = derived
     return max(1024, min(65535, p))
 
 

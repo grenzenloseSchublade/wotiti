@@ -49,14 +49,29 @@ Kompakte Always-on-Top-Ansicht (`Ctrl+M`):
 - Zeigt nur Timer und Start/Stop/Pause
 - Fensterposition wird persistent gespeichert
 
+### Wochenansicht (Zeitmaschine)
+
+Die Timer-Kachel lässt sich auf eine scrollbare 7-Tage-Übersicht umschalten:
+
+- Balkendiagramm der Tagesarbeitszeiten mit stabilen Projektfarben
+- Navigation durch beliebige Wochen per Pfeilen (‹ ›), der Titel zeigt die Kalenderwoche (KW)
+- Wochenenden grau, Feiertage rot markiert (Land/Region konfigurierbar in den Einstellungen)
+
+### Tagesnotizen und Übertragen-Status
+
+Pro Benutzer, Projekt und Tag kann eine **Notiz** (max. 44 Wörter) erfasst werden – als Gedächtnisstütze für den manuellen Übertrag der Zeiten in ein Firmensystem. Ist der Übertrag erledigt, markiert die Checkbox **„übertragen"** den Projekt-Tag (mit Zeitstempel); der Status erscheint als `✓ übertragen` in der Ereignisliste und in der Wochenansicht. Dort lassen sich Tage einzeln per Tages-Häkchen oder gesammelt per Wochen-Häkchen abhaken.
+
 ### Tastenkürzel
 
 | Kombination | Funktion |
 |-------------|----------|
-| `Ctrl+S` | Start |
-| `Ctrl+E` | Stop |
-| `Ctrl+P` | Pause / Resume |
-| `Ctrl+M` | Mini-Modus an/aus |
+| `Strg+S` | Start |
+| `Strg+E` | Stop |
+| `Strg+P` | Pause / Resume |
+| `Strg+M` | Mini-Modus an/aus |
+| `Strg+←` / `Strg+→` | Tag zurück / vor |
+| `Strg+T` | Heute |
+| `F5` | Anzeige neu laden |
 
 Die Shortcuts funktionieren auch wenn das Timer-Fenster im Hintergrund ist.
 
@@ -66,6 +81,15 @@ Zwei integrierte Themes, umschaltbar in Einstellungen → Appearance:
 
 - **Modern** (Standard) – helles Interface, Cyan/Pink-Farbschema
 - **Synthwave** – dunkler Retro-Look, augenfreundlich für lange Sessions
+
+
+### Menüleiste und Verwaltung (v2.2.0)
+
+Selten genutzte Aktionen liegen in der Menüleiste: **Datei** (Datenbank laden, Beenden), **Ansicht** (Wochen-/Timer-Ansicht, Mini-Modus, Neu laden F5), **Extras** (Auswertung, Einstellungen), **Hilfe** (Über). Sichtbare Buttons sind nur Start/Pause/Stop/Mini.
+
+In **Einstellungen → Verwaltung** lassen sich Benutzer und Projekte **ausblenden (archivieren)** und wieder einblenden: Archivierte Einträge verschwinden aus den Auswahl-Listen, ihre Daten (Zeiten, Notizen, Statistik) bleiben vollständig erhalten. Neue Benutzer/Projekte werden weiterhin direkt über die Comboboxen im Hauptfenster angelegt.
+
+Bei **Rechner-Standby** (z. B. übers Wochenende) wird eine laufende Session automatisch beendet — der Stop wird auf den Zeitpunkt vor dem Standby **rückdatiert**, ebenso beim Inaktivitäts-Auto-Stop (konfigurierbare Schwelle, Standard 120 min; kurze Pausen zählen weiter als Arbeitszeit).
 
 ### Einstellungen
 
@@ -94,25 +118,34 @@ Bei aktivem Timer wird beim Schließen eine Bestätigung angefordert. Nicht been
 
 ## Analysekomponente (Work Time Insights)
 
+### KW-Report (v2.3.0)
+
+Erster Tab des Dashboards: die **Kalenderwochen-Matrix** Projekt × Mo–So in **H:MM** — exakt die Werte für den manuellen Übertrag ins Firmensystem. Mit KW-Navigation (‹ ›), Zeilen-/Spaltensummen, ✓ an bereits übertragenen Tagen (Tooltip zeigt Übertragungsdatum), ° markiert Tagesnotizen (Volltext im Tooltip) und einem Hinweis-Badge für offene (nicht übertragene) Tage. Der frühere Tab „Erweitert" (Cluster/Regression/Benutzer-ANOVA) wurde entfernt; „Projekt-Unterschiede" lebt jetzt im Tab „Projekte & Muster".
+
+
 Interaktives Dashboard, erreichbar unter `http://localhost:8050` (Port konfigurierbar). Das Dashboard wird im Hintergrund gestartet, sobald der Timer aktiv ist.
 
-### Tab 1: Grundlagen
+### Tab 1: KW-Report
 
-Tages-, Wochen- und Monatssummen, Trend-Pfeile, Top-Projekte, durchschnittliche Session-Länge.
+Kalenderwochen-Matrix Projekt × Mo–So in H:MM mit ✓ (übertragen), Notiz-Markern und Offen-Badge — siehe Abschnitt oben.
 
-### Tab 2: Projekte und Muster
+### Tab 2: Übersicht
 
-Projekt-Breakdown (Kreisdiagramm), Heatmap (wann an welchem Projekt), Sessions pro Projekt, Detailtabelle.
+Eckdaten der geladenen Datenbasis: Gesamtstunden, Zeitraum, Arbeitstage, Sessions, Projekte/Benutzer, Datenqualitäts-Badges (offene Sessions, Wochenend-/Feiertags-Einträge). Datums- und Projektfilter wirken hier, der Wochenend-Schalter bewusst nicht.
 
-### Tab 3: Zeitreihen und Trends
+### Tab 3: Grundlagen
 
-Produktivitätskurven, Tagesmuster (Peak-Zeiten), Wochenmuster, Fokus-Stabilität, Pausendisziplin.
+Stunden pro Projekt (Kreisdiagramm), Gesamtstunden und Ø Stunden pro Tag. Bei nur einem Benutzer werden die Vergleichs-Controls automatisch ausgeblendet.
 
-### Tab 4: Erweiterte Analysen
+### Tab 4: Projekte & Muster
 
-- **Deskriptive Statistiken**: Mittelwert, Median, Standardabweichung, Quartile
-- **Prognosen** (scikit-learn): Arbeitszeit-Vorhersage, Anomalie-Detektion, Clustering. Aussagekräftiger nach 4–8 Wochen regelmäßiger Nutzung; dient als Orientierungswert.
-- **Korrelationsanalysen**: Pomodoro-Disziplin ↔ Gesamtarbeitszeit, Pausenlänge ↔ Fokus-Qualität
+Projektzeit-Statistiken, Tägliche Projektstunden (eine Linie je Projekt), Projektwechsel, Ø Startzeit pro Projekt, Startzeit- und Session-Dauer-Verteilung, Projekt-Unterschiede (explorativ).
+
+### Tab 5: Zeitreihen
+
+Wöchentliche Durchschnittsstunden (Schlüssel `JJJJ-KWnn`, jahresübergreifend eindeutig), Wochentags-Muster (Ø je gearbeitetem Tag, mit Stichproben-Anzahl im Hover), Aktivitäts-Heatmap, Arbeit vs. Pause.
+
+Alle Zeiten erscheinen in Tooltips/Beschriftungen als **H:MM** — identisch zur App. Globale Filter: Datumsbereich (mit Schnellwahl „Diese Woche / Letzte Woche / Alles"), Projekte, Wochenend-Schalter (Startzustand aus der Config, danach gewinnt der Schalter).
 
 ---
 
