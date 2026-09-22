@@ -127,3 +127,31 @@ def test_ensure_project_colors_saves_once(app_instance, monkeypatch):
     # Zweiter Aufruf: alles bekannt → kein weiterer Save.
     app_instance.week_view._ensure_project_colors(["Neu1", "Neu2", "Neu3"])
     assert len(calls) == 1
+
+
+def test_week_view_starts_on_monday(app_instance):
+    """Die Zeitmaschine zeigt die Kalenderwoche Mo–So, nicht ein rollierendes Fenster."""
+    from tkinter import Label
+
+    _seed_today(app_instance)
+    week_view = app_instance.week_view
+    week_view.refresh()
+
+    labels = [c for c in week_view._day_frames[0].winfo_children() if isinstance(c, Label)]
+    assert labels and labels[0].cget("text") == "Mo"
+
+    today = datetime.now().date()
+    monday = today - timedelta(days=today.weekday())
+    assert f"KW {monday.isocalendar()[1]}" in week_view._title_label.cget("text")
+
+
+def test_week_legend_shows_project_totals(app_instance):
+    """Die Legende zeigt pro Projekt die Wochensumme (H:MM) plus Σ-Gesamt."""
+    _seed_today(app_instance, projects=("A", "B"))  # je 1h heute
+    week_view = app_instance.week_view
+    week_view.refresh()
+
+    texts = [c.cget("text") for c in week_view._legend_frame.winfo_children()]
+    assert "█ A 1:00" in texts
+    assert "█ B 1:00" in texts
+    assert any(t.startswith("Σ") and "2:00 h" in t for t in texts)

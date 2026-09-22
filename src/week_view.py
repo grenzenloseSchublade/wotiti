@@ -258,7 +258,7 @@ class WeekView:
     # Rendering
     # ------------------------------------------------------------------
     def refresh(self) -> None:
-        """Zeichnet die letzten 7 Tage als gestapelte, projektweise eingefaerbte Balken.
+        """Zeichnet die Kalenderwoche (Mo–So) als gestapelte, projektweise eingefaerbte Balken.
 
         Standardmaessig werden **alle Projekte gleichzeitig** mit stabiler
         Projektfarbe dargestellt (Umschalter "Nur aktuelles" fuer die
@@ -287,7 +287,14 @@ class WeekView:
         if not self.all_projects and not project:
             return
         try:
-            end_date = datetime.now().date() + timedelta(days=self.offset)
+            # Kalenderwoche Mo–So statt rollierendem 7-Tage-Fenster: so decken
+            # KW-Titel, „✓ Woche" und die Legendensummen genau die ISO-Woche ab
+            # (konsistent mit dem KW-Report im Dashboard und dem Übertragen-
+            # Workflow). end_date = Sonntag der gewählten Woche; zukünftige Tage
+            # der laufenden Woche haben schlicht keine Events (0 h).
+            today_date = datetime.now().date()
+            monday = today_date - timedelta(days=today_date.weekday())
+            end_date = monday + timedelta(days=self.offset + 6)
             if self.all_projects:
                 days = compute_last_n_days_hours_by_project(app.db_conn, name, n=7, end_date=end_date)
             else:
@@ -443,16 +450,30 @@ class WeekView:
                 text=("↺ Woche" if week_done else "✓ Woche"),
             )
 
-        # Legende: Farbsymbol + Projektname fuer alle in dieser Woche aktiven Projekte.
+        # Legende: Farbsymbol + Projektname + Wochensumme fuer alle in dieser
+        # Woche aktiven Projekte, plus Σ-Gesamt. Summen aus den bereits
+        # geladenen Tagesdaten — kein zusätzlicher DB-Zugriff.
         if seen_projects:
+            proj_totals: dict[str, float] = {}
+            for _iso, by_proj in days:
+                for p, h in by_proj.items():
+                    proj_totals[p] = proj_totals.get(p, 0.0) + h
             Label(self._legend_frame, text="Projekte:", bg="#C0C0C0", fg="#404040", font=("MS Sans Serif", 8)).pack(
                 side="left", padx=(0, 4)
             )
             for proj in sorted(seen_projects):
+                total = app._fmt_hours_hm(proj_totals.get(proj, 0.0)).removesuffix(" h")
                 Label(
                     self._legend_frame,
-                    text=f"█ {proj}",
+                    text=f"█ {proj} {total}",
                     bg="#C0C0C0",
                     fg=color_map.get(proj, WEEK_PROJECT_COLORS[0]),
                     font=("MS Sans Serif", 8, "bold"),
                 ).pack(side="left", padx=4)
+            Label(
+                self._legend_frame,
+                text=f"Σ {app._fmt_hours_hm(sum(proj_totals.values()))}",
+                bg="#C0C0C0",
+                fg="#404040",
+                font=("MS Sans Serif", 8, "bold"),
+            ).pack(side="left", padx=(8, 0))
