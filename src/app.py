@@ -29,6 +29,7 @@ from tkinter import (
     Scrollbar,
     Spinbox,
     StringVar,
+    TclError,
     Text,
     Toplevel,
     W,
@@ -416,13 +417,18 @@ class App:
         # der Wochenansicht beim Hovern angezeigt.
         self.note_label = Label(self.entry_frame, text="Notiz:", **label_config)
         self.note_label.grid(row=1, column=0, pady=(0, 4), padx=3, sticky="nw")
-        # Zweizeiliges Notizfeld: lange Notizen (bis ~44 Wörter) sind so lesbar
-        # umgebrochen. Inhaltlich bleibt die Notiz einzeilig (clamp_note
-        # kollabiert Whitespace) — Enter speichert und fügt KEINEN Umbruch ein.
-        self.note_entry = Text(self.entry_frame, height=2, wrap="word", relief="sunken", borderwidth=2, **entry_config)
+        # Mehrzeilig dargestelltes Notizfeld: lange Notizen (bis ~44 Wörter) sind
+        # so lesbar umgebrochen; Höhe per Einstellung "note_field_lines" (1–6).
+        # Inhaltlich bleibt die Notiz einzeilig (clamp_note kollabiert
+        # Whitespace) — Enter speichert und fügt KEINEN Umbruch ein.
+        note_lines = int(self.config.get("note_field_lines", 2))
+        self.note_entry = Text(
+            self.entry_frame, height=note_lines, wrap="word", relief="sunken", borderwidth=2, **entry_config
+        )
         self.note_entry.grid(row=1, column=1, columnspan=6, pady=(0, 4), padx=3, sticky="ew")
         self.note_entry.bind("<Return>", self._on_note_return)
         self.note_entry.bind("<FocusOut>", self._on_note_changed)
+        self._bind_note_navigation()
         _ToolTip(self.note_entry, "Notiz für dieses Datum + Projekt (max. 44 Wörter)")
         # Übertragen-Status: markiert, dass diese Zeit (Projekt+Tag) bereits
         # manuell ins Firmensystem eingetragen wurde. Setzt beim Anhaken das
@@ -1615,6 +1621,15 @@ class App:
                 wraplength=480,
                 justify="left",
             ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(0, 2))
+
+        # Anzeigehöhe des Notizfelds (rein visuell, Inhalt bleibt einzeilig).
+        Label(time_frame, text="Notizfeld-Höhe (Zeilen):", **lbl).grid(row=3, column=0, sticky="w", pady=2)
+        note_lines_var = Spinbox(
+            time_frame, from_=1, to=6, width=8, font=("MS Sans Serif", 10), bg="#FFFFFF", fg="black"
+        )
+        note_lines_var.grid(row=3, column=1, padx=5, pady=2, sticky="w")
+        note_lines_var.delete(0, END)
+        note_lines_var.insert(0, str(int(self.config.get("note_field_lines", 2))))
         time_frame.grid_columnconfigure(1, weight=1)
 
         # ── Verwaltung (Benutzer/Projekte archivieren) ──
@@ -1779,6 +1794,13 @@ class App:
                 messagebox.showwarning("Ungültiger Wert", "Idle-Timeout muss eine Zahl ≥ 0 sein (0 = aus).", parent=win)
                 return
 
+            note_lines_raw = note_lines_var.get().strip()
+            if not note_lines_raw.isdigit() or not (1 <= int(note_lines_raw) <= 6):
+                messagebox.showwarning(
+                    "Ungültiger Wert", "Notizfeld-Höhe muss zwischen 1 und 6 Zeilen liegen.", parent=win
+                )
+                return
+
             raw_sound_path = sound_file_entry.get().strip() or "sounds/StartupSound.wav"
             sound_path = raw_sound_path.replace("\\", "/")
             if os.path.isabs(sound_path):
@@ -1808,6 +1830,7 @@ class App:
                 "pomodoro_sound_enabled": bool(pomodoro_sound_enabled_var.get()),
                 "pomodoro_sound_local_path": sound_path,
                 "idle_timeout_minutes": int(idle_timeout_raw),
+                "note_field_lines": int(note_lines_raw),
                 "holiday_country": holiday_country_var.get().strip() or "DE",
                 "holiday_subdiv": holiday_subdiv_var.get().strip(),
                 "entry_list_chronological": bool(entry_chrono_var.get()),
@@ -1835,6 +1858,7 @@ class App:
                 new_config.get("pomodoro_sound_local_path", "sounds/StartupSound.wav")
             ).strip()
             self.idle_timeout_minutes = int(new_config.get("idle_timeout_minutes", 120))
+            self.note_entry.configure(height=int(new_config.get("note_field_lines", 2)))
             self._preload_sound()
 
             self._reconcile_pomodoro_runtime(was_pomodoro_enabled)
@@ -3948,6 +3972,70 @@ class App:
         # Wochenansicht ggf. aktualisieren, damit Tooltips die Notiz zeigen.
         if self._week_view_active:
             self._refresh_week_view()
+
+    def _bind_note_navigation(self) -> None:
+        """Explizite Wort-Navigation im Notizfeld.
+
+        Die Tk-Klassenbindings für Strg+Pfeil greifen je nach Desktop/WM nicht
+        zuverlässig (globale Shortcuts können die Events schlucken). Widget-
+        Bindings feuern vor Klasse und ``all`` und machen das Verhalten mit
+        ``"break"`` deterministisch — der globale Datums-Shortcut (Strg+Pfeil,
+        ``bind_all``) bleibt dadurch garantiert außen vor. Strg+A überschreibt
+        zudem den Tk-Default „Zeilenanfang" mit „alles markieren".
+        """
+        w = self.note_entry
+        w.bind("<Control-Left>", lambda e: self._note_word_jump(back=True))
+        w.bind("<Control-Right>", lambda e: self._note_word_jump(back=False))
+        w.bind("<Control-Shift-Left>", lambda e: self._note_word_select(back=True))
+        w.bind("<Control-Shift-Right>", lambda e: self._note_word_select(back=False))
+        w.bind("<Control-BackSpace>", lambda e: self._note_delete_word(back=True))
+        w.bind("<Control-Delete>", lambda e: self._note_delete_word(back=False))
+        w.bind("<Control-a>", self._note_select_all)
+
+    def _note_word_pos(self, back: bool) -> str:
+        """Index des vorherigen Wortanfangs bzw. der nächsten Wortgrenze.
+
+        Nutzt Tks eigene Prozeduren (native Wort-Semantik inkl. Satzzeichen);
+        Index-Arithmetik mit ``wordstart``/``wordend`` nur als Fallback, da sie
+        auf Whitespace/Satzzeichen ungenau ist.
+        """
+        w = self.note_entry
+        try:
+            if back:
+                return str(w.tk.call("tk::TextPrevPos", w._w, "insert", "tcl_startOfPreviousWord"))
+            return str(w.tk.call("tk::TextNextWord", w._w, "insert"))
+        except TclError:
+            return w.index("insert -1c wordstart" if back else "insert wordend")
+
+    def _note_word_jump(self, back: bool) -> str:
+        w = self.note_entry
+        w.mark_set("insert", self._note_word_pos(back))
+        w.tag_remove("sel", "1.0", END)
+        w.see("insert")
+        return "break"
+
+    def _note_word_select(self, back: bool) -> str:
+        w = self.note_entry
+        # Übernimmt das Anchor-Handling der nativen Shift-Navigation.
+        with contextlib.suppress(TclError):
+            w.tk.call("tk::TextKeySelect", w._w, self._note_word_pos(back))
+        return "break"
+
+    def _note_delete_word(self, back: bool) -> str:
+        w = self.note_entry
+        pos = self._note_word_pos(back)
+        if back:
+            w.delete(pos, "insert")
+        else:
+            w.delete("insert", pos)
+        return "break"
+
+    def _note_select_all(self, _event=None) -> str:
+        w = self.note_entry
+        w.tag_remove("sel", "1.0", END)
+        w.tag_add("sel", "1.0", "end-1c")
+        w.mark_set("insert", "end-1c")
+        return "break"
 
     def _refresh_total_label(self, project: str | None = None, name: str | None = None):
         """Refresh the total-time and daily-break labels below the timer."""

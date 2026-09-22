@@ -803,3 +803,42 @@ def test_shortcut_guard_skips_text_widgets(app_instance):
     app_instance.set_today_date()
     app_instance._shortcut_guard(_Ev(app_instance.start_button), lambda: app_instance._step_date(-1))
     assert app_instance.date_entry.get() != datetime.today().strftime("%d-%m-%Y")
+
+
+def test_note_field_height_from_config(app_instance):
+    """Das Notizfeld übernimmt die konfigurierte Zeilenzahl (Default 2)."""
+    assert int(app_instance.note_entry.cget("height")) == int(app_instance.config.get("note_field_lines", 2)) == 2
+
+
+def test_note_navigation_bindings_present(app_instance):
+    """Wort-Navigation ist direkt am Widget gebunden (nicht nur Klassen-Binding)."""
+    w = app_instance.note_entry
+    for seq in ("<Control-Left>", "<Control-Right>", "<Control-BackSpace>", "<Control-Delete>", "<Control-a>"):
+        assert w.bind(seq), f"Binding fehlt: {seq}"
+
+
+def test_note_word_jump_and_select_all(app_instance):
+    """Strg+Pfeil-Handler springen wortweise; Strg+A markiert den ganzen Text."""
+    w = app_instance.note_entry
+    w.delete("1.0", END)
+    w.insert("1.0", "alpha beta gamma")
+    w.mark_set("insert", "end-1c")
+
+    assert app_instance._note_word_jump(back=True) == "break"
+    assert w.index("insert") == "1.11"  # Wortanfang von "gamma"
+    app_instance._note_word_jump(back=True)
+    assert w.index("insert") == "1.6"  # Wortanfang von "beta"
+
+    assert app_instance._note_select_all() == "break"
+    ranges = w.tag_ranges("sel")
+    assert ranges and w.get(ranges[0], ranges[1]) == "alpha beta gamma"
+
+
+def test_note_delete_word_back(app_instance):
+    """Strg+BackSpace löscht das Wort vor dem Cursor."""
+    w = app_instance.note_entry
+    w.delete("1.0", END)
+    w.insert("1.0", "alpha beta gamma")
+    w.mark_set("insert", "end-1c")
+    assert app_instance._note_delete_word(back=True) == "break"
+    assert w.get("1.0", "end-1c") == "alpha beta "

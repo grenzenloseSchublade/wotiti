@@ -103,6 +103,9 @@ DEFAULT_CONFIG = {
     # Automatischer Stopp einer laufenden Session nach so vielen Minuten
     # systemweiter Inaktivität (Maus/Tastatur). 0 deaktiviert die Funktion.
     "idle_timeout_minutes": 120,
+    # Anzeigehöhe des Notizfelds im Hauptfenster (Zeilen, 1–6). Rein visuell —
+    # der Inhalt bleibt logisch einzeilig (clamp_note).
+    "note_field_lines": 2,
     # Wochenend-/Feiertags-Filter für Durchschnitts- und Trend-Statistiken.
     # Summen und Pies bleiben unangetastet.
     "holiday_country": "DE",
@@ -227,6 +230,7 @@ def _validate_config(cfg: dict) -> dict:
         # Coercion würde ein hand-editierter String/Negativwert beim Start am
         # int()-Aufruf in app.py crashen.
         "idle_timeout_minutes": (0, 1440, 120),
+        "note_field_lines": (1, 6, 2),
         **POMODORO_INT_RANGES,
     }
     for key, (lo, hi, default) in int_fields.items():
