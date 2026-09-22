@@ -813,7 +813,14 @@ def test_note_field_height_from_config(app_instance):
 def test_note_navigation_bindings_present(app_instance):
     """Wort-Navigation ist direkt am Widget gebunden (nicht nur Klassen-Binding)."""
     w = app_instance.note_entry
-    for seq in ("<Control-Left>", "<Control-Right>", "<Control-BackSpace>", "<Control-Delete>", "<Control-a>"):
+    for seq in (
+        "<Control-Left>",
+        "<Control-Right>",
+        "<Control-BackSpace>",
+        "<Control-Delete>",
+        "<Control-a>",
+        "<Control-A>",  # Caps Lock liefert Keysym 'A'
+    ):
         assert w.bind(seq), f"Binding fehlt: {seq}"
 
 

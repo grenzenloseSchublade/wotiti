@@ -3300,6 +3300,11 @@ class App:
         idx = self.db_content_listbox.nearest(event.y)
         if idx < 0 or idx >= len(self._row_entries):
             return
+        # nearest() clampt auch Klicks weit unterhalb der letzten Zeile auf
+        # deren Index — nur reagieren, wenn der Klick die Zeile wirklich trifft.
+        bbox = self.db_content_listbox.bbox(idx)
+        if not bbox or not (bbox[1] <= event.y <= bbox[1] + bbox[3]):
+            return
         session = self._row_entries[idx]
         if not isinstance(session, dict):
             return  # Kopf-/Notiz-/Limit-Zeile ohne Session
@@ -3308,6 +3313,9 @@ class App:
         self.db_content_listbox.activate(idx)
 
         menu = Menu(self.db_content_listbox, tearoff=0)
+        # Tk räumt Menü-Widgets nicht selbst ab — ohne destroy akkumuliert
+        # jeder Rechtsklick ein Widget über die gesamte App-Laufzeit.
+        menu.bind("<Unmap>", lambda _e: menu.after_idle(menu.destroy))
         menu.add_command(label="Bearbeiten…", command=self._edit_event)
         date_iso = session.get("date_iso")
         if date_iso:
@@ -4048,6 +4056,9 @@ class App:
         w.bind("<Control-BackSpace>", lambda e: self._note_delete_word(back=True))
         w.bind("<Control-Delete>", lambda e: self._note_delete_word(back=False))
         w.bind("<Control-a>", self._note_select_all)
+        # Bei aktivem Caps Lock liefert die A-Taste Keysym 'A' — ohne diese
+        # Zusatzbindung wäre Strg+A dann wirkungslos (Tk-Idiom, vgl. tk.tcl).
+        w.bind("<Control-A>", self._note_select_all)
 
     def _note_word_pos(self, back: bool) -> str:
         """Index des vorherigen Wortanfangs bzw. der nächsten Wortgrenze.
