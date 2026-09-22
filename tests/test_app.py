@@ -842,3 +842,43 @@ def test_note_delete_word_back(app_instance):
     w.mark_set("insert", "end-1c")
     assert app_instance._note_delete_word(back=True) == "break"
     assert w.get("1.0", "end-1c") == "alpha beta "
+
+
+def test_project_header_row_carries_session(app_instance):
+    """Layout A: die Projekt-Kopfzeile trägt die erste Session (Doppel-/Rechtsklick-Ziel)."""
+    from db_helper import log_start, log_stop
+
+    name = "hdr_user"
+    today = datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
+    log_start(project="1", name=name, timestamp=today, conn=app_instance.db_conn)
+    log_stop(project="1", name=name, timestamp=today + timedelta(hours=1), conn=app_instance.db_conn)
+    app_instance.name_entry.set(name)
+    app_instance.set_today_date()
+    app_instance.update_db_content()
+
+    rows = app_instance.db_content_listbox.get(0, END)
+    hdr_idx = next(i for i, t in enumerate(rows) if t.strip().startswith("Projekt 1"))
+    assert isinstance(app_instance._row_entries[hdr_idx], dict)
+    assert app_instance._row_entries[hdr_idx]["project"] == "1"
+    user_idx = next(i for i, t in enumerate(rows) if t.startswith("Benutzer:"))
+    assert app_instance._row_entries[user_idx] is None
+
+
+def test_toggle_row_transferred_roundtrip(app_instance):
+    """Der Kontextmenü-Toggle setzt/entfernt den ✓-Status für die Zielzeile."""
+    from db_helper import get_daily_meta, log_start, log_stop
+
+    name = "ctx_user"
+    today = datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
+    log_start(project="1", name=name, timestamp=today, conn=app_instance.db_conn)
+    log_stop(project="1", name=name, timestamp=today + timedelta(hours=1), conn=app_instance.db_conn)
+    iso_today = today.strftime("%Y-%m-%d")
+    session = {"user": name, "project": "1", "date_iso": iso_today}
+
+    app_instance._toggle_row_transferred(session, True)
+    meta = get_daily_meta(app_instance.db_conn, name, "1", iso_today)
+    assert meta["transferred"] is True
+    assert meta["transferred_at"] == datetime.now().strftime("%Y-%m-%d")
+
+    app_instance._toggle_row_transferred(session, False)
+    assert get_daily_meta(app_instance.db_conn, name, "1", iso_today)["transferred"] is False

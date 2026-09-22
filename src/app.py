@@ -527,8 +527,12 @@ class App:
         self.db_content_listbox = Listbox(self.db_content_frame, bg="#FFFFFF", fg="black", font=("MS Sans Serif", 10))
         self.db_content_listbox.grid(row=0, column=0, sticky="nsew")
         self.db_content_listbox.bind("<Double-1>", self._edit_event)
+        self.db_content_listbox.bind("<Button-3>", self._show_row_context_menu)
+        _ToolTip(self.db_content_listbox, "Doppelklick: Session bearbeiten · Rechtsklick: Menü")
         # Parallele Map zu den Listbox-Zeilen: None für Kopf-/Notiz-Zeilen, sonst
         # ein Session-Dict {start_id, stop_id, project, user, date_iso, ...}.
+        # Projekt-Kopfzeilen (Layout A) tragen die erste Session des Projekts,
+        # damit Doppel-/Rechtsklick auch dort funktioniert.
         self._row_entries: list[dict | None] = []
 
         self.scrollbar_listbox = Scrollbar(
@@ -3258,8 +3262,11 @@ class App:
                             head = f"  Projekt {project}"
                             if meta["transferred"]:
                                 head += "   ✓ übertragen"
-                            _row(head)
-                            for s in [ps for ps in user_sessions if ps["project"] == project]:
+                            proj_sessions = [ps for ps in user_sessions if ps["project"] == project]
+                            # Kopfzeile trägt die erste Session, damit Doppel-/
+                            # Rechtsklick auch auf ihr den Editor bzw. das Menü öffnet.
+                            _row(head, {**proj_sessions[0], "date_iso": view_iso})
+                            for s in proj_sessions:
                                 times, dur = self._session_times_str(s)
                                 _row(f"    {times}  ({dur})", {**s, "date_iso": view_iso})
                             for ln in self._note_rows(meta["note"], "    "):
@@ -3287,6 +3294,56 @@ class App:
                 # Phase 2.4: Hinweis, wenn das Listenlimit greift.
                 if total_count > limit:
                     _row(f"… {total_count - limit} weitere Einträge ausgeblendet (Limit {limit})")
+
+    def _show_row_context_menu(self, event):
+        """Rechtsklick auf eine Session-Zeile: Menü mit Bearbeiten + ✓-Toggle."""
+        idx = self.db_content_listbox.nearest(event.y)
+        if idx < 0 or idx >= len(self._row_entries):
+            return
+        session = self._row_entries[idx]
+        if not isinstance(session, dict):
+            return  # Kopf-/Notiz-/Limit-Zeile ohne Session
+        self.db_content_listbox.selection_clear(0, END)
+        self.db_content_listbox.selection_set(idx)
+        self.db_content_listbox.activate(idx)
+
+        menu = Menu(self.db_content_listbox, tearoff=0)
+        menu.add_command(label="Bearbeiten…", command=self._edit_event)
+        date_iso = session.get("date_iso")
+        if date_iso:
+            meta = get_daily_meta(self.db_conn, session["user"], session["project"], date_iso)
+            label = "Übertragen-Häkchen entfernen" if meta["transferred"] else "Als übertragen markieren"
+            menu.add_command(
+                label=label,
+                command=lambda s=session, t=not meta["transferred"]: self._toggle_row_transferred(s, t),
+            )
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            # Ohne grab_release bleibt unter X11 ein Pointer-Grab hängen.
+            menu.grab_release()
+
+    def _toggle_row_transferred(self, session: dict, transferred: bool) -> None:
+        """Setzt den »übertragen«-Status für die (Benutzer, Projekt, Tag)-Zeile.
+
+        Gleiches Verhalten wie die Haupt-Checkbox (_on_transferred_toggled),
+        nur mit explizitem Ziel statt der aktuellen Combobox-Auswahl.
+        """
+        if not self.db_conn:
+            return
+        user, project, date_iso = session["user"], session["project"], session.get("date_iso")
+        if not date_iso:
+            return
+        today_iso = datetime.now().date().strftime(DATE_FORMAT)
+        set_daily_transferred(self.db_conn, user, project, date_iso, transferred, today_iso)
+        # Falls genau dieser Eintrag gerade im Notiz-/✓-Bereich geladen ist,
+        # Checkbox nachziehen (Flush zuerst, damit getippter Text nicht verloren geht).
+        if self._note_loaded_key == (user, project, date_iso):
+            self._flush_pending_note()
+            self._load_note()
+        self.update_db_content()
+        if self._week_view_active:
+            self._refresh_week_view()
 
     def _edit_event(self, event=None):
         """Open the session editor for the double-clicked session row.
