@@ -188,7 +188,12 @@ def start_ipc_server_thread(
     """Run accept loop in a daemon thread; *on_raise* runs on the UI thread."""
 
     def _run() -> None:
-        listen_sock.settimeout(0.4)
+        # Der Timeout dient nur als Fallback, um ``stop_event`` regelmäßig zu
+        # prüfen — echte Verbindungen wecken ``accept()`` sofort, und beim
+        # Shutdown schließt ``shutdown_ipc`` den Socket (→ ``OSError`` → break).
+        # Ein großzügiger Wert (statt 0,4 s) vermeidet ein Sub-Sekunden-Dauer-
+        # Aufwachen des Prozesses (Energie-/Standby-Hygiene) ohne Funktionsverlust.
+        listen_sock.settimeout(30.0)
         while not stop_event.is_set():
             try:
                 conn, _ = listen_sock.accept()

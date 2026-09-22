@@ -150,6 +150,10 @@ class App:
         self._last_break_project = None
         self._last_break_user = None
         self._total_update_counter = 0
+        # Handle des anstehenden Timer-Ticks (update_timer_realtime). Erlaubt das
+        # adaptive Reschedule-Intervall (1 s aktiv / langsamer im Leerlauf) und
+        # ein sofortiges Neu-Ticken beim Übergang Leerlauf→aktiv.
+        self._timer_after_id = None
         # Referenzwerte des letzten Timer-Ticks für die Standby-Erkennung
         # (siehe _check_suspend_gap).
         self._last_tick_wall = time.time()
@@ -2020,6 +2024,9 @@ class App:
                     self._refresh_comboboxes()
                     self._force_date_refresh()
                     self._set_button_state_running()
+                    # Start aus dem Leerlauf: sofort neu ticken, damit die Anzeige
+                    # nicht bis zum nächsten (langsameren) Leerlauf-Tick wartet.
+                    self._reschedule_timer(0)
 
     def stop_session(self, stop_timestamp: datetime | None = None):
         """End the session completely. If a break is active, close it first without auto-resume.
@@ -3748,8 +3755,25 @@ class App:
         if self._db_dirty and (time.time() - self._db_dirty_since) >= 2:
             self._force_date_refresh()
 
+        # Adaptives Intervall: bei laufender Session/Pause sekundengenau (1 s),
+        # im Leerlauf seltener (3 s) — reduziert unnötige Hintergrund-Ticks
+        # (Energie-/Standby-Hygiene), ohne die Anzeige spürbar zu verzögern.
+        # _check_suspend_gap (Schwelle 180 s) und der Idle-Auto-Stop (nur im
+        # Aktiv-Zweig, dort weiterhin 1 s) bleiben davon unberührt.
+        active = self.timer_running or self._break_active
+        self._reschedule_timer(1000 if active else 3000)
+
+    def _reschedule_timer(self, delay_ms: int) -> None:
+        """Plant den nächsten ``update_timer_realtime``-Tick, storniert einen
+        bereits anstehenden. ``delay_ms=0`` erzwingt ein sofortiges Neu-Ticken
+        (z. B. beim Start einer Session aus dem Leerlauf, damit die Anzeige nicht
+        bis zum nächsten langsamen Leerlauf-Tick wartet)."""
+        if self._timer_after_id is not None:
+            with contextlib.suppress(Exception):
+                self.master.after_cancel(self._timer_after_id)
+            self._timer_after_id = None
         if not self._closing:
-            self.master.after(1000, self.update_timer_realtime)
+            self._timer_after_id = self.master.after(delay_ms, self.update_timer_realtime)
 
     def _maybe_auto_stop_idle(self):
         """Stoppt eine laufende Session nach ``idle_timeout_minutes`` Minuten
