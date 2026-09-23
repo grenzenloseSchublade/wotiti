@@ -433,7 +433,8 @@ class WeekView:
                     line += f" [übertragen{when}]"
                 if note:
                     seg_tip += f"\nNotiz: {note}"
-                    line += f" — {note}"
+                    # Kompaktzeile bleibt einzeilig — Umbrüche der Notiz flatten.
+                    line += " — " + " · ".join(note.splitlines())
                 _ToolTip(seg, seg_tip)
                 tooltip_lines.append(line)
 

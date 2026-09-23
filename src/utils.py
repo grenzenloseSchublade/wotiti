@@ -103,8 +103,8 @@ DEFAULT_CONFIG = {
     # Automatischer Stopp einer laufenden Session nach so vielen Minuten
     # systemweiter Inaktivität (Maus/Tastatur). 0 deaktiviert die Funktion.
     "idle_timeout_minutes": 120,
-    # Anzeigehöhe des Notizfelds im Hauptfenster (Zeilen, 1–6). Rein visuell —
-    # der Inhalt bleibt logisch einzeilig (clamp_note).
+    # Anzeigehöhe des Notizfelds im Hauptfenster (Zeilen, 1–6). Notizen dürfen
+    # eigene Umbrüche enthalten (Shift+Enter, max. 6 Zeilen via clamp_note).
     "note_field_lines": 2,
     # Wochenend-/Feiertags-Filter für Durchschnitts- und Trend-Statistiken.
     # Summen und Pies bleiben unangetastet.
@@ -301,14 +301,29 @@ def save_config(config: dict) -> None:
     os.replace(tmp_path, CONFIG_PATH)
 
 
-def clamp_note(text: str, max_words: int = 44) -> str:
-    """Normalisiert eine Notiz: einzeilig, Whitespace kollabiert, max. ``max_words`` Wörter."""
+def clamp_note(text: str, max_words: int = 44, max_lines: int = 6) -> str:
+    """Normalisiert eine Notiz: Zeilenumbrüche bleiben erhalten, Whitespace je
+    Zeile wird kollabiert, leere Zeilen am Rand entfallen; max. ``max_lines``
+    Zeilen und ``max_words`` Wörter gesamt."""
     if not text:
         return ""
-    words = text.split()
-    if len(words) > max_words:
-        words = words[:max_words]
-    return " ".join(words)
+    lines = [" ".join(line.split()) for line in text.splitlines()]
+    while lines and not lines[0]:
+        lines.pop(0)
+    while lines and not lines[-1]:
+        lines.pop()
+    lines = lines[:max_lines]
+    budget = max_words
+    kept: list[str] = []
+    for line in lines:
+        words = line.split()
+        if words and budget <= 0:
+            break
+        kept.append(" ".join(words[:budget]))
+        budget -= min(len(words), budget)
+    while kept and not kept[-1]:
+        kept.pop()
+    return "\n".join(kept)
 
 
 def save_to_csv(data: pl.DataFrame, csv_path: str) -> None:

@@ -49,10 +49,10 @@ def test_clear_console_with_error(app_instance):
 
 
 def test_update_db_content_no_users(app_instance):
-    """Test updating the database content listbox with no users."""
+    """Test updating the day list with no users."""
     app_instance.db_conn.cursor().execute("DELETE FROM users")
     app_instance.update_db_content()
-    assert app_instance.db_content_listbox.size() == 0
+    assert app_instance.day_list.get("1.0", "end-1c") == ""
 
 
 def test_update_timer_with_duration(app_instance):
@@ -241,7 +241,7 @@ def test_start_session_already_active(app_instance):
 
 
 def test_update_db_content(app_instance):
-    """Test updating the database content listbox."""
+    """Test updating the day list."""
     # Erst eine Session starten, damit Events vorhanden sind.
     app_instance.name_entry.set("test_user")
     app_instance.project_entry.set("1")
@@ -250,7 +250,8 @@ def test_update_db_content(app_instance):
     app_instance.date_entry.insert(0, today)
     app_instance.start_session()
     app_instance.update_db_content()
-    assert app_instance.db_content_listbox.size() > 0
+    assert app_instance.day_list.get("1.0", "end-1c") != ""
+    assert str(app_instance.day_list.cget("state")) == "disabled"
 
 
 def test_clear_console_with_text(app_instance):
@@ -406,49 +407,6 @@ def test_session_times_str_running():
     times, dur = App._session_times_str({"start_ts": _dt(2026, 6, 23, 9, 0), "stop_ts": None, "dur_h": None})
     assert dur == "läuft"
     assert "→" in times
-
-
-def test_note_rows_short_single_line():
-    """Kurze Notiz → genau eine Zeile mit 'Notiz:'-Präfix."""
-    from app import App
-
-    rows = App._note_rows("kurz", "    ")
-    assert rows == ["    Notiz: kurz"]
-
-
-def test_note_rows_empty_dash():
-    """Leere Notiz → Platzhalter '—'."""
-    from app import App
-
-    assert App._note_rows("", "    ") == ["    Notiz: —"]
-
-
-def test_note_rows_long_wraps_multiline():
-    """Lange Notiz wird über mehrere Zeilen umbrochen; Fortsetzung eingerückt."""
-    from app import App
-
-    note = " ".join(f"wort{i}" for i in range(44))
-    rows = App._note_rows(note, "    ")
-    assert len(rows) >= 2  # mehrzeilig
-    assert rows[0].startswith("    Notiz: ")
-    # Fortsetzungszeilen sind unter dem Notiz-Text eingerückt (kein 'Notiz:').
-    indent = len("    Notiz: ")
-    for cont in rows[1:]:
-        assert cont.startswith(" " * indent)
-        assert "Notiz:" not in cont
-    # Kein Wort geht verloren (Union der Zeilen == Originalwörter).
-    joined = " ".join(r.strip() for r in rows).replace("Notiz: ", "", 1)
-    assert joined.split() == note.split()
-
-
-def test_note_rows_wider_wraps_fewer_lines():
-    """Breiterer Default (88) bricht dieselbe Notiz in weniger Zeilen um als 56."""
-    from app import App
-
-    note = " ".join(f"wort{i}" for i in range(44))
-    wide = App._note_rows(note, "    ")  # Default width=88
-    narrow = App._note_rows(note, "    ", width=56)
-    assert len(wide) < len(narrow)
 
 
 def test_pair_sessions_equal_timestamp_pairs_not_orphans(app_instance):
@@ -863,12 +821,192 @@ def test_project_header_row_carries_session(app_instance):
     app_instance.set_today_date()
     app_instance.update_db_content()
 
-    rows = app_instance.db_content_listbox.get(0, END)
-    hdr_idx = next(i for i, t in enumerate(rows) if t.strip().startswith("Projekt 1"))
-    assert isinstance(app_instance._row_entries[hdr_idx], dict)
-    assert app_instance._row_entries[hdr_idx]["project"] == "1"
-    user_idx = next(i for i, t in enumerate(rows) if t.startswith("Benutzer:"))
-    assert app_instance._row_entries[user_idx] is None
+    rows = app_instance.day_list.get("1.0", "end-1c").splitlines()
+    hdr_line = next(i + 1 for i, t in enumerate(rows) if t.startswith("▌ 1"))
+    assert app_instance._line_sessions[hdr_line]["project"] == "1"
+    # Notiz-Platzhalterzeile trägt keine Session.
+    note_line = next(i + 1 for i, t in enumerate(rows) if t == "(keine Notiz)")
+    assert note_line not in app_instance._line_sessions
+
+
+def test_day_list_merged_times_line(app_instance):
+    """Layout A: Sessions eines Projekts in EINER ·-Zeile; Kopf trägt die Summe."""
+    from db_helper import log_start, log_stop
+
+    name = "merge_user"
+    base = datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
+    log_start(project="1", name=name, timestamp=base, conn=app_instance.db_conn)
+    log_stop(project="1", name=name, timestamp=base + timedelta(hours=1), conn=app_instance.db_conn)
+    log_start(project="1", name=name, timestamp=base + timedelta(hours=2), conn=app_instance.db_conn)
+    log_stop(project="1", name=name, timestamp=base + timedelta(hours=3), conn=app_instance.db_conn)
+    app_instance.name_entry.set(name)
+    app_instance.set_today_date()
+    app_instance.update_db_content()
+
+    text = app_instance.day_list.get("1.0", "end-1c")
+    assert "09:00–10:00 · 11:00–12:00" in text
+    # Kopfzeile enthält die Tages-Summe des Projekts.
+    hdr = next(ln for ln in text.splitlines() if ln.startswith("▌ 1"))
+    assert "2:00 h" in hdr
+    # Session-Tags: sess1 existiert und mappt auf die ZWEITE Session.
+    assert app_instance.day_list.tag_ranges("sess1")
+    assert app_instance._tag_sessions["sess1"]["start_ts"] == base + timedelta(hours=2)
+
+
+def test_day_list_layout_b_one_line_per_session(app_instance):
+    """Layout B (chronologisch): eine Zeile je Session, Mapping 1:1."""
+    from db_helper import log_start, log_stop
+
+    name = "chrono_user"
+    base = datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
+    log_start(project="1", name=name, timestamp=base, conn=app_instance.db_conn)
+    log_stop(project="1", name=name, timestamp=base + timedelta(hours=1), conn=app_instance.db_conn)
+    log_start(project="2", name=name, timestamp=base + timedelta(hours=2), conn=app_instance.db_conn)
+    log_stop(project="2", name=name, timestamp=base + timedelta(hours=3), conn=app_instance.db_conn)
+    app_instance.name_entry.set(name)
+    app_instance.set_today_date()
+    app_instance.config["entry_list_chronological"] = True
+    app_instance.update_db_content()
+
+    rows = app_instance.day_list.get("1.0", "end-1c").splitlines()
+    sess_lines = [i + 1 for i, t in enumerate(rows) if "–" in t and "▌" in t]
+    assert len(sess_lines) == 2
+    projects = [app_instance._line_sessions[n]["project"] for n in sess_lines]
+    assert projects == ["1", "2"]
+
+
+def test_day_list_note_without_prefix(app_instance):
+    """Notiz erscheint ohne 'Notiz:'-Präfix und trägt den note-Tag."""
+    from db_helper import log_start, log_stop, set_daily_note
+
+    name = "note_user"
+    base = datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
+    log_start(project="1", name=name, timestamp=base, conn=app_instance.db_conn)
+    log_stop(project="1", name=name, timestamp=base + timedelta(hours=1), conn=app_instance.db_conn)
+    iso_today = datetime.now().strftime("%Y-%m-%d")
+    set_daily_note(app_instance.db_conn, name, "1", iso_today, "Meeting mit Team")
+    app_instance.name_entry.set(name)
+    app_instance.set_today_date()
+    app_instance.update_db_content()
+
+    text = app_instance.day_list.get("1.0", "end-1c")
+    assert "Meeting mit Team" in text
+    assert "Notiz:" not in text
+    ranges = app_instance.day_list.tag_ranges("note")
+    assert ranges
+    assert app_instance.day_list.get(ranges[0], ranges[1]) == "Meeting mit Team"
+
+
+def test_day_list_empty_note_placeholder(app_instance):
+    """Leere Notiz bei vorhandenen Zeiten → graue '(keine Notiz)'-Zeile."""
+    from db_helper import log_start, log_stop
+
+    name = "empty_note_user"
+    base = datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
+    log_start(project="1", name=name, timestamp=base, conn=app_instance.db_conn)
+    log_stop(project="1", name=name, timestamp=base + timedelta(hours=1), conn=app_instance.db_conn)
+    app_instance.name_entry.set(name)
+    app_instance.set_today_date()
+    app_instance.update_db_content()
+
+    assert "(keine Notiz)" in app_instance.day_list.get("1.0", "end-1c")
+
+
+def test_day_list_note_only_project(app_instance):
+    """Projekt mit Notiz aber ohne Events rendert '(keine Zeiten)'."""
+    from db_helper import set_daily_note
+
+    name = "noteonly_user"
+    iso_today = datetime.now().strftime("%Y-%m-%d")
+    set_daily_note(app_instance.db_conn, name, "solo", iso_today, "nur eine Notiz")
+    app_instance.name_entry.set(name)
+    app_instance.set_today_date()
+    app_instance.update_db_content()
+
+    text = app_instance.day_list.get("1.0", "end-1c")
+    assert "(keine Zeiten)" in text
+    assert "nur eine Notiz" in text
+
+
+def test_day_list_takefocus_off(app_instance):
+    """takefocus=0 schützt die globalen Shortcuts (Shortcut-Guard skippt Text)."""
+    assert str(app_instance.day_list.cget("takefocus")) == "0"
+    # Tk setzt bei Mausklick trotzdem den Fokus (tk::TextButton1) — der
+    # FocusIn-Redirect leitet ihn weg, sonst blockiert der Shortcut-Guard
+    # Strg+←/→/T dauerhaft.
+    assert app_instance.day_list.bind("<FocusIn>"), "FocusIn-Redirect fehlt"
+
+
+def test_day_list_user_head_only_without_filter(app_instance):
+    """Ohne Namensfilter: Benutzer-Kopf 'user — Di 23.09.' ohne Session-Mapping."""
+    from db_helper import log_start, log_stop
+
+    base = datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
+    for name in ("head_a", "head_b"):
+        log_start(project="1", name=name, timestamp=base, conn=app_instance.db_conn)
+        log_stop(project="1", name=name, timestamp=base + timedelta(hours=1), conn=app_instance.db_conn)
+    app_instance.name_entry.set("")
+    app_instance.set_today_date()
+    app_instance.update_db_content()
+
+    rows = app_instance.day_list.get("1.0", "end-1c").splitlines()
+    wday = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"][datetime.now().weekday()]
+    expected_date = f"{wday} {datetime.now().strftime('%d.%m.')}"
+    for name in ("head_a", "head_b"):
+        head_line = next(i + 1 for i, t in enumerate(rows) if t == f"{name} — {expected_date}")
+        # Kopfzeile ist kein Doppel-/Rechtsklick-Ziel: kein Session-Mapping.
+        assert head_line not in app_instance._line_sessions
+
+    # Mit aktivem Namensfilter (ein Benutzer) verschwindet der Kopf.
+    app_instance.name_entry.set("head_a")
+    app_instance.update_db_content()
+    assert "head_a —" not in app_instance.day_list.get("1.0", "end-1c")
+
+
+def test_day_list_multiline_note_renders_lines(app_instance):
+    """Mehrzeilige Notiz erscheint als mehrere Zeilen in der Tagesliste."""
+    from db_helper import log_start, log_stop, set_daily_note
+
+    name = "multiline_user"
+    base = datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
+    log_start(project="1", name=name, timestamp=base, conn=app_instance.db_conn)
+    log_stop(project="1", name=name, timestamp=base + timedelta(hours=1), conn=app_instance.db_conn)
+    iso_today = datetime.now().strftime("%Y-%m-%d")
+    set_daily_note(app_instance.db_conn, name, "1", iso_today, "erste Zeile\nzweite Zeile")
+    app_instance.name_entry.set(name)
+    app_instance.set_today_date()
+    app_instance.update_db_content()
+
+    rows = app_instance.day_list.get("1.0", "end-1c").splitlines()
+    assert "erste Zeile" in rows
+    assert "zweite Zeile" in rows
+
+
+def test_note_shift_return_inserts_newline(app_instance):
+    """Shift+Enter fügt einen Umbruch ein; Enter speichert weiterhin."""
+    w = app_instance.note_entry
+    # Die Bindings müssen am Widget verdrahtet sein — der direkte Handler-
+    # Aufruf unten würde eine gelöschte bind()-Zeile sonst nicht bemerken.
+    assert w.bind("<Shift-Return>"), "Binding fehlt: <Shift-Return>"
+    assert w.bind("<Return>"), "Binding fehlt: <Return>"
+    w.delete("1.0", END)
+    w.insert("1.0", "erste")
+    w.mark_set("insert", "end-1c")
+    assert app_instance._on_note_shift_return() == "break"
+    w.insert("insert", "zweite")
+    assert w.get("1.0", "end-1c") == "erste\nzweite"
+    assert app_instance._on_note_return() == "break"
+
+
+def test_note_shift_return_replaces_selection(app_instance):
+    """Shift+Enter ersetzt eine aktive Selektion (wie das native tk::TextInsert)."""
+    w = app_instance.note_entry
+    w.delete("1.0", END)
+    w.insert("1.0", "alles markiert")
+    app_instance._note_select_all()
+    assert app_instance._on_note_shift_return() == "break"
+    assert w.get("1.0", "end-1c") == "\n"
+    assert not w.tag_ranges("sel")
 
 
 def test_toggle_row_transferred_roundtrip(app_instance):

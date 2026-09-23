@@ -6,7 +6,6 @@ import re
 import socket
 import subprocess
 import sys
-import textwrap
 import threading
 import time
 import webbrowser
@@ -101,6 +100,9 @@ logger = logging.getLogger(__name__)
 # So ist das Anlegen eines Projekts direkt im Dropdown sichtbar/auffindbar.
 # Bewusst nur Standard-Zeichen (kein Emoji).
 NEW_PROJECT_LABEL = "+ Neues Projekt …"
+
+# Deutsche Wochentags-Kürzel (Mo=0) für den Benutzer-Kopf der Tagesliste.
+_WDAY_DE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 
 # Standby-Erkennung: Klafft zwischen zwei Timer-Ticks die Wanduhr um mehr als
 # diese Spanne weiter auseinander als die Monotonic-Uhr, war das System im
@@ -419,17 +421,33 @@ class App:
         self.note_label.grid(row=1, column=0, pady=(0, 4), padx=3, sticky="nw")
         # Mehrzeilig dargestelltes Notizfeld: lange Notizen (bis ~44 Wörter) sind
         # so lesbar umgebrochen; Höhe per Einstellung "note_field_lines" (1–6).
-        # Inhaltlich bleibt die Notiz einzeilig (clamp_note kollabiert
-        # Whitespace) — Enter speichert und fügt KEINEN Umbruch ein.
+        # Enter speichert; Shift+Enter fügt einen echten Zeilenumbruch ein
+        # (clamp_note erhält Umbrüche, max. 6 Zeilen).
         note_lines = int(self.config.get("note_field_lines", 2))
         self.note_entry = Text(
             self.entry_frame, height=note_lines, wrap="word", relief="sunken", borderwidth=2, **entry_config
         )
         self.note_entry.grid(row=1, column=1, columnspan=6, pady=(0, 4), padx=3, sticky="ew")
         self.note_entry.bind("<Return>", self._on_note_return)
+        # Spezifischeres Binding gewinnt in Tk automatisch vor <Return>.
+        self.note_entry.bind("<Shift-Return>", self._on_note_shift_return)
         self.note_entry.bind("<FocusOut>", self._on_note_changed)
         self._bind_note_navigation()
-        _ToolTip(self.note_entry, "Notiz für dieses Datum + Projekt (max. 44 Wörter)")
+        _ToolTip(self.note_entry, "Notiz für dieses Datum + Projekt (max. 44 Wörter) · Shift+Enter: Zeilenumbruch")
+        # Platzhalter als Overlay-Label ÜBER dem Feld — bewusst KEIN Text im
+        # Widget-Inhalt (der würde mit _flush_pending_note/clamp_note kollidieren).
+        self._note_placeholder = Label(
+            self.entry_frame, text="Notiz…", bg="#FFFFFF", fg="#909090", font=("MS Sans Serif", 10)
+        )
+        self._note_placeholder.bind("<Button-1>", lambda _e: self.note_entry.focus_set())
+        self.note_entry.bind("<KeyRelease>", lambda _e: self._update_note_placeholder(), add="+")
+        # Mittelklick-Paste (X11 PRIMARY-Selection) ändert den Text ohne
+        # KeyRelease — das Klassenbinding insertet erst NACH dem Widget-
+        # Binding, daher via after_idle prüfen, sonst bliebe das Overlay stehen.
+        self.note_entry.bind(
+            "<ButtonRelease-2>", lambda _e: self.note_entry.after_idle(self._update_note_placeholder), add="+"
+        )
+        self._update_note_placeholder()
         # Übertragen-Status: markiert, dass diese Zeit (Projekt+Tag) bereits
         # manuell ins Firmensystem eingetragen wurde. Setzt beim Anhaken das
         # heutige Datum als Übertragungsdatum.
@@ -524,22 +542,50 @@ class App:
         self.db_content_frame = Frame(self.frame, bg="#C0C0C0")
         self.db_content_frame.grid(row=3, column=0, columnspan=6, pady=5, padx=5, sticky="nsew")
 
-        self.db_content_listbox = Listbox(self.db_content_frame, bg="#FFFFFF", fg="black", font=("MS Sans Serif", 10))
-        self.db_content_listbox.grid(row=0, column=0, sticky="nsew")
-        self.db_content_listbox.bind("<Double-1>", self._edit_event)
-        self.db_content_listbox.bind("<Button-3>", self._show_row_context_menu)
-        _ToolTip(self.db_content_listbox, "Doppelklick: Session bearbeiten · Rechtsklick: Menü")
-        # Parallele Map zu den Listbox-Zeilen: None für Kopf-/Notiz-Zeilen, sonst
-        # ein Session-Dict {start_id, stop_id, project, user, date_iso, ...}.
+        # Tagesliste als Text-Widget: Tags liefern die visuelle Hierarchie
+        # (Projekt fett + Farbbalken, Zeiten eingerückt, Notizen grau).
+        # takefocus=0 ist zwingend: _shortcut_guard überspringt fokussierte
+        # Text-Widgets — bekäme die Liste je Fokus, schluckte sie Strg+←/→/T.
+        self.day_list = Text(
+            self.db_content_frame,
+            bg="#FFFFFF",
+            fg="black",
+            font=("MS Sans Serif", 10),
+            relief="sunken",
+            borderwidth=2,
+            wrap="word",
+            state="disabled",
+            cursor="arrow",
+            takefocus=0,
+        )
+        self.day_list.grid(row=0, column=0, sticky="nsew")
+        # Fokus sofort wegleiten: Tks tk::TextButton1 setzt bei Mausklick
+        # BEDINGUNGSLOS den Fokus (takefocus=0 wirkt nur auf Tab-Traversal) —
+        # ein fokussiertes Text-Widget würde über _shortcut_guard die globalen
+        # Shortcuts Strg+←/→/T blockieren, bis man woanders hinklickt.
+        self.day_list.bind("<FocusIn>", lambda _e: self.master.focus_set())
+        self.day_list.bind("<Double-1>", self._edit_event)
+        self.day_list.bind("<Button-3>", self._show_row_context_menu)
+        self.day_list.bind("<Motion>", self._on_day_list_motion)
+        self.day_list.bind("<Leave>", self._on_day_list_leave)
+        self.day_list.bind("<Configure>", lambda _e: self._update_day_list_tabs())
+        _ToolTip(self.day_list, "Doppelklick: Session bearbeiten · Rechtsklick: Menü")
+        # Klick-Auflösung: Zeilennummer → Session (Kopf-/Zeiten-Zeile),
+        # Session-Tag → Session (präzise auf der ·-getrennten Zeiten-Zeile)
+        # und flache Session-Liste des Tages für den Open-Start-Scan.
         # Projekt-Kopfzeilen (Layout A) tragen die erste Session des Projekts,
         # damit Doppel-/Rechtsklick auch dort funktioniert.
-        self._row_entries: list[dict | None] = []
+        self._line_sessions: dict[int, dict] = {}
+        self._tag_sessions: dict[str, dict] = {}
+        self._day_sessions: list[dict] = []
+        self._day_list_tabs_ready = False
+        self._init_day_list_tags()
 
         self.scrollbar_listbox = Scrollbar(
-            self.db_content_frame, orient=VERTICAL, command=self.db_content_listbox.yview, bg="#C0C0C0", width=16
+            self.db_content_frame, orient=VERTICAL, command=self.day_list.yview, bg="#C0C0C0", width=16
         )
         self.scrollbar_listbox.grid(row=0, column=1, sticky="ns")
-        self.db_content_listbox["yscrollcommand"] = self.scrollbar_listbox.set
+        self.day_list["yscrollcommand"] = self.scrollbar_listbox.set
 
         # Wochen-Kachel — überlagert die Listbox, nicht den Timer.
         self._build_week_frame()
@@ -3101,26 +3147,67 @@ class App:
             return f"{start} → {stop}", "läuft"
         return f"{start} → {stop}", App._fmt_hours_hm(s["dur_h"])
 
-    @staticmethod
-    def _note_rows(note: str, indent: str, width: int = 88) -> list[str]:
-        """Notiz-Zeile(n) für den Session-Viewer: bei Bedarf umbrochen.
+    def _init_day_list_tags(self) -> None:
+        """Definiert die festen Text-Tags der Tagesliste (einmalig beim Aufbau).
 
-        Lange Notizen (bis ~44 Wörter) werden an Wortgrenzen über mehrere Zeilen
-        umgebrochen, damit die volle Notiz lesbar bleibt (wichtig für den Übertrag
-        ins Firmensystem). Fortsetzungszeilen werden unter dem Notiz-Text
-        eingerückt.
+        Reihenfolge ist relevant: später definierte Tags haben in Tk höhere
+        Priorität — ``dur`` überschreibt so das Fett der Kopfzeile, ``dim``
+        das Grau von ``note``.
         """
-        label = f"{indent}Notiz: "
-        text = note or "—"
-        avail = max(10, width - len(label))
-        wrapped = textwrap.wrap(text, width=avail) or ["—"]
-        cont = " " * len(label)
-        return [label + wrapped[0]] + [cont + line for line in wrapped[1:]]
+        tw = self.day_list
+        tw.tag_configure("user", font=("MS Sans Serif", 9), foreground="#404040", spacing1=6, spacing3=2)
+        tw.tag_configure("proj_head", font=("MS Sans Serif", 10, "bold"), spacing1=8, lmargin1=2)
+        tw.tag_configure("dur", font=("MS Sans Serif", 10))
+        tw.tag_configure("check", foreground="#008000")
+        tw.tag_configure("times", lmargin1=22, lmargin2=22)
+        tw.tag_configure("note", lmargin1=22, lmargin2=22, foreground="#606060")
+        tw.tag_configure("dim", foreground="#808080")
+        tw.tag_configure("hover", background="#ECECEC")
+        tw.tag_configure("active_line", background="#D8D8D8")
+
+    def _update_day_list_tabs(self) -> None:
+        """Setzt den rechtsbündigen Tab-Stop der Kopfzeilen auf die Widgetbreite."""
+        width = self.day_list.winfo_width()
+        if width > 1:
+            self.day_list.tag_configure("proj_head", tabs=(width - 24, "right"))
+
+    def _day_list_bar_tag(self, project: str) -> str:
+        """Lazy-Tag für den Projekt-Farbbalken (▌) in der Projektfarbe.
+
+        Nutzt die in der Wochenansicht persistierte Zuordnung
+        (config['project_colors']), fällt sonst auf ``project_color()`` zurück —
+        Balken und Wochen-Segmente zeigen so dieselbe Farbe.
+        """
+        colors = self.config.get("project_colors")
+        color = colors.get(project) if isinstance(colors, dict) else None
+        if not color:
+            color = project_color(project)
+        tag = f"bar_{color.lstrip('#')}"
+        self.day_list.tag_configure(tag, foreground=color)
+        return tag
 
     def update_db_content(self):
-        """Update the database content listbox with the latest data."""
-        self.db_content_listbox.delete(0, END)
-        self._row_entries = []
+        """Baut die Tagesliste (Text-Widget) aus der Datenbank neu auf."""
+        tw = self.day_list
+        for t in tw.tag_names():
+            if t.startswith("sess"):
+                tw.tag_delete(t)
+        self._line_sessions = {}
+        self._tag_sessions = {}
+        self._day_sessions = []
+        if not self._day_list_tabs_ready:
+            tw.update_idletasks()
+            self._day_list_tabs_ready = True
+        self._update_day_list_tabs()
+        tw.configure(state="normal")
+        try:
+            tw.delete("1.0", END)
+            self._render_day_list(tw)
+        finally:
+            tw.configure(state="disabled")
+
+    def _render_day_list(self, tw):
+        """Rendert den Inhalt der Tagesliste (läuft mit state='normal')."""
         if self.db_conn:
             cursor = self.db_conn.cursor()
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='events';")
@@ -3232,9 +3319,33 @@ class App:
 
             if events or note_only:
 
-                def _row(text, entry=None):
-                    self.db_content_listbox.insert(END, text)
-                    self._row_entries.append(entry)
+                def _emit(segments, session=None):
+                    """Fügt eine Zeile aus (Text, Tags)-Segmenten ein + Mapping."""
+                    line_no = int(tw.index("end-1c").split(".")[0])
+                    for text, tags in segments:
+                        tw.insert(END, text, tags)
+                    tw.insert(END, "\n")
+                    if session is not None:
+                        self._line_sessions[line_no] = session
+
+                def _range_str(s):
+                    start = s["start_ts"].strftime("%H:%M") if s["start_ts"] else "…"
+                    stop = s["stop_ts"].strftime("%H:%M") if s["stop_ts"] else "…"
+                    return f"{start}–{stop}"
+
+                def _note_line(note):
+                    if note:
+                        _emit([(note, ("note",))])
+                    else:
+                        _emit([("(keine Notiz)", ("note", "dim"))])
+
+                def _register(s):
+                    """Session in Tag-/Tages-Mapping aufnehmen; liefert (dict, Tag)."""
+                    full = {**s, "date_iso": view_iso}
+                    stag = f"sess{len(self._day_sessions)}"
+                    self._day_sessions.append(full)
+                    self._tag_sessions[stag] = full
+                    return full, stag
 
                 # Bewusst KEINE Datums-Kopfzeile mehr: das Datum steht bereits
                 # im (gelb markierten) Datumsfeld und in der Statusleiste.
@@ -3248,8 +3359,18 @@ class App:
                     if uname not in users_order:
                         users_order.append(uname)
 
+                # Benutzer-Kopf nur, wenn die Zuordnung nicht ohnehin klar ist
+                # (kein Benutzer-Filter oder mehrere Benutzer sichtbar).
+                show_user_head = not current_name or len(users_order) > 1
+                try:
+                    d = datetime.strptime(view_date, UI_DATE_FORMAT)
+                    head_date = f"{_WDAY_DE[d.weekday()]} {d.strftime('%d.%m.')}"
+                except ValueError:
+                    head_date = view_date
+
                 for user in users_order:
-                    _row(f"Benutzer: {user}")
+                    if show_user_head:
+                        _emit([(f"{user} — {head_date}", ("user",))])
                     user_sessions = [s for s in sessions if s["user"] == user]
                     if not chronological:
                         # Layout A: nach Projekt gruppiert.
@@ -3259,64 +3380,111 @@ class App:
                                 projects_order.append(s["project"])
                         for project in projects_order:
                             meta = _meta(user, project)
-                            head = f"  Projekt {project}"
-                            if meta["transferred"]:
-                                head += "   ✓ übertragen"
+                            bar = self._day_list_bar_tag(project)
                             proj_sessions = [ps for ps in user_sessions if ps["project"] == project]
+                            total_h = sum(ps["dur_h"] or 0.0 for ps in proj_sessions)
                             # Kopfzeile trägt die erste Session, damit Doppel-/
                             # Rechtsklick auch auf ihr den Editor bzw. das Menü öffnet.
-                            _row(head, {**proj_sessions[0], "date_iso": view_iso})
+                            head = [
+                                ("▌ ", ("proj_head", bar)),
+                                (project, ("proj_head",)),
+                                ("\t", ("proj_head",)),
+                                (self._fmt_hours_hm(total_h), ("dur",)),
+                            ]
+                            if meta["transferred"]:
+                                head.append((" ✓", ("check",)))
+                            _emit(head, {**proj_sessions[0], "date_iso": view_iso})
+                            segs = []
+                            first_full = None
                             for s in proj_sessions:
-                                times, dur = self._session_times_str(s)
-                                _row(f"    {times}  ({dur})", {**s, "date_iso": view_iso})
-                            for ln in self._note_rows(meta["note"], "    "):
-                                _row(ln)
+                                full, stag = _register(s)
+                                first_full = first_full or full
+                                if segs:
+                                    segs.append((" · ", ("times",)))
+                                segs.append((_range_str(s), ("times", stag)))
+                            _emit(segs, first_full)
+                            _note_line(meta["note"])
                     else:
                         # Layout B: chronologisch, Projekt je Zeile.
                         for s in user_sessions:
                             meta = _meta(user, s["project"])
-                            times, dur = self._session_times_str(s)
-                            mark = "  ✓" if meta["transferred"] else ""
-                            _row(f"  {times}  Projekt {s['project']}  ({dur}){mark}", {**s, "date_iso": view_iso})
-                            for ln in self._note_rows(meta["note"], "     "):
-                                _row(ln)
+                            full, stag = _register(s)
+                            _, dur = self._session_times_str(s)
+                            segs = [
+                                ("▌ ", (self._day_list_bar_tag(s["project"]),)),
+                                (f"{_range_str(s)}  ", (stag,)),
+                                (s["project"], ()),
+                                (f"  ({dur})", ("dur",)),
+                            ]
+                            if meta["transferred"]:
+                                segs.append((" ✓", ("check",)))
+                            _emit(segs, full)
+                            _note_line(meta["note"])
 
                     # Notiz/✓-Projekte ohne Zeiten ans Ende der Nutzergruppe.
                     for project in sorted(note_only.get(user, [])):
                         meta = _meta(user, project)
-                        head = f"  Projekt {project}   (keine Zeiten)"
+                        head = [
+                            ("▌ ", ("proj_head", self._day_list_bar_tag(project))),
+                            (project, ("proj_head",)),
+                            ("  (keine Zeiten)", ("dim",)),
+                        ]
                         if meta["transferred"]:
-                            head += "   ✓ übertragen"
-                        _row(head)
-                        for ln in self._note_rows(meta["note"], "    "):
-                            _row(ln)
+                            head.append((" ✓", ("check",)))
+                        _emit(head)
+                        _note_line(meta["note"])
 
                 # Phase 2.4: Hinweis, wenn das Listenlimit greift.
                 if total_count > limit:
-                    _row(f"… {total_count - limit} weitere Einträge ausgeblendet (Limit {limit})")
+                    _emit([(f"… {total_count - limit} weitere Einträge ausgeblendet (Limit {limit})", ("dim",))])
+
+    def _event_session(self, event) -> dict | None:
+        """Session unter dem Mauszeiger; None auf Kopf-/Notiz-/Leerbereich."""
+        tw = self.day_list
+        idx = tw.index(f"@{event.x},{event.y}")
+        # index() clampt auch Klicks weit unterhalb der letzten Zeile auf
+        # deren Index — nur reagieren, wenn der Klick die Zeile wirklich trifft.
+        info = tw.dlineinfo(idx)
+        if not info or not (info[1] <= event.y <= info[1] + info[3]):
+            return None
+        # Session-Tags zuerst: auf der ·-Zeitenzeile trifft der Klick so die
+        # exakte Session statt nur der ersten der Zeile.
+        for t in tw.tag_names(idx):
+            if t in self._tag_sessions:
+                return self._tag_sessions[t]
+        return self._line_sessions.get(int(idx.split(".")[0]))
+
+    def _on_day_list_motion(self, event) -> None:
+        """Hinterlegt die Zeile unter dem Cursor (Klick-Affordanz)."""
+        tw = self.day_list
+        tw.tag_remove("hover", "1.0", END)
+        idx = tw.index(f"@{event.x},{event.y}")
+        info = tw.dlineinfo(idx)
+        line = int(idx.split(".")[0])
+        if info and info[1] <= event.y <= info[1] + info[3] and line in self._line_sessions:
+            tw.tag_add("hover", f"{line}.0", f"{line}.end")
+
+    def _on_day_list_leave(self, _event=None) -> None:
+        self.day_list.tag_remove("hover", "1.0", END)
 
     def _show_row_context_menu(self, event):
         """Rechtsklick auf eine Session-Zeile: Menü mit Bearbeiten + ✓-Toggle."""
-        idx = self.db_content_listbox.nearest(event.y)
-        if idx < 0 or idx >= len(self._row_entries):
-            return
-        # nearest() clampt auch Klicks weit unterhalb der letzten Zeile auf
-        # deren Index — nur reagieren, wenn der Klick die Zeile wirklich trifft.
-        bbox = self.db_content_listbox.bbox(idx)
-        if not bbox or not (bbox[1] <= event.y <= bbox[1] + bbox[3]):
-            return
-        session = self._row_entries[idx]
-        if not isinstance(session, dict):
+        session = self._event_session(event)
+        if session is None:
             return  # Kopf-/Notiz-/Limit-Zeile ohne Session
-        self.db_content_listbox.selection_clear(0, END)
-        self.db_content_listbox.selection_set(idx)
-        self.db_content_listbox.activate(idx)
+        tw = self.day_list
+        line = int(tw.index(f"@{event.x},{event.y}").split(".")[0])
+        tw.tag_remove("active_line", "1.0", END)
+        tw.tag_add("active_line", f"{line}.0", f"{line}.end")
 
-        menu = Menu(self.db_content_listbox, tearoff=0)
+        menu = Menu(tw, tearoff=0)
         # Tk räumt Menü-Widgets nicht selbst ab — ohne destroy akkumuliert
         # jeder Rechtsklick ein Widget über die gesamte App-Laufzeit.
-        menu.bind("<Unmap>", lambda _e: menu.after_idle(menu.destroy))
-        menu.add_command(label="Bearbeiten…", command=self._edit_event)
+        menu.bind(
+            "<Unmap>",
+            lambda _e: (tw.tag_remove("active_line", "1.0", END), menu.after_idle(menu.destroy)),
+        )
+        menu.add_command(label="Bearbeiten…", command=lambda s=session: self._edit_event(session=s))
         date_iso = session.get("date_iso")
         if date_iso:
             meta = get_daily_meta(self.db_conn, session["user"], session["project"], date_iso)
@@ -3353,21 +3521,20 @@ class App:
         if self._week_view_active:
             self._refresh_week_view()
 
-    def _edit_event(self, event=None):
+    def _edit_event(self, event=None, session=None):
         """Open the session editor for the double-clicked session row.
 
         Eine Session bündelt Start- und Stopp-Event. Der Dialog editiert Projekt,
         Datum, Start-/Endzeit, Notiz und Übertragen-Status in einem Rutsch.
+        ``"break"`` unterdrückt die Wort-Selektion des Text-Widgets beim
+        Doppelklick.
         """
-        sel = self.db_content_listbox.curselection()
-        if not sel:
-            return
-        idx = sel[0]
-        if idx >= len(self._row_entries):
-            return
-        session = self._row_entries[idx]
+        if session is None:
+            if event is None:
+                return None
+            session = self._event_session(event)
         if not isinstance(session, dict):
-            return  # Kopf-/Notiz-/Limit-Zeile
+            return "break"  # Kopf-/Notiz-/Limit-Zeile
 
         user = session["user"]
         project = session["project"]
@@ -3385,9 +3552,8 @@ class App:
         # Session tatsächlich aktiv ist.
         open_starts = [
             s["start_ts"]
-            for s in self._row_entries
-            if isinstance(s, dict)
-            and s.get("user") == user
+            for s in self._day_sessions
+            if s.get("user") == user
             and s.get("project") == project
             and s.get("stop_id") is None
             and s.get("start_ts") is not None
@@ -3402,7 +3568,7 @@ class App:
             "zuerst über den Stop-Button beenden.\n\nNotiz/Status jetzt bearbeiten?",
             parent=self.master,
         ):
-            return
+            return "break"
 
         meta = (
             get_daily_meta(self.db_conn, user, project, orig_iso)
@@ -3491,8 +3657,19 @@ class App:
         note_entry_edit = Text(win, height=2, wrap="word", **entry_cfg, width=30)
         note_entry_edit.insert("1.0", initial_note)
         note_entry_edit.grid(row=4, column=1, padx=8, pady=4, sticky="ew")
-        note_entry_edit.bind("<Return>", lambda _e: "break")  # kein Zeilenumbruch in Notizen
-        _ToolTip(note_entry_edit, "Notiz für dieses Datum + Projekt (max. 44 Wörter)")
+        note_entry_edit.bind("<Return>", lambda _e: "break")  # Enter fügt keinen Umbruch ein
+
+        def _note_edit_newline(_e):
+            # Wie das native tk::TextInsert: aktive Selektion ersetzen statt
+            # den Umbruch nur an der Einfügemarke daneben einzufügen.
+            if note_entry_edit.tag_ranges("sel"):
+                note_entry_edit.delete("sel.first", "sel.last")
+            note_entry_edit.insert("insert", "\n")
+            return "break"
+
+        # Shift+Enter = Umbruch, wie im Notizfeld des Hauptfensters.
+        note_entry_edit.bind("<Shift-Return>", _note_edit_newline)
+        _ToolTip(note_entry_edit, "Notiz für dieses Datum + Projekt (max. 44 Wörter) · Shift+Enter: Zeilenumbruch")
 
         # Übertragen-Status
         transferred_var = BooleanVar(value=initial_transferred)
@@ -3671,6 +3848,7 @@ class App:
         win.bind("<Return>", lambda _e: _save())
         # NACH dem Inhaltsaufbau: Größe an Inhalt anpassen + zentrieren.
         self._fit_and_center(win, min_w=460)
+        return "break"
 
     def _check_suspend_gap(self) -> None:
         """Erkennt Suspend/Hibernate zwischen zwei Timer-Ticks und stoppt rückdatiert.
@@ -3962,6 +4140,7 @@ class App:
             self._transferred_var.set(False)
             self.transferred_check.configure(state="disabled")
             self._note_loaded_key = None
+            self._update_note_placeholder()
             return
         meta = get_daily_meta(self.db_conn, name, project, date_iso)
         self.note_entry.delete("1.0", END)
@@ -3970,6 +4149,7 @@ class App:
         self.transferred_check.configure(state="normal")
         self._note_loaded_key = (name, project, date_iso)
         self._note_loaded_text = meta["note"]
+        self._update_note_placeholder()
 
     def _flush_pending_note(self) -> bool:
         """Persistiert eine noch nicht gespeicherte Notiz aus dem Eingabefeld.
@@ -3997,6 +4177,7 @@ class App:
         if cleaned != self.note_entry.get("1.0", "end-1c"):
             self.note_entry.delete("1.0", END)
             self.note_entry.insert("1.0", cleaned)
+        self._update_note_placeholder()
         set_daily_note(self.db_conn, name, project, date_iso, cleaned)
         self._note_loaded_text = cleaned
         return True
@@ -4022,11 +4203,31 @@ class App:
     def _on_note_return(self, _event=None) -> str:
         """Enter im Notizfeld: speichern, aber KEINEN Zeilenumbruch einfügen.
 
-        Das Feld ist zweizeilig nur zur besseren Lesbarkeit langer Notizen; der
-        Inhalt bleibt einzeilig (``\"break\"`` unterdrückt den Standard-Umbruch).
+        Umbrüche fügt Shift+Enter ein (``_on_note_shift_return``); ``"break"``
+        unterdrückt den Standard-Umbruch des Text-Widgets.
         """
         self._on_note_changed()
         return "break"
+
+    def _on_note_shift_return(self, _event=None) -> str:
+        """Shift+Enter im Notizfeld: Zeilenumbruch einfügen (Enter speichert)."""
+        w = self.note_entry
+        # Wie das native tk::TextInsert: eine aktive Selektion wird durch die
+        # Eingabe ersetzt — sonst bliebe die Markierung neben dem Umbruch stehen.
+        if w.tag_ranges("sel"):
+            w.delete("sel.first", "sel.last")
+        w.insert("insert", "\n")
+        return "break"
+
+    def _update_note_placeholder(self) -> None:
+        """Blendet das „Notiz…"-Overlay ein, solange das Feld leer ist."""
+        ph = getattr(self, "_note_placeholder", None)
+        if ph is None:
+            return
+        if self.note_entry.get("1.0", "end-1c"):
+            ph.place_forget()
+        else:
+            ph.place(in_=self.note_entry, x=4, y=2)
 
     def _on_note_changed(self, _event=None) -> None:
         """FocusOut/Return des Notizfeldes: speichern und Ansichten aktualisieren."""

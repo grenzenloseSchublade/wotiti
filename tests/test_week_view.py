@@ -155,3 +155,18 @@ def test_week_legend_shows_project_totals(app_instance):
     assert "█ A 1:00" in texts
     assert "█ B 1:00" in texts
     assert any(t.startswith("Σ") and "2:00 h" in t for t in texts)
+
+
+def test_week_cell_tooltip_flattens_multiline_note(app_instance):
+    """Mehrzeilige Notiz erscheint in der Tages-Kompaktzeile mit »·« statt Umbruch."""
+    from db_helper import set_daily_note
+
+    iso_today = _seed_today(app_instance, projects=("A",))
+    set_daily_note(app_instance.db_conn, "test_user", "A", iso_today, "erste Zeile\nzweite Zeile")
+    week_view = app_instance.week_view
+    week_view.refresh()
+
+    tips = [tip._text for tip in week_view._cell_tips if "A:" in tip._text]
+    assert tips
+    proj_line = next(ln for ln in tips[0].splitlines() if ln.strip().startswith("A:"))
+    assert "erste Zeile · zweite Zeile" in proj_line

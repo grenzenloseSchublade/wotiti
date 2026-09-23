@@ -76,8 +76,11 @@ class _ToolTip:
         # (Refresh baut Segment-Labels neu) — dann still nichts anzeigen.
         if self._tw or not self._text or not self._widget.winfo_exists():
             return
-        x = self._widget.winfo_rootx() + self._widget.winfo_width() // 2
-        y = self._widget.winfo_rooty() + self._widget.winfo_height() + 2
+        # Position am Mauszeiger statt am Widget: bei breiten Widgets
+        # (Tagesliste, Notizfeld) säße die Box sonst weit vom Cursor entfernt.
+        # Versatz groß genug, dass der Cursor die Box nicht überdeckt.
+        x = self._widget.winfo_pointerx() + 12
+        y = self._widget.winfo_pointery() + 16
         self._tw = tw = Toplevel(self._widget)
         tw.wm_overrideredirect(True)
         tw.wm_geometry(f"+{x}+{y}")
@@ -94,6 +97,14 @@ class _ToolTip:
             wraplength=320,
         )
         self._label.pack()
+        # Bildschirmrand-Klemmung: läuft die Box rechts/unten hinaus, auf die
+        # jeweils andere Seite des Cursors klappen.
+        tw.update_idletasks()
+        if x + tw.winfo_reqwidth() > self._widget.winfo_screenwidth():
+            x = max(0, self._widget.winfo_pointerx() - tw.winfo_reqwidth() - 12)
+        if y + tw.winfo_reqheight() > self._widget.winfo_screenheight():
+            y = max(0, self._widget.winfo_pointery() - tw.winfo_reqheight() - 16)
+        tw.wm_geometry(f"+{x}+{y}")
 
     def _hide(self, _event=None):
         self._cancel()
