@@ -1,5 +1,6 @@
 import os
 import sys
+from datetime import timedelta
 
 import pytest
 
@@ -1211,3 +1212,207 @@ def test_old_journal_db_opens_and_reads(tmp_path):
         assert conn.execute("PRAGMA journal_mode=DELETE").fetchone()[0].lower() == "delete"
     finally:
         conn.close()
+
+
+# --- Commit 11: migrate_legacy_user_tables (Alt-DB bleibt importierbar) -----
+
+
+def _make_legacy_db(path, tables):
+    """Baut eine synthetische Alt-Schema-DB: nur ``user_<name>``-Eventtabellen.
+
+    ``tables``: {tabellenname: [(project, event_type, timestamp, date), ...]}.
+    Bewusst mit nacktem sqlite3.connect angelegt — wie eine DB aus der Zeit
+    vor der zentralen events-Tabelle.
+    """
+    import sqlite3
+
+    old = sqlite3.connect(path)
+    for table_name, rows in tables.items():
+        old.execute(
+            f'CREATE TABLE "{table_name}" ('
+            " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " project TEXT NOT NULL,"
+            " event_type TEXT,"
+            " timestamp DATETIME NOT NULL,"
+            " date TEXT NOT NULL)"
+        )
+        old.executemany(
+            f'INSERT INTO "{table_name}" (project, event_type, timestamp, date) VALUES (?, ?, ?, ?)',
+            rows,
+        )
+    old.commit()
+    old.close()
+
+
+def test_migrate_legacy_user_tables_full_and_idempotent(tmp_path):
+    """Alt-Schema-DB (user_<name>-Tabellen): Migration vollständig, zweiter
+    Lauf idempotent (Marker in migration_log) — der Beweis, dass alte DBs
+    importierbar bleiben."""
+    from db_helper import migrate_legacy_user_tables
+
+    db_file = str(tmp_path / "legacy.db")
+    hans_rows = [
+        ("P1", "start", "2020-05-04 09:00:00", "04-05-2020"),
+        ("P1", "stop", "2020-05-04 17:00:00", "04-05-2020"),
+        ("P2", "start", "2020-05-05 08:30:00", "05-05-2020"),
+    ]
+    karla_rows = [("P1", "start", "2020-05-04 10:00:00", "04-05-2020")]
+    _make_legacy_db(db_file, {"hans_events": hans_rows, "karla_events": karla_rows})
+
+    conn = create_connection(db_file)
+    try:
+        assert create_main_table(conn) is True
+        assert migrate_legacy_user_tables(conn) is True
+
+        # Benutzer wurden aus den Tabellennamen angelegt.
+        users = dict(conn.execute("SELECT name, id FROM users").fetchall())
+        assert set(users) == {"hans", "karla"}
+
+        # Daten vollständig und feldgenau übernommen.
+        migrated = conn.execute(
+            "SELECT u.name, e.project, e.event_type, e.timestamp, e.date"
+            " FROM events e JOIN users u ON u.id = e.user_id ORDER BY e.id"
+        ).fetchall()
+        assert migrated == [("hans", *r) for r in hans_rows] + [("karla", *r) for r in karla_rows]
+
+        # Marker je Tabelle gesetzt; Legacy-Tabellen bleiben unangetastet.
+        log_tables = {r[0] for r in conn.execute("SELECT table_name FROM migration_log").fetchall()}
+        assert log_tables == {"hans_events", "karla_events"}
+        assert conn.execute('SELECT COUNT(*) FROM "hans_events"').fetchone()[0] == len(hans_rows)
+
+        # Zweiter Lauf (z. B. nächster App-Start): keine Duplikate.
+        assert migrate_legacy_user_tables(conn) is True
+        assert conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == len(hans_rows) + len(karla_rows)
+        assert conn.execute("SELECT COUNT(*) FROM migration_log").fetchone()[0] == 2
+    finally:
+        conn.close()
+
+
+def test_migrate_legacy_skips_non_legacy_schema(tmp_path):
+    """Eine *_events-Tabelle ohne Legacy-Spalten wird defensiv übersprungen
+    (kein Marker, keine Events) — die Migration läuft trotzdem durch."""
+    import sqlite3
+
+    from db_helper import migrate_legacy_user_tables
+
+    db_file = str(tmp_path / "kaputt.db")
+    old = sqlite3.connect(db_file)
+    old.execute('CREATE TABLE "kaputt_events" (id INTEGER PRIMARY KEY, payload TEXT)')
+    old.execute("INSERT INTO \"kaputt_events\" (payload) VALUES ('x')")
+    old.commit()
+    old.close()
+
+    conn = create_connection(db_file)
+    try:
+        create_main_table(conn)
+        assert migrate_legacy_user_tables(conn) is True
+        assert conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM migration_log").fetchone()[0] == 0
+        # break_events (endet ebenfalls auf _events) darf nie als Legacy gelten.
+        assert "break_events" not in {r[0] for r in conn.execute("SELECT table_name FROM migration_log").fetchall()}
+    finally:
+        conn.close()
+
+
+def test_migrate_legacy_without_connection_returns_false():
+    from db_helper import migrate_legacy_user_tables
+
+    assert migrate_legacy_user_tables(None) is False
+
+
+# --- Commit 11: Break-Lebenszyklus (Crash-Recovery während einer Pause) -----
+
+
+def test_get_open_break_roundtrip(db_conn):
+    """log_break_start → get_open_break liefert die offene Pause; nach
+    log_break_stop ist sie geschlossen (Dauer korrekt)."""
+    from datetime import datetime as _dt
+
+    from db_helper import get_open_break, log_break_start, log_break_stop
+
+    check_user(db_conn, "brk_user")
+    assert get_open_break("P", "brk_user", conn=db_conn) is None
+
+    started = _dt(2026, 6, 23, 12, 0)
+    assert (
+        log_break_start(
+            project="P",
+            name="brk_user",
+            break_kind="short",
+            is_auto=True,
+            source="pomodoro_break",
+            started_at=started,
+            conn=db_conn,
+        )
+        is True
+    )
+    ob = get_open_break("P", "brk_user", conn=db_conn)
+    assert ob is not None
+    assert ob["break_kind"] == "short"
+    assert ob["started_at"] == "2026-06-23 12:00:00"
+    assert ob["is_auto"] is True
+    assert ob["source"] == "pomodoro_break"
+
+    assert log_break_stop(project="P", name="brk_user", ended_at=started + timedelta(minutes=10), conn=db_conn) is True
+    assert get_open_break("P", "brk_user", conn=db_conn) is None
+    row = db_conn.execute("SELECT ended_at, duration_seconds FROM break_events WHERE id = ?", (ob["id"],)).fetchone()
+    assert row == ("2026-06-23 12:10:00", 600)
+
+
+def test_log_break_start_no_duplicate_open_break(db_conn):
+    """Ein zweiter Start bei bereits offener Pause legt KEINE zweite Zeile an."""
+    from datetime import datetime as _dt
+
+    from db_helper import log_break_start
+
+    check_user(db_conn, "brk_dup")
+    started = _dt(2026, 6, 23, 12, 0)
+    assert log_break_start(project="P", name="brk_dup", break_kind="manual", started_at=started, conn=db_conn) is True
+    assert (
+        log_break_start(
+            project="P", name="brk_dup", break_kind="manual", started_at=started + timedelta(minutes=1), conn=db_conn
+        )
+        is True
+    )
+    assert db_conn.execute("SELECT COUNT(*) FROM break_events WHERE ended_at IS NULL").fetchone()[0] == 1
+
+
+def test_close_stale_breaks_after_crash(db_conn):
+    """Crash während einer Pause: der nächste Start schließt die verwaiste
+    Pause mit ended_at = started_at und Dauer 0 (Spiegel von
+    close_stale_sessions) — die Wanduhr-Zeit über den Crash hinweg ist keine
+    Pause. Zweiter Lauf ist idempotent."""
+    from datetime import datetime as _dt
+
+    from db_helper import close_stale_breaks, get_open_break, log_break_start
+
+    check_user(db_conn, "brk_crash")
+    started = _dt(2026, 6, 22, 15, 0)  # „gestern" — App danach abgestürzt
+    log_break_start(project="P", name="brk_crash", break_kind="long", started_at=started, conn=db_conn)
+    assert get_open_break("P", "brk_crash", conn=db_conn) is not None
+
+    assert close_stale_breaks(db_conn) == 1
+    assert get_open_break("P", "brk_crash", conn=db_conn) is None
+    row = db_conn.execute("SELECT started_at, ended_at, duration_seconds FROM break_events").fetchone()
+    assert row == ("2026-06-22 15:00:00", "2026-06-22 15:00:00", 0)
+
+    assert close_stale_breaks(db_conn) == 0  # idempotent
+
+
+def test_close_stale_breaks_noop_cases(db_conn):
+    """Ohne Verbindung bzw. ohne offene Pausen: 0; geschlossene Pausen bleiben
+    unangetastet."""
+    from datetime import datetime as _dt
+
+    from db_helper import close_stale_breaks, log_break_start, log_break_stop
+
+    assert close_stale_breaks(None) == 0
+    assert close_stale_breaks(db_conn) == 0
+
+    check_user(db_conn, "brk_ok")
+    started = _dt(2026, 6, 23, 12, 0)
+    log_break_start(project="P", name="brk_ok", break_kind="short", started_at=started, conn=db_conn)
+    log_break_stop(project="P", name="brk_ok", ended_at=started + timedelta(minutes=5), conn=db_conn)
+    assert close_stale_breaks(db_conn) == 0
+    row = db_conn.execute("SELECT ended_at, duration_seconds FROM break_events").fetchone()
+    assert row == ("2026-06-23 12:05:00", 300)

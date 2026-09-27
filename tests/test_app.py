@@ -1448,6 +1448,7 @@ def test_on_closing_signal_mode_asks_nothing(app_instance, monkeypatch):
 
     monkeypatch.setattr(app_module.messagebox, "askyesno", _kein_dialog)
     destroyed = []
+    orig_destroy = app_instance.master.destroy
     monkeypatch.setattr(app_instance.master, "destroy", lambda: destroyed.append(True))
 
     db_conn = app_instance.db_conn
@@ -1460,6 +1461,14 @@ def test_on_closing_signal_mode_asks_nothing(app_instance, monkeypatch):
 
     with pytest.raises(sqlite3.ProgrammingError):
         db_conn.execute("SELECT 1")
+
+    # Echtes destroy nachholen: die Fixture-Teardown-Reihenfolge ruft
+    # root.destroy() VOR dem Monkeypatch-Undo auf (= die No-op-Lambda).
+    # Ohne diese Zeile bliebe die Tk-Instanz am Leben und als
+    # tkinter._default_root zurück — alle späteren Tests, deren Widgets
+    # implizite StringVars anlegen (z. B. der Session-Editor), binden dann
+    # an den falschen Tcl-Interpreter (Felder leer, Edits wirkungslos).
+    orig_destroy()
 
 
 def test_shutdown_from_signal_delegates_without_dialogs(app_instance, monkeypatch):
@@ -1612,3 +1621,308 @@ def test_settings_save_blocks_db_change_with_live_break(app_instance, monkeypatc
     app_instance.open_settings()
     app_instance._break_active = True
     _assert_settings_save_blocks_db_change(app_instance, monkeypatch, tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Session-Editor _edit_event/_save: Parsing, Nachtragen, Overlap, key_changed
+# ---------------------------------------------------------------------------
+
+
+def _log_closed_session(app_instance, name, project="1", day=(2026, 6, 23), start_hm=(9, 0), end_hm=(10, 0)):
+    """Legt eine abgeschlossene Session am gegebenen Tag an."""
+    from db_helper import log_start, log_stop
+
+    s = datetime(*day, *start_hm)
+    e = datetime(*day, *end_hm)
+    log_start(project=project, name=name, timestamp=s, conn=app_instance.db_conn)
+    log_stop(project=project, name=name, timestamp=e, conn=app_instance.db_conn)
+    return s, e
+
+
+def _editor_project_combo(win):
+    """Die Projekt-Combobox des Session-Editors."""
+    from tkinter.ttk import Combobox
+
+    return next(w for w in win.winfo_children() if isinstance(w, Combobox))
+
+
+def test_editor_invalid_hhmm_blocks_save(app_instance, monkeypatch):
+    """Ungültige Startzeit (kein HH:MM) → Warnung, Dialog bleibt offen,
+    kein Event verändert."""
+    calls = _patch_messageboxes(monkeypatch)
+    name = "ed_badtime"
+    _log_closed_session(app_instance, name)
+    _view_day(app_instance, name, "23-06-2026")
+
+    app_instance._edit_event(session=app_instance._day_sessions[0])
+    win = _find_editor(app_instance)
+    start_entry = _editor_entries(win)[1]
+    start_entry.delete(0, END)
+    start_entry.insert(0, "9 Uhr")
+    _invoke_editor_button(win, "Speichern")
+
+    warnings = [a for kind, a in calls if kind == "warning"]
+    assert warnings and "Startzeit" in warnings[0][1]
+    assert win.winfo_exists()  # Dialog bleibt offen, nichts gespeichert
+    assert _user_events(app_instance, name) == [
+        ("start", "2026-06-23 09:00:00"),
+        ("stop", "2026-06-23 10:00:00"),
+    ]
+    win.destroy()
+
+
+def test_editor_empty_start_with_existing_event_blocks_save(app_instance, monkeypatch):
+    """Leeres Startfeld ist NICHT erlaubt, wenn ein Start-Event existiert —
+    sonst würde der vorhandene Start stillschweigend verwaisen."""
+    calls = _patch_messageboxes(monkeypatch)
+    name = "ed_empty"
+    _log_closed_session(app_instance, name)
+    _view_day(app_instance, name, "23-06-2026")
+
+    app_instance._edit_event(session=app_instance._day_sessions[0])
+    win = _find_editor(app_instance)
+    start_entry = _editor_entries(win)[1]
+    start_entry.delete(0, END)
+    _invoke_editor_button(win, "Speichern")
+
+    warnings = [a for kind, a in calls if kind == "warning"]
+    assert warnings and "Startzeit" in warnings[0][1]
+    assert win.winfo_exists()
+    assert len(_user_events(app_instance, name)) == 2
+    win.destroy()
+
+
+def test_editor_invalid_date_blocks_save(app_instance, monkeypatch):
+    """Ungültiges Datum → Warnung, kein Schreiben."""
+    calls = _patch_messageboxes(monkeypatch)
+    name = "ed_baddate"
+    _log_closed_session(app_instance, name)
+    _view_day(app_instance, name, "23-06-2026")
+
+    app_instance._edit_event(session=app_instance._day_sessions[0])
+    win = _find_editor(app_instance)
+    date_entry = _editor_entries(win)[0]
+    date_entry.delete(0, END)
+    date_entry.insert(0, "23.06.2026")  # falsches Format
+    _invoke_editor_button(win, "Speichern")
+
+    warnings = [a for kind, a in calls if kind == "warning"]
+    assert warnings and "Datum" in warnings[0][1]
+    assert _user_events(app_instance, name) == [
+        ("start", "2026-06-23 09:00:00"),
+        ("stop", "2026-06-23 10:00:00"),
+    ]
+    win.destroy()
+
+
+def test_editor_append_stop_to_open_session(app_instance, monkeypatch):
+    """Stop-Nachtragen an einer offenen (nicht live laufenden) Session:
+    Endzeit eintragen → log_stop, Session abgeschlossen, Start unangetastet."""
+    from db_helper import log_start
+
+    calls = _patch_messageboxes(monkeypatch)
+    name = "ed_addstop"
+    log_start(project="1", name=name, timestamp=datetime(2026, 6, 23, 9, 0), conn=app_instance.db_conn)
+    _view_day(app_instance, name, "23-06-2026")
+    session = app_instance._day_sessions[0]
+    assert session["stop_id"] is None
+
+    app_instance._edit_event(session=session)
+    win = _find_editor(app_instance)
+    end_entry = _editor_entries(win)[2]
+    end_entry.delete(0, END)
+    end_entry.insert(0, "17:00")
+    _invoke_editor_button(win, "Speichern")
+
+    assert calls == []
+    assert _user_events(app_instance, name) == [
+        ("start", "2026-06-23 09:00:00"),
+        ("stop", "2026-06-23 17:00:00"),
+    ]
+
+
+def test_editor_open_session_empty_end_keeps_open(app_instance, monkeypatch):
+    """Leeres Endfeld ist erlaubt, solange es KEIN Stop-Event gibt: die
+    Session bleibt einfach offen, es wird kein Stop erfunden."""
+    from db_helper import log_start
+
+    calls = _patch_messageboxes(monkeypatch)
+    name = "ed_stayopen"
+    log_start(project="1", name=name, timestamp=datetime(2026, 6, 23, 9, 0), conn=app_instance.db_conn)
+    _view_day(app_instance, name, "23-06-2026")
+
+    app_instance._edit_event(session=app_instance._day_sessions[0])
+    win = _find_editor(app_instance)
+    _invoke_editor_button(win, "Speichern")  # Endfeld bleibt leer
+
+    assert calls == []
+    assert _user_events(app_instance, name) == [("start", "2026-06-23 09:00:00")]
+
+
+def _patch_overlap_boxes(monkeypatch, answer):
+    """Wie _patch_messageboxes, aber askyesno protokolliert den Titel und
+    antwortet mit ``answer`` (Overlap-Dialog bestätigen/abbrechen)."""
+    import app as app_module
+
+    seen = {"warnings": [], "asks": []}
+    monkeypatch.setattr(app_module.messagebox, "showwarning", lambda *a, **k: seen["warnings"].append(a))
+    monkeypatch.setattr(app_module.messagebox, "showerror", lambda *a, **k: seen["warnings"].append(a))
+
+    def _ask(title, *a, **k):
+        seen["asks"].append(title)
+        return answer
+
+    monkeypatch.setattr(app_module.messagebox, "askyesno", _ask)
+    return seen
+
+
+def _edit_second_session_into_overlap(app_instance, name):
+    """Editiert die 11–12-Session auf 09:30–10:30 (überlappt die 09–10-Session)."""
+    _log_closed_session(app_instance, name, start_hm=(9, 0), end_hm=(10, 0))
+    _log_closed_session(app_instance, name, start_hm=(11, 0), end_hm=(12, 0))
+    _view_day(app_instance, name, "23-06-2026")
+    session = next(s for s in app_instance._day_sessions if s["start_ts"].hour == 11)
+
+    app_instance._edit_event(session=session)
+    win = _find_editor(app_instance)
+    entries = _editor_entries(win)
+    entries[1].delete(0, END)
+    entries[1].insert(0, "09:30")
+    entries[2].delete(0, END)
+    entries[2].insert(0, "10:30")
+    _invoke_editor_button(win, "Speichern")
+    return win
+
+
+def test_editor_overlap_warning_cancel_keeps_db(app_instance, monkeypatch):
+    """Overlap-Warnung mit „Nein" beantwortet → nichts gespeichert,
+    Dialog bleibt offen."""
+    seen = _patch_overlap_boxes(monkeypatch, answer=False)
+    name = "ed_ov_no"
+    win = _edit_second_session_into_overlap(app_instance, name)
+
+    assert seen["asks"] == ["Überschneidung"]
+    assert seen["warnings"] == []
+    assert win.winfo_exists()
+    assert _user_events(app_instance, name) == [
+        ("start", "2026-06-23 09:00:00"),
+        ("stop", "2026-06-23 10:00:00"),
+        ("start", "2026-06-23 11:00:00"),
+        ("stop", "2026-06-23 12:00:00"),
+    ]
+    win.destroy()
+
+
+def test_editor_overlap_warning_confirm_saves(app_instance, monkeypatch):
+    """Overlap-Warnung mit „Ja" beantwortet → bewusst überlappend gespeichert."""
+    seen = _patch_overlap_boxes(monkeypatch, answer=True)
+    name = "ed_ov_yes"
+    win = _edit_second_session_into_overlap(app_instance, name)
+
+    assert seen["asks"] == ["Überschneidung"]
+    assert not win.winfo_exists()  # erfolgreich gespeichert → Dialog zu
+    assert _user_events(app_instance, name) == [
+        ("start", "2026-06-23 09:00:00"),
+        ("start", "2026-06-23 09:30:00"),
+        ("stop", "2026-06-23 10:00:00"),
+        ("stop", "2026-06-23 10:30:00"),
+    ]
+
+
+def test_editor_key_changed_project_moves_note_and_transferred(app_instance, monkeypatch):
+    """Projektwechsel im Editor: Notiz und ✓-Status wandern auf den neuen
+    (Projekt, Tag)-Schlüssel mit (key_changed-Zweig)."""
+    from db_helper import get_daily_meta, set_daily_note, set_daily_transferred
+
+    calls = _patch_messageboxes(monkeypatch)
+    name = "ed_key_proj"
+    _log_closed_session(app_instance, name, project="A")
+    set_daily_note(app_instance.db_conn, name, "A", "2026-06-23", "wandernde Notiz")
+    set_daily_transferred(app_instance.db_conn, name, "A", "2026-06-23", True, transferred_at="2026-06-20")
+    _view_day(app_instance, name, "23-06-2026")
+
+    app_instance._edit_event(session=app_instance._day_sessions[0])
+    win = _find_editor(app_instance)
+    _editor_project_combo(win).set("B")
+    _invoke_editor_button(win, "Speichern")
+
+    assert calls == []
+    # Events tragen das neue Projekt.
+    cur = app_instance.db_conn.cursor()
+    projects = [r[0] for r in cur.execute("SELECT DISTINCT project FROM events").fetchall()]
+    assert projects == ["B"]
+    # Notiz + ✓ liegen unter dem neuen Schlüssel.
+    meta = get_daily_meta(app_instance.db_conn, name, "B", "2026-06-23")
+    assert meta["note"] == "wandernde Notiz"
+    assert meta["transferred"] is True
+
+
+def test_editor_key_changed_date_moves_events_and_note(app_instance, monkeypatch):
+    """Datumswechsel im Editor: Events wandern auf den neuen Tag, Notiz/✓
+    folgen auf den neuen Tages-Schlüssel (key_changed-Zweig)."""
+    from db_helper import get_daily_meta, set_daily_note
+
+    calls = _patch_messageboxes(monkeypatch)
+    name = "ed_key_date"
+    _log_closed_session(app_instance, name)
+    set_daily_note(app_instance.db_conn, name, "1", "2026-06-23", "Notiz zieht um")
+    _view_day(app_instance, name, "23-06-2026")
+
+    app_instance._edit_event(session=app_instance._day_sessions[0])
+    win = _find_editor(app_instance)
+    date_entry = _editor_entries(win)[0]
+    date_entry.delete(0, END)
+    date_entry.insert(0, "24-06-2026")
+    _invoke_editor_button(win, "Speichern")
+
+    assert calls == []
+    assert _user_events(app_instance, name) == [
+        ("start", "2026-06-24 09:00:00"),
+        ("stop", "2026-06-24 10:00:00"),
+    ]
+    assert get_daily_meta(app_instance.db_conn, name, "1", "2026-06-24")["note"] == "Notiz zieht um"
+
+
+# ---------------------------------------------------------------------------
+# Invariante: FIFO-Anzeige (Kopfsumme) vs. calculate_daily_duration (Union)
+# ---------------------------------------------------------------------------
+
+
+def test_invariant_overlap_pair_sum_vs_union_duration(app_instance):
+    """BEKANNTE, GEWOLLTE DIVERGENZ bei Überschneidung — hier eingefroren.
+
+    Zwei überlappende Sessions 09–11 und 10–12 desselben Projekts:
+    - Die Tagesliste paart FIFO und summiert die EINZELDAUERN in der
+      Kopfzeile → 2h + 2h = **4:00 h** (jede Session zählt voll; genau die
+      Zahlen, die einzeln ins Firmensystem übertragen werden).
+    - ``calculate_daily_duration`` (Statistik/Wochenansicht) summiert die
+      **Vereinigung** der Intervalle → 09–12 = **3h** (reale Anwesenheit,
+      überlappende Zeit zählt nie doppelt).
+
+    Beide Sichten sind je für ihren Zweck korrekt; die Abweichung existiert
+    NUR bei echten Überschneidungen (der Editor warnt beim Anlegen). Dieser
+    Test friert das Verhalten ein: wer eine der beiden Seiten ändert, muss
+    das hier bewusst tun.
+    """
+    from db_helper import calculate_daily_duration, log_start, log_stop
+
+    name = "inv_overlap"
+    for s_h, e_h in ((9, 11), (10, 12)):
+        log_start(project="1", name=name, timestamp=datetime(2026, 6, 23, s_h, 0), conn=app_instance.db_conn)
+        log_stop(project="1", name=name, timestamp=datetime(2026, 6, 23, e_h, 0), conn=app_instance.db_conn)
+    _view_day(app_instance, name, "23-06-2026")
+
+    # FIFO-Anzeige: zwei GESCHLOSSENE Sessions (09→11, 10→12), je 2h.
+    sessions = app_instance._day_sessions
+    assert [(s["start_ts"].hour, s["stop_ts"].hour) for s in sessions] == [(9, 11), (10, 12)]
+    pair_sum_h = sum(s["dur_h"] for s in sessions)
+    assert pair_sum_h == 4.0
+    hdr = next(ln for ln in app_instance.day_list.get("1.0", "end-1c").splitlines() if ln.startswith("▌ 1"))
+    assert "4:00 h" in hdr  # Kopfsumme der Tagesliste = Paarsumme
+
+    # Statistik-Seite: Union der Intervalle = 3h.
+    union_secs = calculate_daily_duration(project="1", name=name, date="23-06-2026", conn=app_instance.db_conn)
+    assert union_secs == 3 * 3600
+
+    # Die Divergenz selbst ist die Invariante (4h Paarsumme vs. 3h Union).
+    assert pair_sum_h * 3600 != union_secs

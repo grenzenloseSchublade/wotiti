@@ -170,3 +170,136 @@ def test_week_cell_tooltip_flattens_multiline_note(app_instance):
     assert tips
     proj_line = next(ln for ln in tips[0].splitlines() if ln.strip().startswith("A:"))
     assert "erste Zeile · zweite Zeile" in proj_line
+
+
+# ---------------------------------------------------------------------------
+# Zeitmaschinen-Navigation (offset ≠ 0) + ISO-KW über die Jahresgrenze
+# ---------------------------------------------------------------------------
+
+
+def _goto_week_of(app, target_day):
+    """Stellt die Zeitmaschine auf die ISO-Woche von ``target_day``.
+
+    Der Offset wird als Montag-zu-Montag-Differenz berechnet und ist damit
+    automatisch ein Vielfaches von 7 (wie durch scroll_back/-forward).
+    """
+    today = datetime.now().date()
+    cur_monday = today - timedelta(days=today.weekday())
+    tgt_monday = target_day - timedelta(days=target_day.weekday())
+    app.week_view.offset = (tgt_monday - cur_monday).days
+    app.week_view.refresh()
+    return tgt_monday
+
+
+def _cell_texts(cell):
+    from tkinter import Label
+
+    return [c.cget("text") for c in cell.winfo_children() if isinstance(c, Label)]
+
+
+def _seed_hour(app, day, project="A", start_hour=9):
+    """Legt eine 1h-Session am gegebenen Tag an (Nutzer 'test_user')."""
+    ts = datetime(day.year, day.month, day.day, start_hour, 0)
+    log_start(project=project, name="test_user", timestamp=ts, conn=app.db_conn)
+    log_stop(project=project, name="test_user", timestamp=ts + timedelta(hours=1), conn=app.db_conn)
+
+
+def test_time_machine_scroll_back_and_forward_clamp(app_instance):
+    """‹/›-Navigation: offset in 7er-Schritten, KW-Titel folgt, ›-Klemme bei 0."""
+    _seed_today(app_instance)
+    wv = app_instance.week_view
+    wv.refresh()
+    assert wv.offset == 0
+    assert wv._btn_forward.cget("state") == "disabled"
+
+    today = datetime.now().date()
+    monday = today - timedelta(days=today.weekday())
+    wv.scroll_back()
+    assert wv.offset == -7
+    # Vorwoche: KW des Sonntags (monday − 1) der angezeigten Woche.
+    prev_kw = (monday - timedelta(days=1)).isocalendar()[1]
+    assert wv._title_label.cget("text") == f"Zeitmaschine · KW {prev_kw}"
+    assert wv._btn_forward.cget("state") == "normal"
+
+    wv.scroll_forward()
+    assert wv.offset == 0
+    wv.scroll_forward()  # Klemme: nie in die Zukunft
+    assert wv.offset == 0
+    assert wv._btn_forward.cget("state") == "disabled"
+
+
+def test_time_machine_offset_week_shows_only_that_weeks_data(app_instance):
+    """Bei offset ≠ 0 zeigt die Legende die Daten der Zielwoche, nicht der
+    aktuellen — und umgekehrt."""
+    today = datetime.now().date()
+    two_weeks_ago = today - timedelta(days=14)
+    _seed_hour(app_instance, two_weeks_ago, project="Alt")
+    _seed_today(app_instance, projects=("Neu",))
+    wv = app_instance.week_view
+
+    wv.refresh()  # aktuelle Woche
+    texts = [c.cget("text") for c in wv._legend_frame.winfo_children()]
+    assert any("Neu" in t for t in texts)
+    assert not any("Alt" in t for t in texts)
+
+    _goto_week_of(app_instance, two_weeks_ago)
+    assert wv.offset == -14
+    texts = [c.cget("text") for c in wv._legend_frame.winfo_children()]
+    assert any("Alt 1:00" in t for t in texts)
+    assert not any("Neu" in t for t in texts)
+
+
+def test_time_machine_iso_kw1_spans_year_boundary(app_instance):
+    """ISO-KW 1 kann Tage des Vorjahres enthalten (z. B. Mo 29.12. – So 04.01.):
+    Titel zeigt KW 1, die Zellen laufen Mo–So über die Jahresgrenze und
+    Sessions BEIDER Kalenderjahre derselben ISO-Woche sind sichtbar."""
+    from datetime import date
+
+    year = datetime.now().date().year
+    jan4 = date(year, 1, 4)  # der 4. Januar liegt immer in ISO-KW 1
+    tgt_monday = jan4 - timedelta(days=jan4.weekday())
+    sunday = tgt_monday + timedelta(days=6)
+    # Je 1h am Montag (ggf. Vorjahr!) und am Sonntag der KW 1.
+    _seed_hour(app_instance, tgt_monday, project="A")
+    _seed_hour(app_instance, sunday, project="A")
+    app_instance.name_entry.set("test_user")
+
+    assert _goto_week_of(app_instance, jan4) == tgt_monday
+    wv = app_instance.week_view
+    assert wv._title_label.cget("text") == "Zeitmaschine · KW 1"
+    assert wv._week_kw == 1
+
+    # Montag-Grenzen: erste Zelle = Montag, letzte = Sonntag der ISO-Woche.
+    mo_texts = _cell_texts(wv._day_frames[0])
+    assert mo_texts[0] == "Mo" and mo_texts[1] == tgt_monday.strftime("%d.%m")
+    so_texts = _cell_texts(wv._day_frames[6])
+    assert so_texts[0] == "So" and so_texts[1] == sunday.strftime("%d.%m")
+    # Beide Sessions (altes und neues Kalenderjahr) sind in ihren Zellen sichtbar.
+    assert any(t.startswith("1:00") for t in mo_texts)
+    assert any(t.startswith("1:00") for t in so_texts)
+    legend = [c.cget("text") for c in wv._legend_frame.winfo_children()]
+    assert any(t.startswith("Σ") and "2:00 h" in t for t in legend)
+
+
+def test_time_machine_last_iso_week_of_previous_year(app_instance):
+    """Die letzte ISO-KW des Vorjahres heißt KW 52 oder KW 53 — nie KW 0/1."""
+    from datetime import date
+
+    year = datetime.now().date().year
+    dec28 = date(year - 1, 12, 28)  # der 28. Dezember liegt immer in der letzten ISO-KW
+    expected_kw = dec28.isocalendar()[1]
+    assert expected_kw in (52, 53)
+
+    tgt_monday = dec28 - timedelta(days=dec28.weekday())
+    _seed_hour(app_instance, tgt_monday, project="A")
+    app_instance.name_entry.set("test_user")
+
+    assert _goto_week_of(app_instance, dec28) == tgt_monday
+    wv = app_instance.week_view
+    assert wv.offset < 0 and wv.offset % 7 == 0
+    assert wv._title_label.cget("text") == f"Zeitmaschine · KW {expected_kw}"
+    mo_texts = _cell_texts(wv._day_frames[0])
+    assert mo_texts[0] == "Mo" and mo_texts[1] == tgt_monday.strftime("%d.%m")
+    assert any(t.startswith("1:00") for t in mo_texts)
+    # In der Vergangenheit ist der ›-Button aktiv (zurück Richtung Gegenwart).
+    assert wv._btn_forward.cget("state") == "normal"
