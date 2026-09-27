@@ -473,7 +473,10 @@ class App:
         self.note_entry.bind("<Shift-Return>", self._on_note_shift_return)
         self.note_entry.bind("<FocusOut>", self._on_note_changed)
         self._bind_note_navigation()
-        _ToolTip(self.note_entry, "Notiz für dieses Datum + Projekt (max. 44 Wörter) · Shift+Enter: Zeilenumbruch")
+        _ToolTip(
+            self.note_entry,
+            "Notiz für dieses Datum + Projekt (max. 44 Wörter) · Shift+Enter: Zeilenumbruch · Strg+N: fokussieren",
+        )
         # Platzhalter als Overlay-Label ÜBER dem Feld — bewusst KEIN Text im
         # Widget-Inhalt (der würde mit _flush_pending_note/clamp_note kollidieren).
         self._note_placeholder = Label(
@@ -504,7 +507,10 @@ class App:
             font=("MS Sans Serif", 9),
         )
         self.transferred_check.grid(row=1, column=7, pady=(0, 4), padx=3, sticky="w")
-        _ToolTip(self.transferred_check, "Diese Zeit (Projekt + Tag) wurde manuell ins Firmensystem übertragen")
+        _ToolTip(
+            self.transferred_check,
+            "Diese Zeit (Projekt + Tag) wurde manuell ins Firmensystem übertragen · Strg+G: togglen",
+        )
         # Merker für den zuletzt geladenen Notiz-Schlüssel + Text, damit ein
         # Flush ohne Änderung nicht unnötig speichert.
         self._note_loaded_key: tuple[str, str, str] | None = None
@@ -830,6 +836,12 @@ class App:
         master.bind_all("<Control-Left>", lambda e: self._shortcut_guard(e, lambda: self._step_date(-1)))
         master.bind_all("<Control-Right>", lambda e: self._shortcut_guard(e, lambda: self._step_date(1)))
         master.bind_all("<Control-t>", lambda e: self._shortcut_guard(e, self.set_today_date))
+        # Abgleich-Workflow ohne Maus: Strg+G = übertragen-Häkchen togglen,
+        # Strg+N = Notizfeld fokussieren. Beide über _shortcut_guard: in
+        # Textfeldern gehören die Tasten dem Widget (Strg+N = Zeile runter
+        # in den Tk-Emacs-Bindings).
+        master.bind_all("<Control-g>", lambda e: self._shortcut_guard(e, self._toggle_transferred_shortcut))
+        master.bind_all("<Control-n>", lambda e: self._shortcut_guard(e, self._focus_note_entry))
 
         # Session protection: ask before closing with active session
         master.protocol("WM_DELETE_WINDOW", self._on_closing)
@@ -857,6 +869,40 @@ class App:
         except Exception:  # noqa: BLE001 — Widget kann bereits zerstört sein
             return None
         action()
+        return "break"
+
+    def _toggle_transferred_shortcut(self) -> None:
+        """Strg+G: »übertragen«-Häkchen togglen — identisch zum Checkbox-Klick.
+
+        ``invoke()`` toggelt die Variable und ruft das Checkbox-Kommando
+        (``_on_transferred_toggled``); im disabled-Zustand (kein Benutzer/
+        Projekt/Datum geladen) tut es — wie ein Klick — nichts.
+        """
+        if getattr(self, "transferred_check", None):
+            self.transferred_check.invoke()
+
+    def _focus_note_entry(self) -> None:
+        """Strg+N: Fokus ins Notizfeld, Cursor ans Textende."""
+        if getattr(self, "note_entry", None):
+            self.note_entry.focus_set()
+            self.note_entry.mark_set("insert", "end-1c")
+
+    def _on_dialog_return(self, event, default_action) -> str:
+        """Return in einem Dialog: fokussierter Button gewinnt, sonst Speichern.
+
+        Windows-Konvention: Wer mit Tab auf „Abbrechen"/„Löschen" navigiert
+        und Enter drückt, erwartet DIESEN Button — nicht das Standard-Kommando
+        des Dialogs. Ohne diese Weiche speicherte Return auch bei Fokus auf
+        Abbrechen.
+        """
+        w = event.widget
+        try:
+            if w is not None and w.winfo_class() == "Button":
+                w.invoke()
+                return "break"
+        except Exception:  # noqa: BLE001 — Widget kann bereits zerstört sein
+            pass
+        default_action()
         return "break"
 
     def _fit_and_center(self, win, min_w: int = 0, min_h: int = 0, ref=None) -> None:
@@ -897,9 +943,22 @@ class App:
         file_menu.add_command(label="Beenden", command=self._on_closing)
         menubar.add_cascade(label="Datei", menu=file_menu)
 
+        # Sitzungs-Aktionen mit Accelerator-Anzeige: macht die Shortcuts
+        # Strg+S/P/E sichtbar (die Buttons tragen keine Beschriftung dafür).
+        session_menu = Menu(menubar, tearoff=0)
+        session_menu.add_command(label="Start", accelerator="Strg+S", command=self.start_session)
+        session_menu.add_command(label="Pause", accelerator="Strg+P", command=self.pause_session)
+        session_menu.add_command(label="Stop", accelerator="Strg+E", command=self.stop_session)
+        menubar.add_cascade(label="Sitzung", menu=session_menu)
+
         view_menu = Menu(menubar, tearoff=0)
         view_menu.add_command(label="Wochenansicht", command=self._show_week_view)
         view_menu.add_command(label="Timer-Ansicht", command=self._show_timer_view)
+        view_menu.add_separator()
+        # Datums-Navigation: macht Strg+←/→/T entdeckbar.
+        view_menu.add_command(label="Tag zurück", accelerator="Strg+←", command=lambda: self._step_date(-1))
+        view_menu.add_command(label="Tag vor", accelerator="Strg+→", command=lambda: self._step_date(1))
+        view_menu.add_command(label="Heute", accelerator="Strg+T", command=self.set_today_date)
         view_menu.add_separator()
         view_menu.add_command(label="Mini-Modus", accelerator="Strg+M", command=self._toggle_mini_mode)
         view_menu.add_command(label="Neu laden", accelerator="F5", command=self.update_duration)
@@ -1320,7 +1379,9 @@ class App:
         Button(btn_frame, text="Anlegen", command=_create, **btn_cfg).pack(side="left", padx=5)
         Button(btn_frame, text="Abbrechen", command=win.destroy, **btn_cfg).pack(side="left", padx=5)
         win.bind("<Escape>", lambda _e: win.destroy())
-        win.bind("<Return>", lambda _e: _create())
+        # Return = Anlegen — außer der Fokus liegt auf einem Button (Tab-
+        # Navigation): dann gewinnt der fokussierte Button.
+        win.bind("<Return>", lambda e: self._on_dialog_return(e, _create))
         # NACH dem Inhaltsaufbau: Größe an Inhalt anpassen + zentrieren.
         self._fit_and_center(win, min_w=360)
 
@@ -2911,9 +2972,10 @@ class App:
         Button(btn_frame, text="Speichern", command=_save, **btn_cfg).pack(side="left", padx=5)
         Button(btn_frame, text="Abbrechen", command=win.destroy, **btn_cfg).pack(side="left", padx=5)
 
-        # Esc = Abbrechen (legt nichts an), Return = Speichern.
+        # Esc = Abbrechen (legt nichts an), Return = Speichern — außer der
+        # Fokus liegt auf einem Button: dann gewinnt der fokussierte Button.
         win.bind("<Escape>", lambda _e: win.destroy())
-        win.bind("<Return>", lambda _e: _save())
+        win.bind("<Return>", lambda e: self._on_dialog_return(e, _save))
         # NACH dem Inhaltsaufbau: Größe an Inhalt anpassen + zentrieren.
         self._fit_and_center(win, min_w=460)
 
@@ -4143,7 +4205,9 @@ class App:
         Button(btn_frame, text="Abbrechen", command=win.destroy, **btn_cfg).pack(side="left", padx=5)
 
         win.bind("<Escape>", lambda _e: win.destroy())
-        win.bind("<Return>", lambda _e: _save())
+        # Return = Speichern — außer der Fokus liegt auf einem Button
+        # (Abbrechen/Löschen per Tab erreicht): dann gewinnt der Button.
+        win.bind("<Return>", lambda e: self._on_dialog_return(e, _save))
         # NACH dem Inhaltsaufbau: Größe an Inhalt anpassen + zentrieren.
         self._fit_and_center(win, min_w=460)
         return "break"

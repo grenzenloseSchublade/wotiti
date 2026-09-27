@@ -65,8 +65,13 @@ class WeekView:
             bg="#C0C0C0",
             fg="#000080",
             font=("MS Sans Serif", 10, "bold"),
+            cursor="hand2",
         )
         self._title_label.pack(side="left", padx=4)
+        # Klick auf den Titel springt zur aktuellen Woche zurück — gleicher
+        # klickbarer-Label-Stil wie die Tagessummen in den Zellen.
+        self._title_label.bind("<Button-1>", lambda _e: self.jump_to_current())
+        _ToolTip(self._title_label, "Klick: zurück zur aktuellen Woche")
 
         self._btn_forward = Button(
             nav_inner,
@@ -168,6 +173,13 @@ class WeekView:
     def scroll_forward(self) -> None:
         """Scrollt die Wochenansicht 7 Tage Richtung Gegenwart."""
         self.offset = min(self.offset + 7, 0)
+        self.refresh()
+
+    def jump_to_current(self) -> None:
+        """Springt direkt zur aktuellen Woche zurück (Klick auf den Titel)."""
+        if self.offset == 0:
+            return
+        self.offset = 0
         self.refresh()
 
     # ------------------------------------------------------------------

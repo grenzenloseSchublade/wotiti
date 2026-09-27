@@ -1985,3 +1985,171 @@ def test_error_write_expands_console_and_flags_statusbar(app_instance):
     # Selbstheilung: der Clear-Callback räumt die Meldung wieder weg.
     app_instance._clear_status_error()
     assert app_instance._status_error_label.cget("text") == ""
+
+
+# ---------------------------------------------------------------------------
+# Strg+G (übertragen togglen) / Strg+N (Notizfeld fokussieren)
+# ---------------------------------------------------------------------------
+
+
+def test_ctrl_g_toggles_transferred(app_instance):
+    """Strg+G toggelt den »übertragen«-Status wie ein Klick auf die Checkbox."""
+    from db_helper import get_daily_meta
+
+    name = "sc_toggle"
+    _view_day(app_instance, name, datetime.today().strftime("%d-%m-%Y"))
+    app_instance._load_note()
+    assert str(app_instance.transferred_check.cget("state")) == "normal"
+
+    project = app_instance._get_project_silent()
+    iso = app_instance._selected_date_iso()
+    assert get_daily_meta(app_instance.db_conn, name, project, iso)["transferred"] is False
+
+    app_instance._toggle_transferred_shortcut()
+    assert get_daily_meta(app_instance.db_conn, name, project, iso)["transferred"] is True
+    app_instance._toggle_transferred_shortcut()
+    assert get_daily_meta(app_instance.db_conn, name, project, iso)["transferred"] is False
+
+
+def test_ctrl_g_noop_on_disabled_checkbox(app_instance):
+    """Bei deaktivierter Checkbox (kein Benutzer geladen) tut Strg+G nichts."""
+    app_instance.name_entry.set("")
+    app_instance._load_note()
+    assert str(app_instance.transferred_check.cget("state")) == "disabled"
+    app_instance._toggle_transferred_shortcut()  # darf weder werfen noch togglen
+    assert bool(app_instance._transferred_var.get()) is False
+
+
+def test_ctrl_n_focuses_note_entry(app_instance):
+    """Strg+N setzt den Fokus ins Notizfeld, Cursor ans Textende."""
+    called = []
+    app_instance.note_entry.focus_set = lambda: called.append(1)
+    app_instance.note_entry.insert("1.0", "eine notiz")
+    app_instance._focus_note_entry()
+    assert called == [1]
+    assert app_instance.note_entry.index("insert") == app_instance.note_entry.index("end-1c")
+
+
+def test_ctrl_g_and_n_are_guarded(app_instance):
+    """Strg+G/N laufen über _shortcut_guard: Textfokus blockt, Bindings existieren."""
+
+    class _Ev:
+        def __init__(self, widget):
+            self.widget = widget
+
+    fired = []
+    assert app_instance._shortcut_guard(_Ev(app_instance.note_entry), lambda: fired.append(1)) is None
+    assert fired == []
+    # bind_all-Registrierung vorhanden (Query ohne func liefert das Skript).
+    assert app_instance.master.bind_all("<Control-g>")
+    assert app_instance.master.bind_all("<Control-n>")
+
+
+# ---------------------------------------------------------------------------
+# Return in Dialogen: fokussierter Button gewinnt, sonst Standard-Aktion
+# ---------------------------------------------------------------------------
+
+
+class _KeyEv:
+    def __init__(self, widget):
+        self.widget = widget
+
+
+def _find_dialog_button(win, label):
+    from tkinter import Button
+
+    stack = [win]
+    while stack:
+        w = stack.pop()
+        stack.extend(w.winfo_children())
+        if isinstance(w, Button) and w.cget("text") == label:
+            return w
+    raise AssertionError(f"Button '{label}' nicht gefunden")
+
+
+def test_dialog_return_on_non_button_runs_default(app_instance):
+    """Return ohne Button-Fokus (z.B. Entry) führt die Standard-Aktion aus."""
+    fired = []
+    assert app_instance._on_dialog_return(_KeyEv(app_instance.date_entry), lambda: fired.append(1)) == "break"
+    assert fired == [1]
+
+
+def test_editor_return_on_cancel_button_discards(app_instance, monkeypatch):
+    """Return bei Fokus auf »Abbrechen« im Session-Editor verwirft die Änderung."""
+    _patch_messageboxes(monkeypatch)
+    name = "ed_ret_cancel"
+    _log_closed_session(app_instance, name)
+    _view_day(app_instance, name, "23-06-2026")
+
+    app_instance._edit_event(session=app_instance._day_sessions[0])
+    win = _find_editor(app_instance)
+    start_entry = _editor_entries(win)[1]
+    start_entry.delete(0, END)
+    start_entry.insert(0, "08:00")
+
+    cancel = _find_dialog_button(win, "Abbrechen")
+    assert app_instance._on_dialog_return(_KeyEv(cancel), lambda: pytest.fail("Speichern darf nicht feuern")) == "break"
+    assert not win.winfo_exists()
+    # Nichts gespeichert: Startzeit unverändert 09:00.
+    assert _user_events(app_instance, name) == [
+        ("start", "2026-06-23 09:00:00"),
+        ("stop", "2026-06-23 10:00:00"),
+    ]
+
+
+def test_editor_return_on_delete_button_deletes(app_instance, monkeypatch):
+    """Return bei Fokus auf »Löschen« löscht (nach Rückfrage) statt zu speichern."""
+    _patch_messageboxes(monkeypatch)  # askyesno → True
+    name = "ed_ret_delete"
+    _log_closed_session(app_instance, name)
+    _view_day(app_instance, name, "23-06-2026")
+
+    app_instance._edit_event(session=app_instance._day_sessions[0])
+    win = _find_editor(app_instance)
+    delete_btn = _find_dialog_button(win, "Löschen")
+    assert (
+        app_instance._on_dialog_return(_KeyEv(delete_btn), lambda: pytest.fail("Speichern darf nicht feuern"))
+        == "break"
+    )
+    assert not win.winfo_exists()
+    assert _user_events(app_instance, name) == []
+
+
+def test_manual_event_return_on_cancel_creates_nothing(app_instance):
+    """Return bei Fokus auf »Abbrechen« im Nachtrag-Dialog legt keinen Eintrag an."""
+    name = "man_ret_cancel"
+    _view_day(app_instance, name, datetime.today().strftime("%d-%m-%Y"))
+
+    app_instance.add_manual_event()
+    from tkinter import Toplevel
+
+    wins = [w for w in app_instance.master.winfo_children() if isinstance(w, Toplevel)]
+    assert wins, "Nachtrag-Dialog wurde nicht geöffnet"
+    win = wins[-1]
+
+    cancel = _find_dialog_button(win, "Abbrechen")
+    assert app_instance._on_dialog_return(_KeyEv(cancel), lambda: pytest.fail("Speichern darf nicht feuern")) == "break"
+    assert not win.winfo_exists()
+    assert _user_events(app_instance, name) == []
+
+
+def test_project_dialog_return_on_cancel_creates_nothing(app_instance):
+    """Return bei Fokus auf »Abbrechen« im Projekt-Dialog legt kein Projekt an."""
+    from db_helper import get_all_projects
+
+    app_instance._add_project_dialog()
+    from tkinter import Toplevel
+
+    wins = [w for w in app_instance.master.winfo_children() if isinstance(w, Toplevel)]
+    assert wins, "Projekt-Dialog wurde nicht geöffnet"
+    win = wins[-1]
+
+    before = get_all_projects(app_instance.db_conn)
+    from tkinter import Entry
+
+    entry = next(w for w in win.winfo_children() if isinstance(w, Entry))
+    entry.insert(0, "NeuesProjektXY")
+    cancel = _find_dialog_button(win, "Abbrechen")
+    assert app_instance._on_dialog_return(_KeyEv(cancel), lambda: pytest.fail("Anlegen darf nicht feuern")) == "break"
+    assert not win.winfo_exists()
+    assert get_all_projects(app_instance.db_conn) == before
