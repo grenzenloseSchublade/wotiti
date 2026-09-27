@@ -193,23 +193,51 @@ def test_close_stale_sessions_back_to_back_closes_younger_start(db_conn):
     assert calculate_daily_duration(project="p", name="btb_user", date="23-06-2026", conn=db_conn) == 3 * 3600
 
 
-def test_log_stop_dst_fold_clamped_to_start(db_conn):
-    """Zeitumstellung (Uhr zurück): Stop naiv VOR dem offenen Start → geclampt.
+def test_log_stop_dst_fold_clamped_to_start(db_conn, monkeypatch):
+    """Zeitumstellung (Uhr zurück): LIVE-Stop (now()-Pfad) naiv VOR dem
+    offenen Start → geclampt.
 
     Ohne Clamp würde der Stop beim Paaren zur Waise und die Session bliebe
-    scheinbar offen (Zeit via close_stale_sessions endgültig weg).
+    scheinbar offen (Zeit via close_stale_sessions endgültig weg). Der Clamp
+    greift NUR ohne expliziten Zeitstempel — daher wird hier now() gepatcht.
     """
     from datetime import datetime as _dt
 
+    import db_helper
     from db_helper import pair_sessions_lifo
 
     log_start(project="p", name="dst_user", timestamp=_dt(2026, 10, 25, 2, 45), conn=db_conn)
-    log_stop(project="p", name="dst_user", timestamp=_dt(2026, 10, 25, 2, 15), conn=db_conn)
+
+    class _FoldNow(_dt):
+        """now() liefert die bereits zurückgestellte Uhr (02:15 im Fold)."""
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 10, 25, 2, 15)
+
+    monkeypatch.setattr(db_helper, "datetime", _FoldNow)
+    assert log_stop(project="p", name="dst_user", conn=db_conn) is True  # Live-Stop: kein Timestamp
 
     rows = db_conn.execute("SELECT event_type, timestamp FROM events ORDER BY id").fetchall()
     assert rows == [("start", "2026-10-25 02:45:00"), ("stop", "2026-10-25 02:45:00")]
     ts = _dt(2026, 10, 25, 2, 45)
     assert list(pair_sessions_lifo([("start", ts), ("stop", ts)])) == [(ts, ts)]
+
+
+def test_log_stop_explicit_backdated_within_hour_not_clamped(db_conn):
+    """Editor-Nachtrag: expliziter Stop < 1 h VOR dem offenen Start bleibt exakt.
+
+    13:30 zu einem offenen Start 14:00 gehört oft zu einem GANZ ANDEREN,
+    vergessenen Start — er darf nie still auf 14:00 hochgeclampt werden
+    (Regression: FIFO paarte sonst Phantom-Arbeitszeit ins Firmensystem).
+    """
+    from datetime import datetime as _dt
+
+    log_start(project="p", name="edit_user", timestamp=_dt(2026, 6, 23, 14, 0), conn=db_conn)
+    assert log_stop(project="p", name="edit_user", timestamp=_dt(2026, 6, 23, 13, 30), conn=db_conn) is True
+
+    row = db_conn.execute("SELECT timestamp FROM events WHERE event_type = 'stop'").fetchone()
+    assert row == ("2026-06-23 13:30:00",)
 
 
 def test_log_stop_far_before_start_not_clamped(db_conn):

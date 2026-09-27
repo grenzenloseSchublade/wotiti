@@ -8,13 +8,12 @@ die deshalb auf der App bleiben. Die App exponiert dünne Delegates/Properties
 Call-Sites und Tests.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from tkinter import END, VERTICAL, Menu, Scrollbar, Text
 
 from db_helper import (
     _WINDOW_MARGIN_DAYS,
     DATE_FORMAT,
-    TIMESTAMP_FORMAT,
     UI_DATE_FORMAT,
     _timestamp_window,
     fetch_day_events,
@@ -154,6 +153,8 @@ class DayListView:
                 kw = ""
             app._status_date_label.config(text=f"Ansicht: {view_date}{kw}{suffix}")
             current_name = app.name_entry.get().strip()
+            # Anzeige-Limit: höchstens ``limit`` Events des Anzeigetags werden
+            # als Sessions gerendert (Schutz vor entarteten Datenbeständen).
             limit = 500
             # Events über das Timestamp-Fenster des Anzeigetags laden statt über
             # die date-Spalte: nur so wird eine Mitternachts-Session (23:50 →
@@ -167,43 +168,39 @@ class DayListView:
             except ValueError:
                 return
             ts_lo, ts_hi = _timestamp_window(view_day, view_day)
-            day_lo = datetime.combine(view_day, datetime.min.time()).strftime(TIMESTAMP_FORMAT)
-            day_hi = datetime.combine(view_day + timedelta(days=1), datetime.min.time()).strftime(TIMESTAMP_FORMAT)
             # SQL-Deckel nur als Schutz vor entarteten Datenbeständen — auf die
             # Fensterbreite skaliert, damit Randtage den Anzeigetag nicht aus
             # dem Limit verdrängen.
             window_limit = limit * (2 * _WINDOW_MARGIN_DAYS + 1)
-            if current_name:
-                cursor.execute(
-                    """
-                    SELECT COUNT(*) FROM events e
-                    JOIN users u ON u.id = e.user_id
-                    WHERE u.name = ? AND e.timestamp >= ? AND e.timestamp < ?
-                    """,
-                    (current_name, day_lo, day_hi),
-                )
-                total_count = cursor.fetchone()[0]
-            else:
-                cursor.execute(
-                    """
-                    SELECT COUNT(*) FROM events e
-                    JOIN users u ON u.id = e.user_id
-                    WHERE e.timestamp >= ? AND e.timestamp < ?
-                    """,
-                    (day_lo, day_hi),
-                )
-                total_count = cursor.fetchone()[0]
             events = fetch_day_events(app.db_conn, ts_lo, ts_hi, user=current_name or None, limit=window_limit)
+            # Deckel erreicht? Dann kann ORDER BY timestamp auch späte Events
+            # des ANZEIGETAGS abgeschnitten haben — das wird unten ehrlich
+            # ausgewiesen statt still verschluckt.
+            window_truncated = len(events) == window_limit
             view_iso = view_day.strftime(DATE_FORMAT)
             chronological = bool(app.config.get("entry_list_chronological", False))
             # Nur Sessions des Anzeigetags behalten: eine Session gehört zum Tag
             # ihres Starts (ein verwaister Stop zum Tag des Stops) — die
             # Mitternachts-Session erscheint so vollständig am Starttag.
-            sessions = [
+            day_sessions_all = [
                 s
                 for s in (app._pair_day_sessions(events) if events else [])
                 if s["sort_ts"] and s["sort_ts"].date() == view_day
             ]
+            # Auf das Event-Limit des Anzeigetags kürzen (wie das frühere SQL
+            # LIMIT, nur nach dem Paaren): gezählt werden je Session die Events,
+            # die am Anzeigetag liegen — der Folgetag-Stop einer Mitternachts-
+            # Session zählt nicht mit. Die Hinweiszeile unten speist sich aus
+            # GENAU dieser Kürzung und bleibt so immer ehrlich.
+            sessions = []
+            shown_events = 0
+            for s in day_sessions_all:
+                n = sum(1 for ts in (s["start_ts"], s["stop_ts"]) if ts is not None and ts.date() == view_day)
+                if shown_events + n > limit:
+                    break
+                shown_events += n
+                sessions.append(s)
+            hidden_sessions = len(day_sessions_all) - len(sessions)
 
             # Meta (Notiz/✓) je (user, project) cachen — wenige Abfragen/Tag.
             meta_cache: dict[tuple, dict] = {}
@@ -363,13 +360,24 @@ class DayListView:
                         _emit(head)
                         _note_line(meta["note"])
 
-                # Phase 2.4: Hinweis, wenn das Listenlimit greift.
-                if total_count > limit:
-                    _emit([(f"… {total_count - limit} weitere Einträge ausgeblendet (Limit {limit})", ("dim",))])
+                # Phase 2.4: Hinweis, wenn das Listenlimit greift — der Zähler
+                # kommt aus der tatsächlichen Kürzung oben, nicht aus einem
+                # separaten COUNT, der davon abweichen könnte.
+                if hidden_sessions:
+                    word = "weitere Session" if hidden_sessions == 1 else "weitere Sessions"
+                    _emit([(f"… {hidden_sessions} {word} ausgeblendet (Limit {limit} Events/Tag)", ("dim",))])
             else:
                 # Empty-State: sichtbar machen, dass der Tag wirklich leer ist
                 # (und nicht etwa die Liste defekt) — dezent im dim-Grau.
                 tw.insert(END, "Keine Einträge für diesen Tag\n", ("dim",))
+            if window_truncated:
+                # Der SQL-Deckel hat zugeschlagen: das ±3-Tage-Ladefenster war
+                # voll, auch Sessions des Anzeigetags können fehlen.
+                tw.insert(
+                    END,
+                    f"… Anzeige evtl. unvollständig: Ladefenster-Limit ({window_limit} Events) erreicht\n",
+                    ("dim",),
+                )
 
     def _event_session(self, event) -> dict | None:
         """Session unter dem Mauszeiger; None auf Kopf-/Notiz-/Leerbereich."""

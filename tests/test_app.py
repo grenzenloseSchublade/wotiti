@@ -1250,6 +1250,60 @@ def test_day_list_regular_day_unaffected_by_window(app_instance):
     assert "1:00 h" in app_instance.day_list.get("1.0", "end-1c")
 
 
+def _bulk_insert_events(app_instance, name, rows):
+    """Events direkt einfügen (schnell) — rows: (project, type, 'YYYY-MM-DD HH:MM:SS')."""
+    from db_helper import check_user
+
+    uid = check_user(app_instance.db_conn, name)
+    app_instance.db_conn.executemany(
+        "INSERT INTO events (user_id, project, event_type, timestamp, date) VALUES (?, ?, ?, ?, ?)",
+        [(uid, p, t, ts, datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").strftime("%d-%m-%Y")) for p, t, ts in rows],
+    )
+    app_instance.db_conn.commit()
+
+
+def test_day_list_limit_truncates_and_hint_matches(app_instance):
+    """501 Events am Anzeigetag: Anzeige wird WIRKLICH auf das Event-Limit
+    gekürzt und die Hinweiszeile nennt die tatsächliche Kürzung (Regression:
+    alles wurde angezeigt UND der Hinweis behauptete trotzdem Ausblendung)."""
+    name = "limit_user"
+    day = datetime(2026, 6, 23)
+    rows = []
+    for i in range(250):  # 250 Paare = 500 Events
+        s = day + timedelta(minutes=2 * i)
+        rows.append(("1", "start", s.strftime("%Y-%m-%d %H:%M:%S")))
+        rows.append(("1", "stop", (s + timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")))
+    rows.append(("1", "start", day.replace(hour=23).strftime("%Y-%m-%d %H:%M:%S")))  # Event 501
+    _bulk_insert_events(app_instance, name, rows)
+
+    _view_day(app_instance, name, "23-06-2026")
+
+    assert len(app_instance._day_sessions) == 250  # genau 500 Events sichtbar
+    text = app_instance.day_list.get("1.0", "end-1c")
+    assert "… 1 weitere Session ausgeblendet (Limit 500 Events/Tag)" in text
+    assert "23:00" not in text  # die gekürzte Session ist wirklich weg
+    assert "unvollständig" not in text  # Ladefenster-Deckel griff hier nicht
+
+
+def test_day_list_window_cap_shows_honest_hint(app_instance):
+    """Ist das ±3-Tage-Ladefenster voll (SQL-Deckel erreicht), erscheint ein
+    ehrlicher Unvollständig-Hinweis statt stillem Abschneiden."""
+    name = "cap_user"
+    margin_day = datetime(2026, 6, 20)  # Randtag im Fenster des Anzeigetags 23-06
+    rows = []
+    for i in range(1750):  # 3500 Events = window_limit
+        s = margin_day + timedelta(seconds=20 * i)
+        rows.append(("1", "start", s.strftime("%Y-%m-%d %H:%M:%S")))
+        rows.append(("1", "stop", (s + timedelta(seconds=10)).strftime("%Y-%m-%d %H:%M:%S")))
+    _bulk_insert_events(app_instance, name, rows)
+
+    _view_day(app_instance, name, "23-06-2026")
+
+    text = app_instance.day_list.get("1.0", "end-1c")
+    assert "Anzeige evtl. unvollständig" in text
+    assert "3500 Events" in text
+
+
 def test_editor_midnight_session_roundtrip_no_duplicate(app_instance, monkeypatch):
     """Mitternachts-Session im Editor unverändert speichern: kein zweites
     Stop-Event, Ende bleibt auf dem Folgetag (Regression: 5 min statt 40 +
@@ -1311,11 +1365,13 @@ def test_editor_double_stop_guard_updates_existing_stop(app_instance, monkeypatc
 
 
 def test_editor_end_before_start_assumes_next_day(app_instance, monkeypatch):
-    """Ende < Start beim Stop-Nachtragen → Ende landet auf dem Folgetag
-    (früher: Warnung „Ende liegt vor dem Start", Speichern unmöglich)."""
+    """Ende < Start beim Stop-Nachtragen → RÜCKFRAGE; nach „Ja" landet das
+    Ende auf dem Folgetag (nie still umdeuten: vertauschte Zeiten ergäben
+    sonst eine fast 24-h-Session)."""
     from db_helper import log_start
 
     calls = _patch_messageboxes(monkeypatch)
+    asks = _patch_askyesno_recording(monkeypatch, answer=True)
     name = "mid_open"
     log_start(project="1", name=name, timestamp=datetime(2026, 6, 23, 22, 0), conn=app_instance.db_conn)
     _view_day(app_instance, name, "23-06-2026")
@@ -1330,10 +1386,37 @@ def test_editor_end_before_start_assumes_next_day(app_instance, monkeypatch):
     _invoke_editor_button(win, "Speichern")
 
     assert calls == []
+    assert len(asks) == 1 and "Mitternachts-Session" in asks[0][1]
     events = _user_events(app_instance, name)
     assert [e[0] for e in events] == ["start", "stop"]
     assert events[0][1] == "2026-06-23 22:00:00"  # Start unangetastet
     assert events[1][1] == "2026-06-24 01:00:00"
+
+
+def test_editor_end_before_start_decline_aborts(app_instance, monkeypatch):
+    """„Nein" bei der Folgetag-Rückfrage: nichts wird gespeichert und der
+    Editor bleibt offen (Schutz gegen vertauschte/vertippte Zeiten)."""
+    from db_helper import log_start
+
+    calls = _patch_messageboxes(monkeypatch)
+    asks = _patch_askyesno_recording(monkeypatch, answer=False)
+    name = "mid_decline"
+    log_start(project="1", name=name, timestamp=datetime(2026, 6, 23, 22, 0), conn=app_instance.db_conn)
+    _view_day(app_instance, name, "23-06-2026")
+
+    app_instance._edit_event(session=app_instance._day_sessions[0])
+    win = _find_editor(app_instance)
+    end_entry = _editor_entries(win)[2]
+    end_entry.delete(0, END)
+    end_entry.insert(0, "01:00")
+    _invoke_editor_button(win, "Speichern")
+
+    assert len(asks) == 1
+    assert calls == []
+    events = _user_events(app_instance, name)
+    assert events == [("start", "2026-06-23 22:00:00")]  # kein Stop, Start unangetastet
+    assert win.winfo_exists()  # Abbruch ohne Speichern: Dialog bleibt offen
+    win.destroy()
 
 
 def test_timer_rollover_rolls_date_field(app_instance):
@@ -1640,6 +1723,25 @@ def test_settings_save_blocks_db_change_with_live_break(app_instance, monkeypatc
     app_instance.open_settings()
     app_instance._break_active = True
     _assert_settings_save_blocks_db_change(app_instance, monkeypatch, tmp_path)
+
+
+def test_settings_save_same_db_path_variant_is_no_change(app_instance, monkeypatch):
+    """Derselbe DB-Pfad in anderer Schreibweise („/./"-Segment) zählt NICHT als
+    Wechsel: _open_database (inkl. close_stale_sessions!) darf nicht laufen —
+    db_changed muss wie der Live-Guard per abspath vergleichen."""
+    _patch_messageboxes(monkeypatch)
+    app_instance.open_settings()
+    win = _find_editor(app_instance)
+    variant = os.path.join(os.path.dirname(app_instance._db_path), ".", os.path.basename(app_instance._db_path))
+    assert variant != app_instance._db_path  # String-ungleich …
+    assert os.path.abspath(variant) == os.path.abspath(app_instance._db_path)  # … aber derselbe Pfad
+
+    opened = []
+    monkeypatch.setattr(app_instance, "_open_database", lambda p: opened.append(p) or True)
+    _find_settings_db_combobox(win).set(variant)
+    _invoke_editor_button(win, "Speichern")
+
+    assert opened == []  # kein Neuaufbau der DB-Verbindung
 
 
 # ---------------------------------------------------------------------------

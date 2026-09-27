@@ -111,15 +111,23 @@ def _enable_windows_dpi_awareness() -> None:
 
 
 def _install_signal_handlers(root: tk.Tk, app) -> None:
-    """SIGTERM/SIGINT → sauberer Stop-Pfad der App statt harter Abbruch.
+    """SIGTERM/SIGINT (+SIGBREAK) → sauberer Stop-Pfad statt harter Abbruch.
 
     Ohne Handler umgehen Logout/Shutdown/Ctrl+C ``_on_closing`` komplett — der
     offene Start bliebe in der DB und würde beim nächsten Launch nur noch per
     Heartbeat repariert. Python führt Signal-Handler im Hauptthread zwischen
     Bytecodes aus; der periodische Timer-Tick garantiert das binnen weniger
     Sekunden auch während ``mainloop``. Der Handler delegiert per ``after`` in
-    die Event-Loop und stellt keine Rückfragen (SIGTERM beim Logout darf nicht
-    blocken — auch unter Windows keine askyesno-Dialoge).
+    die Event-Loop und stellt keine Rückfragen (das Beenden darf nicht blocken
+    — keine askyesno-Dialoge).
+
+    Grenze unter WINDOWS: Logout/Shutdown stellt KEIN SIGTERM zu (GUI-Prozesse
+    bekommen WM_ENDSESSION, das Tk nicht in ein Event übersetzt) — dort greift
+    dieser Pfad also nicht, nur bei Ctrl+C/CTRL_BREAK in Konsolenläufen bzw.
+    ``os.kill`` aus Python. Der Verlust ist durch den 60-s-Heartbeat der App
+    begrenzt: der nächste Start schließt die verwaiste Session auf den letzten
+    Heartbeat. Zusätzlich wird, wo vorhanden, SIGBREAK (CTRL_BREAK_EVENT)
+    registriert; ein WM_ENDSESSION-Hook wäre der nächste Ausbauschritt.
     """
 
     def _graceful(signum, _frame):
@@ -127,7 +135,12 @@ def _install_signal_handlers(root: tk.Tk, app) -> None:
         with contextlib.suppress(Exception):
             root.after(0, app.shutdown_from_signal)
 
-    for sig in (signal.SIGTERM, signal.SIGINT):
+    sigs = [signal.SIGTERM, signal.SIGINT]
+    # SIGBREAK existiert nur unter Windows (CTRL_BREAK_EVENT an Konsolen-
+    # prozesse) — auf POSIX bleibt die Liste unverändert.
+    if hasattr(signal, "SIGBREAK"):
+        sigs.append(signal.SIGBREAK)
+    for sig in sigs:
         with contextlib.suppress(ValueError, OSError, AttributeError):
             signal.signal(sig, _graceful)
 

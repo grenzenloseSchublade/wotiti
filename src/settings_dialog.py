@@ -809,9 +809,13 @@ class SettingsDialog:
 
             self.app._reconcile_pomodoro_runtime(was_pomodoro_enabled)
 
-            # Switch database if changed
+            # Switch database if changed — Pfadvergleich per abspath wie beim
+            # Live-Session-Guard oben: eine andere SCHREIBWEISE desselben
+            # Pfads (./-Präfix, ..-Segment) passiert sonst den Guard, würde
+            # hier aber als „geändert" gelten und _open_database (inklusive
+            # close_stale_sessions!) auf die laufende Session loslassen.
             old_path = self.app._db_path
-            db_changed = new_config["database_path"] != old_path
+            db_changed = os.path.abspath(new_config["database_path"]) != os.path.abspath(old_path)
             if db_changed and self.app._open_database(new_config["database_path"]):
                 self.app.write(f"Datenbank gewechselt: {self.app._db_path}")
                 logger.info("Datenbank gewechselt: %s → %s", old_path, self.app._db_path)

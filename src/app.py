@@ -2952,8 +2952,17 @@ class App:
                 messagebox.showwarning("Fehler", "Mindestens Start- oder Endzeit angeben.", parent=win)
                 return
             if start_dt and stop_dt and stop_dt < start_dt:
-                # Ende vor Start = Session über Mitternacht → Ende auf den
-                # Folgetag legen (23:50 → 00:30 ist so direkt speicherbar).
+                # Ende vor Start: entweder eine Session über Mitternacht
+                # (23:50 → 00:30) oder schlicht vertauschte/vertippte Zeiten.
+                # Nie still umdeuten — erst nach Rückfrage auf den Folgetag
+                # legen; „Nein" bricht ohne Speichern ab (alter Schutz gegen
+                # Vertauscher, sonst entstünde eine fast 24-h-Session).
+                if not messagebox.askyesno(
+                    "Endzeit vor Startzeit",
+                    "Endzeit liegt vor Startzeit — als Mitternachts-Session in den Folgetag speichern?",
+                    parent=win,
+                ):
+                    return
                 stop_dt += timedelta(days=1)
 
             # Doppel-Stop-Guard: Zeigte eine (veraltete) Ansicht die Session als

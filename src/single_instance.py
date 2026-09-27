@@ -187,8 +187,19 @@ def try_acquire_single_instance(config: dict, logger: logging.Logger) -> SingleI
             return SingleInstanceOutcome(True, None, port, None)
         # Ohne ACK ist der Belegter-Port-Befund kein Instanz-Beweis (fremder
         # Dienst auf demselben Port) — normal weiterstarten, nur ohne IPC.
+        #
+        # Bekannte Lücke (Mischbetrieb alt/neu, einmaliges Upgrade-Fenster):
+        # Eine noch laufende Bestandsinstanz OHNE ACK-Support (vor v2.5) hebt
+        # zwar das Fenster, antwortet aber nie — sie ist hier nicht von einem
+        # fremden Dienst unterscheidbar, und die neue Instanz startet auf
+        # Linux/macOS parallel zur alten (unter Windows fängt das der
+        # Mutex-Guard ab). Bewusst so gewählt: ein sys.exit(0) wegen eines
+        # FREMDEN Dienstes auf dem Port wäre schlimmer (App ließe sich dauerhaft
+        # nicht mehr starten); die Lücke schließt sich, sobald die Altinstanz
+        # einmal beendet wurde.
         logger.warning(
-            "Single-Instance-Port %s belegt, aber kein WoTITI-ACK — vermutlich fremder Dienst; starte ohne Single-Instance-IPC.",
+            "Single-Instance-Port %s belegt, aber keine ACK-Antwort — fremder Dienst "
+            "oder WoTITI-Altinstanz ohne ACK-Support; starte trotzdem (ohne Single-Instance-IPC).",
             port,
         )
         return SingleInstanceOutcome(False, None, port, None)

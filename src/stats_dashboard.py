@@ -104,13 +104,32 @@ _last_autorefresh_mtime: float | None = None
 _active_filter: dict = {"start": None, "end": None, "projects": None}
 
 
+def _db_change_stamp(db_path: str) -> float:
+    """Änderungs-Zeitstempel der Datenbank INKLUSIVE WAL-Datei.
+
+    Die App schreibt im WAL-Modus (db_helper.create_connection): Commits
+    landen bis zum Checkpoint nur in ``<db>-wal``, die mtime der Hauptdatei
+    ändert sich dabei nicht. Für die Cache-Invalidierung zählt daher das
+    Maximum beider mtimes; fehlt die WAL-Datei (Rollback-Journal oder frisch
+    gecheckpointet), zählt die Hauptdatei allein. Alle mtime-Prüfungen des
+    Dashboards (get_cached_data, Auto-Refresh-Gate) MÜSSEN diesen Helper
+    nutzen — sonst zeigt die Auswertung stundenlang veraltete Daten.
+
+    Wirft wie ``os.path.getmtime`` einen ``OSError``, wenn die Hauptdatei fehlt.
+    """
+    stamp = os.path.getmtime(db_path)
+    with contextlib.suppress(OSError):
+        stamp = max(stamp, os.path.getmtime(db_path + "-wal"))
+    return stamp
+
+
 def get_cached_data(db_path, force=False):
     """Loads and caches DB data for reuse across callbacks."""
     if not db_path:
         return pl.DataFrame()
 
     try:
-        db_mtime = os.path.getmtime(db_path)
+        db_mtime = _db_change_stamp(db_path)
     except OSError:
         return pl.DataFrame()
 
@@ -980,7 +999,9 @@ def update_paths(
         if not current_db:
             raise dash.exceptions.PreventUpdate
         try:
-            current_mtime = os.path.getmtime(current_db)
+            # WAL-aware (siehe _db_change_stamp): sonst bliebe der Gate blind
+            # für Commits, die noch nicht in die Hauptdatei gecheckpointet sind.
+            current_mtime = _db_change_stamp(current_db)
         except OSError:
             raise dash.exceptions.PreventUpdate from None
         if current_mtime == _last_autorefresh_mtime:

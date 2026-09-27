@@ -885,17 +885,20 @@ def log_event(
         # Format timestamp (Single Source of Truth)
         ts_obj = timestamp if timestamp else datetime.now()
 
-        # DST-Fold (Uhr um 1 h zurückgestellt): Ein Stop, der naiv VOR dem
-        # zuletzt geschriebenen (noch offenen) Start liegt, würde beim Paaren
-        # zur Waise und die Session bliebe scheinbar ewig offen — die Zeit wäre
-        # via close_stale_sessions endgültig weg. Stattdessen auf den Start
+        # DST-Fold (Uhr um 1 h zurückgestellt): Ein LIVE-Stop (kein expliziter
+        # Zeitstempel → datetime.now()), der naiv VOR dem zuletzt geschriebenen
+        # (noch offenen) Start liegt, würde beim Paaren zur Waise und die
+        # Session bliebe scheinbar ewig offen — die Zeit wäre via
+        # close_stale_sessions endgültig weg. Stattdessen auf den Start
         # clampen (Null-Dauer, wie log_break_stop bei negativer Pausendauer).
         # Insertion-Order (id) statt Zeitstempel-Order, weil genau die im
         # Fold-Fall nicht monoton ist. Abstand strikt < 1 h: mehr kann die
         # Zeitumstellung nicht erzeugen (03:00 MESZ existiert als Startzeit
-        # nicht) — bewusst rückdatierte Stops (manuelle Einträge) und exakt
-        # 1 h zurückeditierte Stops bleiben unberührt.
-        if event_type == "stop":
+        # nicht). Explizit übergebene Zeitstempel (Editor-Nachtrag, Standby-
+        # Stop) werden NIE geclampt: ein zu einem VERGESSENEN Start
+        # nachgetragener Stop 13:30 gehört oft gar nicht zum zuletzt offenen
+        # Start 14:00 und muss exakt 13:30 bleiben.
+        if event_type == "stop" and timestamp is None:
             cursor.execute(
                 "SELECT event_type, timestamp FROM events WHERE user_id = ? AND project = ? ORDER BY id DESC LIMIT 1",
                 (user_id, project),
