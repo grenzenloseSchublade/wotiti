@@ -1424,7 +1424,8 @@ def fetch_day_events(
     App) erwartet. ``user``/``project`` filtern optional; ``limit`` deckelt
     entartete Datenbestände.
 
-    WICHTIG (Paarungs-Invariante): Alle Anzeige-Pfade (Tagesliste,
+    WICHTIG (Paarungs-Invariante): Alle Anzeige-Pfade (Tagesliste in
+    day_list.DayListView,
     Doppel-Stop-Guard und Überschneidungs-Prüfung des Session-Editors) müssen
     ihre Events über diese Funktion laden — nur wenn alle Pfade dieselbe
     Event-Menge sehen, paaren sie identisch.
@@ -1536,7 +1537,8 @@ def _hours_by_project_day(conn, user_id, days, project_filter=None) -> dict[str,
 
     # Events je Projekt sammeln und mit derselben LIFO-Paarung wie die übrigen
     # Dauer-Berechnungen (calculate_duration/calculate_daily_duration) auswerten.
-    # Hinweis: Die Tagesliste der App (_pair_day_sessions) paart bewusst FIFO —
+    # Hinweis: Die Tagesliste (day_list.py; Paarung: _pair_day_sessions in der
+    # App) paart bewusst FIFO —
     # dort geht es um die Anzeige einzelner Sessions in Erfassungsreihenfolge;
     # für SUMMEN ist LIFO robuster (verwaiste Starts bilden keine Mega-Paare,
     # siehe pair_sessions_lifo-Docstring). Beide liefern für saubere Daten

@@ -37,8 +37,8 @@ if sys.platform.startswith("win"):
 else:
     winsound = None
 
+from day_list import DayListView
 from db_helper import (
-    _WINDOW_MARGIN_DAYS,
     DATE_FORMAT,
     TIMESTAMP_FORMAT,
     UI_DATE_FORMAT,
@@ -61,7 +61,6 @@ from db_helper import (
     get_all_projects,
     get_all_users,
     get_daily_meta,
-    get_daily_meta_for_range,
     get_open_break,
     log_break_start,
     log_break_stop,
@@ -107,9 +106,6 @@ logger = logging.getLogger(__name__)
 # So ist das Anlegen eines Projekts direkt im Dropdown sichtbar/auffindbar.
 # Bewusst nur Standard-Zeichen (kein Emoji).
 NEW_PROJECT_LABEL = "+ Neues Projekt …"
-
-# Deutsche Wochentags-Kürzel (Mo=0) für den Benutzer-Kopf der Tagesliste.
-_WDAY_DE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 
 # Standby-Erkennung: Klafft zwischen zwei Timer-Ticks die Wanduhr um mehr als
 # diese Spanne weiter auseinander als die Monotonic-Uhr, war das System im
@@ -590,50 +586,9 @@ class App:
         self.db_content_frame = Frame(self.frame, bg="#C0C0C0")
         self.db_content_frame.grid(row=3, column=0, columnspan=6, pady=5, padx=5, sticky="nsew")
 
-        # Tagesliste als Text-Widget: Tags liefern die visuelle Hierarchie
-        # (Projekt fett + Farbbalken, Zeiten eingerückt, Notizen grau).
-        # takefocus=0 ist zwingend: _shortcut_guard überspringt fokussierte
-        # Text-Widgets — bekäme die Liste je Fokus, schluckte sie Strg+←/→/T.
-        self.day_list = Text(
-            self.db_content_frame,
-            bg="#FFFFFF",
-            fg="black",
-            font=("MS Sans Serif", 10),
-            relief="sunken",
-            borderwidth=2,
-            wrap="word",
-            state="disabled",
-            cursor="arrow",
-            takefocus=0,
-        )
-        self.day_list.grid(row=0, column=0, sticky="nsew")
-        # Fokus sofort wegleiten: Tks tk::TextButton1 setzt bei Mausklick
-        # BEDINGUNGSLOS den Fokus (takefocus=0 wirkt nur auf Tab-Traversal) —
-        # ein fokussiertes Text-Widget würde über _shortcut_guard die globalen
-        # Shortcuts Strg+←/→/T blockieren, bis man woanders hinklickt.
-        self.day_list.bind("<FocusIn>", lambda _e: self.master.focus_set())
-        self.day_list.bind("<Double-1>", self._edit_event)
-        self.day_list.bind("<Button-3>", self._show_row_context_menu)
-        self.day_list.bind("<Motion>", self._on_day_list_motion)
-        self.day_list.bind("<Leave>", self._on_day_list_leave)
-        self.day_list.bind("<Configure>", lambda _e: self._update_day_list_tabs())
-        _ToolTip(self.day_list, "Doppelklick: Session bearbeiten · Rechtsklick: Menü")
-        # Klick-Auflösung: Zeilennummer → Session (Kopf-/Zeiten-Zeile),
-        # Session-Tag → Session (präzise auf der ·-getrennten Zeiten-Zeile)
-        # und flache Session-Liste des Tages für den Open-Start-Scan.
-        # Projekt-Kopfzeilen (Layout A) tragen die erste Session des Projekts,
-        # damit Doppel-/Rechtsklick auch dort funktioniert.
-        self._line_sessions: dict[int, dict] = {}
-        self._tag_sessions: dict[str, dict] = {}
-        self._day_sessions: list[dict] = []
-        self._day_list_tabs_ready = False
-        self._init_day_list_tags()
-
-        self.scrollbar_listbox = Scrollbar(
-            self.db_content_frame, orient=VERTICAL, command=self.day_list.yview, bg="#C0C0C0", width=16
-        )
-        self.scrollbar_listbox.grid(row=0, column=1, sticky="ns")
-        self.day_list["yscrollcommand"] = self.scrollbar_listbox.set
+        # Tagesliste — Aufbau, Rendering und Kontextmenü leben in
+        # day_list.DayListView; die App exponiert Delegates (siehe unten).
+        self.day_list_view = DayListView(self, self.db_content_frame)
 
         # Wochen-Kachel — überlagert die Listbox, nicht den Timer.
         self._build_week_frame()
@@ -2745,380 +2700,47 @@ class App:
             return f"{start} → {stop}", "läuft"
         return f"{start} → {stop}", App._fmt_hours_hm(s["dur_h"])
 
-    def _init_day_list_tags(self) -> None:
-        """Definiert die festen Text-Tags der Tagesliste (einmalig beim Aufbau).
+    # ------------------------------------------------------------------
+    # Tagesliste — Aufbau, Rendering und Kontextmenü leben in
+    # day_list.DayListView; hier nur dünne Delegates/Properties für
+    # bestehende Call-Sites, den Session-Editor und die Tests.
+    # ------------------------------------------------------------------
 
-        Reihenfolge ist relevant: später definierte Tags haben in Tk höhere
-        Priorität — ``dur`` überschreibt so das Fett der Kopfzeile, ``dim``
-        das Grau von ``note``.
-        """
-        tw = self.day_list
-        tw.tag_configure("user", font=("MS Sans Serif", 9), foreground="#404040", spacing1=6, spacing3=2)
-        tw.tag_configure("proj_head", font=("MS Sans Serif", 10, "bold"), spacing1=8, lmargin1=2)
-        tw.tag_configure("dur", font=("MS Sans Serif", 10))
-        tw.tag_configure("check", foreground="#008000")
-        tw.tag_configure("times", lmargin1=22, lmargin2=22)
-        tw.tag_configure("note", lmargin1=22, lmargin2=22, foreground="#606060")
-        tw.tag_configure("dim", foreground="#808080")
-        tw.tag_configure("hover", background="#ECECEC")
-        tw.tag_configure("active_line", background="#D8D8D8")
+    @property
+    def day_list(self):
+        """Text-Widget der Tagesliste (lebt in der DayListView)."""
+        return self.day_list_view.widget
 
-    def _update_day_list_tabs(self) -> None:
-        """Setzt den rechtsbündigen Tab-Stop der Kopfzeilen auf die Widgetbreite."""
-        width = self.day_list.winfo_width()
-        if width > 1:
-            self.day_list.tag_configure("proj_head", tabs=(width - 24, "right"))
+    @property
+    def _line_sessions(self) -> dict[int, dict]:
+        """Zeilennummer → Session (Klick-Auflösung der Tagesliste)."""
+        return self.day_list_view._line_sessions
+
+    @property
+    def _tag_sessions(self) -> dict[str, dict]:
+        """Session-Tag → Session (Klick-Auflösung der Tagesliste)."""
+        return self.day_list_view._tag_sessions
+
+    @property
+    def _day_sessions(self) -> list[dict]:
+        """Flache Session-Liste des Anzeigetags (Open-Start-Scan des Editors)."""
+        return self.day_list_view._day_sessions
 
     def _day_list_bar_tag(self, project: str) -> str:
-        """Lazy-Tag für den Projekt-Farbbalken (▌) in der Projektfarbe.
-
-        Nutzt ``resolve_project_color`` (persistierte config-Farbe zuerst,
-        Fallback Hash-Farbe) — Balken und Wochen-Segmente zeigen so dieselbe
-        Farbe.
-        """
-        color = resolve_project_color(self.config, project)
-        tag = f"bar_{color.lstrip('#')}"
-        self.day_list.tag_configure(tag, foreground=color)
-        return tag
+        """Delegate: Lazy-Tag für den Projekt-Farbbalken (▌) in Projektfarbe."""
+        return self.day_list_view._bar_tag(project)
 
     def update_db_content(self):
         """Baut die Tagesliste (Text-Widget) aus der Datenbank neu auf."""
-        tw = self.day_list
-        for t in tw.tag_names():
-            if t.startswith("sess"):
-                tw.tag_delete(t)
-        self._line_sessions = {}
-        self._tag_sessions = {}
-        self._day_sessions = []
-        if not self._day_list_tabs_ready:
-            tw.update_idletasks()
-            self._day_list_tabs_ready = True
-        self._update_day_list_tabs()
-        tw.configure(state="normal")
-        try:
-            tw.delete("1.0", END)
-            self._render_day_list(tw)
-        finally:
-            tw.configure(state="disabled")
-
-    def _render_day_list(self, tw):
-        """Rendert den Inhalt der Tagesliste (läuft mit state='normal')."""
-        if self.db_conn:
-            cursor = self.db_conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='events';")
-            if cursor.fetchone() is None:
-                return
-
-            # Filter by currently selected user and the date shown in the date field
-            view_date = self._get_selected_date()
-            suffix = "" if self._is_viewing_today() else "  (nicht heute)"
-            # Kalenderwoche des angezeigten Datums — die KW braucht man beim
-            # Übertragen der Zeiten ins Firmensystem ständig.
-            try:
-                kw = f" · KW {datetime.strptime(view_date, '%d-%m-%Y').isocalendar()[1]}"
-            except (ValueError, TypeError):
-                kw = ""
-            self._status_date_label.config(text=f"Ansicht: {view_date}{kw}{suffix}")
-            current_name = self.name_entry.get().strip()
-            limit = 500
-            # Events über das Timestamp-Fenster des Anzeigetags laden statt über
-            # die date-Spalte: nur so wird eine Mitternachts-Session (23:50 →
-            # 00:30) vollständig gepaart — über die date-Spalte bliebe sie am
-            # Starttag ewig „laufend" und hinterließe am Folgetag einen
-            # verwaisten Stop. Rand ±_WINDOW_MARGIN_DAYS wie in
-            # calculate_daily_duration, damit Start UND Stop tagübergreifender
-            # Sessions mitgelesen werden.
-            try:
-                view_day = datetime.strptime(view_date, UI_DATE_FORMAT).date()
-            except ValueError:
-                return
-            ts_lo, ts_hi = _timestamp_window(view_day, view_day)
-            day_lo = datetime.combine(view_day, datetime.min.time()).strftime(TIMESTAMP_FORMAT)
-            day_hi = datetime.combine(view_day + timedelta(days=1), datetime.min.time()).strftime(TIMESTAMP_FORMAT)
-            # SQL-Deckel nur als Schutz vor entarteten Datenbeständen — auf die
-            # Fensterbreite skaliert, damit Randtage den Anzeigetag nicht aus
-            # dem Limit verdrängen.
-            window_limit = limit * (2 * _WINDOW_MARGIN_DAYS + 1)
-            if current_name:
-                cursor.execute(
-                    """
-                    SELECT COUNT(*) FROM events e
-                    JOIN users u ON u.id = e.user_id
-                    WHERE u.name = ? AND e.timestamp >= ? AND e.timestamp < ?
-                    """,
-                    (current_name, day_lo, day_hi),
-                )
-                total_count = cursor.fetchone()[0]
-            else:
-                cursor.execute(
-                    """
-                    SELECT COUNT(*) FROM events e
-                    JOIN users u ON u.id = e.user_id
-                    WHERE e.timestamp >= ? AND e.timestamp < ?
-                    """,
-                    (day_lo, day_hi),
-                )
-                total_count = cursor.fetchone()[0]
-            events = fetch_day_events(self.db_conn, ts_lo, ts_hi, user=current_name or None, limit=window_limit)
-            view_iso = view_day.strftime(DATE_FORMAT)
-            chronological = bool(self.config.get("entry_list_chronological", False))
-            # Nur Sessions des Anzeigetags behalten: eine Session gehört zum Tag
-            # ihres Starts (ein verwaister Stop zum Tag des Stops) — die
-            # Mitternachts-Session erscheint so vollständig am Starttag.
-            sessions = [
-                s
-                for s in (self._pair_day_sessions(events) if events else [])
-                if s["sort_ts"] and s["sort_ts"].date() == view_day
-            ]
-
-            # Meta (Notiz/✓) je (user, project) cachen — wenige Abfragen/Tag.
-            meta_cache: dict[tuple, dict] = {}
-
-            def _meta(user, project):
-                key = (user, project)
-                if key not in meta_cache:
-                    meta_cache[key] = (
-                        get_daily_meta(self.db_conn, user, project, view_iso)
-                        if view_iso
-                        else {"note": "", "transferred": False, "transferred_at": None}
-                    )
-                return meta_cache[key]
-
-            # Projekte mit Notiz/✓ aber OHNE Events an dem Tag ermitteln, damit
-            # eine Hauptfenster-Notiz nie unsichtbar bleibt (z. B. Default-Projekt
-            # ohne Sessions). meta_cache wird dabei direkt vorbefüllt.
-            event_pairs = {(s["user"], s["project"]) for s in sessions}
-            note_only: dict[str, list] = {}
-            if view_iso:
-                if current_name:
-                    for (proj, _d), m in get_daily_meta_for_range(self.db_conn, current_name, [view_iso]).items():
-                        if (m["note"] or m["transferred"]) and (current_name, proj) not in event_pairs:
-                            meta_cache[(current_name, proj)] = m
-                            note_only.setdefault(current_name, []).append(proj)
-                else:
-                    cur2 = self.db_conn.cursor()
-                    cur2.execute(
-                        "SELECT u.name, n.project, n.note, n.transferred, n.transferred_at "
-                        "FROM daily_notes n JOIN users u ON u.id = n.user_id "
-                        "WHERE n.date = ? AND (n.note != '' OR n.transferred = 1)",
-                        (view_iso,),
-                    )
-                    for uname, proj, note, transferred, tat in cur2.fetchall():
-                        if (uname, proj) not in event_pairs:
-                            meta_cache[(uname, proj)] = {
-                                "note": note or "",
-                                "transferred": bool(transferred),
-                                "transferred_at": tat,
-                            }
-                            note_only.setdefault(uname, []).append(proj)
-
-            if sessions or note_only:
-
-                def _emit(segments, session=None):
-                    """Fügt eine Zeile aus (Text, Tags)-Segmenten ein + Mapping."""
-                    line_no = int(tw.index("end-1c").split(".")[0])
-                    for text, tags in segments:
-                        tw.insert(END, text, tags)
-                    tw.insert(END, "\n")
-                    if session is not None:
-                        self._line_sessions[line_no] = session
-
-                def _range_str(s):
-                    start = s["start_ts"].strftime("%H:%M") if s["start_ts"] else "…"
-                    stop = s["stop_ts"].strftime("%H:%M") if s["stop_ts"] else "…"
-                    return f"{start}–{stop}"
-
-                def _note_line(note):
-                    if note:
-                        _emit([(note, ("note",))])
-                    else:
-                        _emit([("(keine Notiz)", ("note", "dim"))])
-
-                def _register(s):
-                    """Session in Tag-/Tages-Mapping aufnehmen; liefert (dict, Tag)."""
-                    full = {**s, "date_iso": view_iso}
-                    stag = f"sess{len(self._day_sessions)}"
-                    self._day_sessions.append(full)
-                    self._tag_sessions[stag] = full
-                    return full, stag
-
-                # Bewusst KEINE Datums-Kopfzeile mehr: das Datum steht bereits
-                # im (gelb markierten) Datumsfeld und in der Statusleiste.
-
-                # Nutzer in Erscheinungsreihenfolge (Events zuerst, dann Notiz-only).
-                users_order = []
-                for s in sessions:
-                    if s["user"] not in users_order:
-                        users_order.append(s["user"])
-                for uname in note_only:
-                    if uname not in users_order:
-                        users_order.append(uname)
-
-                # Benutzer-Kopf nur, wenn die Zuordnung nicht ohnehin klar ist
-                # (kein Benutzer-Filter oder mehrere Benutzer sichtbar).
-                show_user_head = not current_name or len(users_order) > 1
-                try:
-                    d = datetime.strptime(view_date, UI_DATE_FORMAT)
-                    head_date = f"{_WDAY_DE[d.weekday()]} {d.strftime('%d.%m.')}"
-                except ValueError:
-                    head_date = view_date
-
-                for user in users_order:
-                    if show_user_head:
-                        _emit([(f"{user} — {head_date}", ("user",))])
-                    user_sessions = [s for s in sessions if s["user"] == user]
-                    if not chronological:
-                        # Layout A: nach Projekt gruppiert.
-                        projects_order = []
-                        for s in user_sessions:
-                            if s["project"] not in projects_order:
-                                projects_order.append(s["project"])
-                        for project in projects_order:
-                            meta = _meta(user, project)
-                            bar = self._day_list_bar_tag(project)
-                            proj_sessions = [ps for ps in user_sessions if ps["project"] == project]
-                            total_h = sum(ps["dur_h"] or 0.0 for ps in proj_sessions)
-                            # Kopfzeile trägt die erste Session, damit Doppel-/
-                            # Rechtsklick auch auf ihr den Editor bzw. das Menü öffnet.
-                            head = [
-                                ("▌ ", ("proj_head", bar)),
-                                (project, ("proj_head",)),
-                                ("\t", ("proj_head",)),
-                                (self._fmt_hours_hm(total_h), ("dur",)),
-                            ]
-                            if meta["transferred"]:
-                                head.append((" ✓", ("check",)))
-                            _emit(head, {**proj_sessions[0], "date_iso": view_iso})
-                            segs = []
-                            first_full = None
-                            for s in proj_sessions:
-                                full, stag = _register(s)
-                                first_full = first_full or full
-                                if segs:
-                                    segs.append((" · ", ("times",)))
-                                segs.append((_range_str(s), ("times", stag)))
-                            _emit(segs, first_full)
-                            _note_line(meta["note"])
-                    else:
-                        # Layout B: chronologisch, Projekt je Zeile.
-                        for s in user_sessions:
-                            meta = _meta(user, s["project"])
-                            full, stag = _register(s)
-                            _, dur = self._session_times_str(s)
-                            segs = [
-                                ("▌ ", (self._day_list_bar_tag(s["project"]),)),
-                                (f"{_range_str(s)}  ", (stag,)),
-                                (s["project"], ()),
-                                (f"  ({dur})", ("dur",)),
-                            ]
-                            if meta["transferred"]:
-                                segs.append((" ✓", ("check",)))
-                            _emit(segs, full)
-                            _note_line(meta["note"])
-
-                    # Notiz/✓-Projekte ohne Zeiten ans Ende der Nutzergruppe.
-                    for project in sorted(note_only.get(user, [])):
-                        meta = _meta(user, project)
-                        head = [
-                            ("▌ ", ("proj_head", self._day_list_bar_tag(project))),
-                            (project, ("proj_head",)),
-                            ("  (keine Zeiten)", ("dim",)),
-                        ]
-                        if meta["transferred"]:
-                            head.append((" ✓", ("check",)))
-                        _emit(head)
-                        _note_line(meta["note"])
-
-                # Phase 2.4: Hinweis, wenn das Listenlimit greift.
-                if total_count > limit:
-                    _emit([(f"… {total_count - limit} weitere Einträge ausgeblendet (Limit {limit})", ("dim",))])
-            else:
-                # Empty-State: sichtbar machen, dass der Tag wirklich leer ist
-                # (und nicht etwa die Liste defekt) — dezent im dim-Grau.
-                tw.insert(END, "Keine Einträge für diesen Tag\n", ("dim",))
+        self.day_list_view.refresh()
 
     def _event_session(self, event) -> dict | None:
-        """Session unter dem Mauszeiger; None auf Kopf-/Notiz-/Leerbereich."""
-        tw = self.day_list
-        idx = tw.index(f"@{event.x},{event.y}")
-        # index() clampt auch Klicks weit unterhalb der letzten Zeile auf
-        # deren Index — nur reagieren, wenn der Klick die Zeile wirklich trifft.
-        info = tw.dlineinfo(idx)
-        if not info or not (info[1] <= event.y <= info[1] + info[3]):
-            return None
-        # Session-Tags zuerst: auf der ·-Zeitenzeile trifft der Klick so die
-        # exakte Session statt nur der ersten der Zeile.
-        for t in tw.tag_names(idx):
-            if t in self._tag_sessions:
-                return self._tag_sessions[t]
-        return self._line_sessions.get(int(idx.split(".")[0]))
-
-    def _on_day_list_motion(self, event) -> None:
-        """Hinterlegt die Zeile unter dem Cursor (Klick-Affordanz)."""
-        tw = self.day_list
-        tw.tag_remove("hover", "1.0", END)
-        idx = tw.index(f"@{event.x},{event.y}")
-        info = tw.dlineinfo(idx)
-        line = int(idx.split(".")[0])
-        if info and info[1] <= event.y <= info[1] + info[3] and line in self._line_sessions:
-            tw.tag_add("hover", f"{line}.0", f"{line}.end")
-
-    def _on_day_list_leave(self, _event=None) -> None:
-        self.day_list.tag_remove("hover", "1.0", END)
-
-    def _show_row_context_menu(self, event):
-        """Rechtsklick auf eine Session-Zeile: Menü mit Bearbeiten + ✓-Toggle."""
-        session = self._event_session(event)
-        if session is None:
-            return  # Kopf-/Notiz-/Limit-Zeile ohne Session
-        tw = self.day_list
-        line = int(tw.index(f"@{event.x},{event.y}").split(".")[0])
-        tw.tag_remove("active_line", "1.0", END)
-        tw.tag_add("active_line", f"{line}.0", f"{line}.end")
-
-        menu = Menu(tw, tearoff=0)
-        # Tk räumt Menü-Widgets nicht selbst ab — ohne destroy akkumuliert
-        # jeder Rechtsklick ein Widget über die gesamte App-Laufzeit.
-        menu.bind(
-            "<Unmap>",
-            lambda _e: (tw.tag_remove("active_line", "1.0", END), menu.after_idle(menu.destroy)),
-        )
-        menu.add_command(label="Bearbeiten…", command=lambda s=session: self._edit_event(session=s))
-        date_iso = session.get("date_iso")
-        if date_iso:
-            meta = get_daily_meta(self.db_conn, session["user"], session["project"], date_iso)
-            label = "Übertragen-Häkchen entfernen" if meta["transferred"] else "Als übertragen markieren"
-            menu.add_command(
-                label=label,
-                command=lambda s=session, t=not meta["transferred"]: self._toggle_row_transferred(s, t),
-            )
-        try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            # Ohne grab_release bleibt unter X11 ein Pointer-Grab hängen.
-            menu.grab_release()
+        """Delegate: Session unter dem Mauszeiger; None auf Kopf-/Leerbereich."""
+        return self.day_list_view._event_session(event)
 
     def _toggle_row_transferred(self, session: dict, transferred: bool) -> None:
-        """Setzt den »übertragen«-Status für die (Benutzer, Projekt, Tag)-Zeile.
-
-        Gleiches Verhalten wie die Haupt-Checkbox (_on_transferred_toggled),
-        nur mit explizitem Ziel statt der aktuellen Combobox-Auswahl.
-        """
-        if not self.db_conn:
-            return
-        user, project, date_iso = session["user"], session["project"], session.get("date_iso")
-        if not date_iso:
-            return
-        today_iso = datetime.now().date().strftime(DATE_FORMAT)
-        set_daily_transferred(self.db_conn, user, project, date_iso, transferred, today_iso)
-        # Falls genau dieser Eintrag gerade im Notiz-/✓-Bereich geladen ist,
-        # Checkbox nachziehen (Flush zuerst, damit getippter Text nicht verloren geht).
-        if self._note_loaded_key == (user, project, date_iso):
-            self._flush_pending_note()
-            self._load_note()
-        self.update_db_content()
-        if self._week_view_active:
-            self._refresh_week_view()
+        """Delegate: »übertragen«-Status einer Tageslisten-Zeile setzen."""
+        self.day_list_view._toggle_row_transferred(session, transferred)
 
     def _edit_event(self, event=None, session=None):
         """Open the session editor for the double-clicked session row.
