@@ -26,6 +26,11 @@ from typing import Any
 FOCUS_MESSAGE = b"WOTITI_FOCUS\n"
 FOCUS_PREFIX = b"WOTITI_FOCUS"
 
+# Antwort-Token der Bestandsinstanz. Erst dieses ACK beweist, dass auf dem
+# Port wirklich WoTITI lauscht und nicht ein beliebiger fremder Dienst.
+ACK_MESSAGE = b"WOTITI_ACK\n"
+ACK_PREFIX = b"WOTITI_ACK"
+
 # Windows named mutex — kernel-level single instance (Local namespace).
 _WIN_MUTEX_NAME = "Local\\WoTitiSingleInstance"
 _win_mutex_handle: int | None = None
@@ -59,9 +64,20 @@ class SingleInstanceOutcome:
     stop_event: threading.Event | None
 
 
-def _notify_existing(port: int, logger: logging.Logger) -> None:
+def _notify_existing(port: int, logger: logging.Logger) -> bool:
+    """Sendet FOCUS und wartet auf das ACK der Bestandsinstanz.
+
+    Connect+Send allein beweist nichts — auf dem Port kann ein fremder Dienst
+    lauschen. Nur wenn das ACK-Token zurückkommt, gilt der Ping als zugestellt.
+    """
     with socket.create_connection(("127.0.0.1", port), timeout=2.0) as sock:
         sock.sendall(FOCUS_MESSAGE)
+        sock.settimeout(1.0)
+        try:
+            data = sock.recv(64)
+        except OSError:
+            return False
+        return ACK_PREFIX in data
 
 
 def _notify_existing_with_retries(
@@ -70,15 +86,16 @@ def _notify_existing_with_retries(
     attempts: int = 12,
     delay_sec: float = 0.15,
 ) -> bool:
-    """Try to reach the primary instance; return True if any attempt succeeded."""
+    """Try to reach the primary instance; return True if any attempt was ACKed."""
     for i in range(attempts):
         try:
-            _notify_existing(port, logger)
-            return True
+            if _notify_existing(port, logger):
+                return True
+            logger.debug("IPC notify attempt %s/%s: kein ACK", i + 1, attempts)
         except OSError as e:
             logger.debug("IPC notify attempt %s/%s: %s", i + 1, attempts, e)
-            if i + 1 < attempts:
-                time.sleep(delay_sec)
+        if i + 1 < attempts:
+            time.sleep(delay_sec)
     return False
 
 
@@ -146,7 +163,8 @@ def try_acquire_single_instance(config: dict, logger: logging.Logger) -> SingleI
     """
     Before ``tk.Tk()``:
     - Bind localhost IPC port -> we are primary; return listen socket + stop_event.
-    - Port busy -> notify primary (with retries); ``should_exit=True`` or ``sys.exit(0)``.
+    - Port busy + ACK -> primary notified; ``should_exit=True``.
+    - Port busy without ACK -> foreign service; continue without IPC.
     """
     if not config.get("single_instance", True):
         return SingleInstanceOutcome(False, None, 0, None)
@@ -167,11 +185,13 @@ def try_acquire_single_instance(config: dict, logger: logging.Logger) -> SingleI
         if _notify_existing_with_retries(port, logger):
             logger.info("WoTITI läuft bereits — Hauptfenster in den Vordergrund angefordert.")
             return SingleInstanceOutcome(True, None, port, None)
+        # Ohne ACK ist der Belegter-Port-Befund kein Instanz-Beweis (fremder
+        # Dienst auf demselben Port) — normal weiterstarten, nur ohne IPC.
         logger.warning(
-            "Single-Instance-Port %s belegt, IPC nicht erreichbar — beende ohne zweites Fenster.",
+            "Single-Instance-Port %s belegt, aber kein WoTITI-ACK — vermutlich fremder Dienst; starte ohne Single-Instance-IPC.",
             port,
         )
-        sys.exit(0)
+        return SingleInstanceOutcome(False, None, port, None)
 
     listen_sock.listen(128)
     stop_event = threading.Event()
@@ -205,6 +225,10 @@ def start_ipc_server_thread(
                 with conn:
                     data = conn.recv(64)
                     if FOCUS_PREFIX in data:
+                        # ACK zuerst — der Absender wartet darauf und darf
+                        # nicht am UI-Thread hängen.
+                        with contextlib.suppress(OSError):
+                            conn.sendall(ACK_MESSAGE)
 
                         def _do() -> None:
                             try:
@@ -213,8 +237,10 @@ def start_ipc_server_thread(
                                 logger.warning("raise_main_window callback failed: %s", ex)
 
                         schedule_on_ui_thread(_do)
-            except OSError as e:
-                logger.debug("IPC recv: %s", e)
+            except Exception as e:
+                # ``root.after`` wirft während des Shutdowns RuntimeError/
+                # TclError (nicht nur OSError) — der Thread muss das überleben.
+                logger.debug("IPC recv/schedule: %s", e)
 
     t = threading.Thread(target=_run, name="wotiti-ipc", daemon=True)
     t.start()

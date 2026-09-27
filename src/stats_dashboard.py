@@ -1,6 +1,5 @@
 import logging
 import os
-import socket
 import sqlite3
 
 import dash
@@ -82,6 +81,15 @@ app = Dash(
     suppress_callback_exceptions=True,
     serve_locally=_serve_locally,
 )
+
+
+# Health-Endpunkt für die Haupt-App: deren Dashboard-Check fragt diesen Pfad
+# per HTTP ab und erkennt so, dass hier wirklich WoTITI antwortet und nicht
+# ein fremder Dienst auf demselben Port (Pfad/Body gespiegelt in app.py).
+@app.server.route("/wotiti-health")
+def _wotiti_health():
+    return "wotiti-dashboard-ok"
+
 
 _DATA_CACHE = {"db_path": None, "db_mtime": None, "data": None, "stats": {}}
 
@@ -1774,15 +1782,6 @@ def update_kw_report(selected, db_path):
     return label, hint, html.Div([table, legend])
 
 
-def _find_available_port(start_port):
-    for port in range(start_port, start_port + 20):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.settimeout(0.2)
-            if sock.connect_ex(("127.0.0.1", port)) != 0:
-                return port
-    return start_port
-
-
 # ---------------------------------------------------------------------------
 # Übersichts-Tab Callback
 # ---------------------------------------------------------------------------
@@ -1917,8 +1916,16 @@ def update_overview(db_path):
 
 if __name__ == "__main__":
     debug_mode = os.getenv("DASH_DEBUG", "0") == "1"
-    base_port = int(os.getenv("DASH_PORT", "8052"))
-    port = _find_available_port(base_port)
-    if port != base_port:
-        logger.info("Port %d belegt, starte auf %d", base_port, port)
-    app.run(debug=debug_mode, use_reloader=False, port=port)
+    port = int(os.getenv("DASH_PORT", "8052"))
+    # Strikt auf DASH_PORT binden — die Haupt-App pollt exakt diesen Port.
+    # Ein stilles Ausweichen auf Port+1 liefe dort nur in einen Timeout.
+    try:
+        app.run(debug=debug_mode, use_reloader=False, port=port)
+    except SystemExit as e:
+        # Werkzeug beendet bei belegtem Port selbst per sys.exit(1).
+        if e.code not in (0, None):
+            logger.error("Dashboard-Port %d nicht bindbar — beende (kein Ausweichport).", port)
+        raise
+    except OSError:
+        logger.exception("Dashboard-Port %d nicht bindbar — beende (kein Ausweichport).", port)
+        raise SystemExit(1) from None

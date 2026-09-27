@@ -3,12 +3,12 @@ import glob
 import logging
 import os
 import re
-import socket
 import sqlite3
 import subprocess
 import sys
 import threading
 import time
+import urllib.request
 import webbrowser
 from datetime import datetime, timedelta
 from shutil import which
@@ -125,6 +125,22 @@ CONSOLE_MAX_LINES = 500
 # close_stale_sessions den verwaisten Start auf diesen Zeitpunkt statt mit
 # Null-Dauer (max. ~1 min Verlust statt der ganzen Session).
 HEARTBEAT_INTERVAL_SECONDS = 60
+
+# Health-Endpunkt des Statistik-Dashboards (siehe stats_dashboard.py). Ein
+# nackter TCP-Connect würde jeden fremden Lauscher als "Dashboard läuft"
+# werten — erst die erwartete HTTP-Antwort zählt.
+DASHBOARD_HEALTH_PATH = "/wotiti-health"
+DASHBOARD_HEALTH_BODY = b"wotiti-dashboard-ok"
+
+
+def _dashboard_http_ok(port: int, timeout: float = 0.5) -> bool:
+    """Prüft per HTTP, ob auf *port* wirklich das WoTITI-Dashboard antwortet."""
+    url = f"http://127.0.0.1:{port}{DASHBOARD_HEALTH_PATH}"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            return resp.status == 200 and DASHBOARD_HEALTH_BODY in resp.read(64)
+    except Exception:
+        return False
 
 
 class App:
@@ -4640,9 +4656,4 @@ class App:
     def _is_dashboard_running(self):
         if not self._stats_port:
             return False
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.settimeout(0.2)
-                return sock.connect_ex(("127.0.0.1", self._stats_port)) == 0
-        except Exception:
-            return False
+        return _dashboard_http_ok(self._stats_port)

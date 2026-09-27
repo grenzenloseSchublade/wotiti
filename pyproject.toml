@@ -33,7 +33,11 @@ requires = ["hatchling>=1.24.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/wotiti"]
+# Flache Module unter src/ (kein Paketordner src/wotiti): src/-Präfix wird
+# abgestreift, die Module landen top-level im Wheel — genau wie sie zur
+# Laufzeit importiert werden (pythonpath = ["src"]).
+only-include = ["src"]
+sources = ["src"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

@@ -1021,8 +1021,8 @@ def perform_anova_analysis(data):
             }
 
         return results
-    except Exception as e:
-        print(f"Fehler in ANOVA-Analyse: {str(e)}")
+    except Exception:
+        logger.exception("Fehler in ANOVA-Analyse")
         return None
 
 
