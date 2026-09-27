@@ -1836,6 +1836,9 @@ def update_overview(db_path):
 
     zeitraum = f"{ov['date_min']} – {ov['date_max']}" if ov["date_min"] else "—"
     quality = ov["data_quality"]
+    # Die heute laufende Session ist kein Datenqualitäts-Alarm — sie wird
+    # neutral ausgewiesen; rot bleiben nur echte verwaiste Starts.
+    running_sessions = quality.get("running_sessions", 0)
     open_color = "danger" if quality["open_sessions"] > 0 else "success"
     we_color = "warning" if quality["weekend_entries"] > 0 else "secondary"
     fy_color = "warning" if quality["holiday_entries"] > 0 else "secondary"
@@ -1892,8 +1895,19 @@ def update_overview(db_path):
                         dbc.CardBody(
                             [
                                 html.H6("Datenqualität", style={"color": _colors["text"]}),
+                                *(
+                                    [
+                                        dbc.Badge(
+                                            f"Laufende Session: {running_sessions}",
+                                            color="info",
+                                            className="me-2",
+                                        )
+                                    ]
+                                    if running_sessions
+                                    else []
+                                ),
                                 dbc.Badge(
-                                    f"Offene Sessions: {quality['open_sessions']}",
+                                    f"Verwaiste Sessions: {quality['open_sessions']}",
                                     color=open_color,
                                     className="me-2",
                                 ),

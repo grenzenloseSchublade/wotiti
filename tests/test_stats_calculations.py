@@ -107,7 +107,23 @@ def test_calculate_overview_basic():
     assert ov["total_hours"] == pytest.approx(10.0)
     assert ov["n_sessions"] == 2
     assert ov["data_quality"]["open_sessions"] == 1
+    assert ov["data_quality"]["running_sessions"] == 0
     assert ov["data_quality"]["weekend_entries"] >= 2
+
+
+def test_calculate_overview_running_today_not_flagged_open():
+    """Ein offener Start von heute zählt als laufende, nicht als verwaiste Session."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    df = _df(
+        [
+            ("u", "p", "start", "2024-01-08 09:00:00"),
+            ("u", "p", "stop", "2024-01-08 17:00:00"),
+            ("u", "p", "start", f"{today} 00:00:01"),
+        ]
+    )
+    ov = calculate_overview(df)
+    assert ov["data_quality"]["open_sessions"] == 0
+    assert ov["data_quality"]["running_sessions"] == 1
 
 
 def test_calculate_overview_empty():

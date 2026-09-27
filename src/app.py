@@ -120,6 +120,13 @@ SUSPEND_GAP_SECONDS = 180
 # Maximale Zeilen der In-App-Konsole (älteste werden verworfen).
 CONSOLE_MAX_LINES = 500
 
+# Fenstertitel je Timer-Zustand — so ist der Zustand auch in Taskleiste und
+# Alt-Tab-Umschalter ablesbar, ohne das Fenster in den Vordergrund zu holen.
+# Glyphen wie auf den Start-/Pause-Buttons (▶ / ▮▮).
+WINDOW_TITLE_IDLE = "WoTITI - Work Time Timer"
+WINDOW_TITLE_RUNNING = "▶ Läuft – WoTITI"
+WINDOW_TITLE_BREAK = "▮▮ Pause – WoTITI"
+
 # Heartbeat-Intervall: bei offener Session persistiert der Timer-Tick ca.
 # minütlich einen last_seen-Zeitstempel — nach Absturz/SIGKILL schließt
 # close_stale_sessions den verwaisten Start auf diesen Zeitpunkt statt mit
@@ -232,7 +239,7 @@ class App:
         self.idle_timeout_minutes = int(self.config.get("idle_timeout_minutes", 120))
         self._idle_check_counter = 0
 
-        master.title("WoTITI - Work Time Timer")
+        master.title(WINDOW_TITLE_IDLE)
         master.configure(bg="#C0C0C0")
 
         # Restore last window geometry when available, fallback to centered.
@@ -692,6 +699,15 @@ class App:
         )
         self._status_date_label.pack(side="left", padx=4)
 
+        # Fehler zusätzlich rot in der Statusleiste — die Konsole kann
+        # eingeklappt oder weggescrollt sein, die Statusleiste ist immer
+        # sichtbar (Meldung heilt sich selbst, siehe _flag_error_feedback).
+        self._status_error_label = Label(
+            self._status_frame, text="", bg="#C0C0C0", fg="red", font=("MS Sans Serif", 8), anchor="w"
+        )
+        self._status_error_label.pack(side="left", padx=8)
+        self._status_error_after_id = None
+
         # Nur der Punkt — das frühere "aktuell/veraltet"-Textlabel trug keine
         # Information, die der Punkt + Tooltip nicht auch liefert (Zustand
         # heilt sich binnen 2 s selbst).
@@ -703,7 +719,9 @@ class App:
         # =====================================================
         # Grid weights
         # =====================================================
-        self.frame.grid_rowconfigure(3, weight=1)
+        # Tagesliste (Zeile 3) wächst 3:1 gegenüber der Konsole (Zeile 4) —
+        # bei 1:1 fräße die Konsole beim Vergrößern die halbe Fensterhöhe.
+        self.frame.grid_rowconfigure(3, weight=3)
         self.frame.grid_rowconfigure(4, weight=1)
         # Alle Kinder spannen columnspan=6 — eine 7. Spalte gäbe nur toten Rand.
         for col in range(6):
@@ -2135,6 +2153,7 @@ class App:
     def _set_button_state_idle(self):
         """Set buttons to idle state: Start enabled, Pause+Stop disabled."""
         self._set_timer_color("idle")
+        self.master.title(WINDOW_TITLE_IDLE)
         self.start_button.config(state="normal", bg="#D4D0C8", text="\u25b6 Start")
         self.pause_button.config(state="disabled", bg="#A9A9A9", text="\u25ae\u25ae Pause")
         self.stop_button.config(state="disabled", bg="#A9A9A9")
@@ -2149,6 +2168,7 @@ class App:
     def _set_button_state_running(self):
         """Set buttons to running state: Start disabled, Pause+Stop enabled."""
         self._set_timer_color("running")
+        self.master.title(WINDOW_TITLE_RUNNING)
         self.start_button.config(state="disabled", bg="#A9A9A9", text="\u25b6 Start")
         self.pause_button.config(state="normal", bg="#D4D0C8", text="\u25ae\u25ae Pause")
         self.stop_button.config(state="normal", bg="#D4D0C8")
@@ -2165,6 +2185,7 @@ class App:
     def _set_button_state_break(self):
         """Set buttons to break state: Start='Resume', Pause disabled, Stop enabled."""
         self._set_timer_color("break")
+        self.master.title(WINDOW_TITLE_BREAK)
         self.start_button.config(state="normal", bg="#D4D0C8", text="\u25b6 Weiter")
         self.pause_button.config(state="disabled", bg="#A9A9A9", text="\u25ae\u25ae Pause")
         self.stop_button.config(state="normal", bg="#D4D0C8")
@@ -2183,6 +2204,8 @@ class App:
             self._flush_pending_note()
             if self._break_active:
                 # Start button acts as Resume during a break — always resume.
+                # Resume läuft am realen heutigen Tag — Anzeige mitziehen.
+                self._jump_view_to_today()
                 self._finish_break(play_sound=True, bring_to_front=True, force_resume=True)
                 return
             project = self.get_project()
@@ -2201,6 +2224,10 @@ class App:
                         self.write("Session konnte nicht gestartet werden (DB-Fehler).", error=True)
                         return
                     self._mark_dirty()
+                    # Zeigte das Datumsfeld noch einen anderen Tag, springt es
+                    # jetzt auf heute — sonst fröre die Anzeige ein (das
+                    # _is_viewing_today-Gate im Timer-Tick griffe jede Sekunde).
+                    self._jump_view_to_today()
                     self.session_active[(name, project)] = True
                     self.timer_running = True
                     self.timer_start_time = time.time()
@@ -2711,6 +2738,24 @@ class App:
         self.date_entry.insert(0, new_date.strftime(UI_DATE_FORMAT))
         self._on_date_changed()
 
+    def _jump_view_to_today(self):
+        """Springt mit dem Datumsfeld auf heute (wie ``_step_date``, inkl. Notiz-Flush).
+
+        Ein Session-Start wirkt immer auf den realen heutigen Tag — bliebe ein
+        Vergangenheitsdatum in der Anzeige stehen, tickte der Timer sichtbar
+        nicht mehr (``_is_viewing_today``-Gate) und die Liste zeigte den
+        falschen Tag. Der eigentliche Daten-Reload läuft beim Aufrufer über
+        ``_force_date_refresh``.
+        """
+        if self._is_viewing_today():
+            return
+        # Notiz des bisher angezeigten Tages sichern, bevor der Kontext wechselt.
+        self._flush_pending_note()
+        self.date_entry.delete(0, END)
+        self.date_entry.insert(0, datetime.today().strftime(UI_DATE_FORMAT))
+        self._update_add_event_button_visibility()
+        self.write("Anzeige auf heute gesetzt — die Session läuft am realen Tag.")
+
     def _on_date_changed(self, _event=None):
         """Refresh list and duration when the date field changes (Return / focus out)."""
         key = self.date_entry.get().strip()
@@ -3021,6 +3066,35 @@ class App:
             self.console_toggle_button.config(text="▾ Konsole")
             self.frame.grid_rowconfigure(4, weight=1)
 
+    def _flag_error_feedback(self, message: str) -> None:
+        """Macht einen Konsolen-Fehler auch außerhalb der Konsole sichtbar.
+
+        - Eingeklappte Konsole klappt auf (bewusst OHNE die gespeicherte
+          Präferenz zu überschreiben — ein Fehler soll die Nutzerwahl nicht
+          dauerhaft ändern).
+        - Statusleiste zeigt die Meldung rot; nach 10 s räumt sie sich selbst.
+        Fehler hier dürfen den eigentlichen Konsolen-Write nie mitreißen.
+        """
+        try:
+            if self._console_collapsed:
+                self._console_collapsed = False
+                self._apply_console_collapsed()
+            text = " ".join(message.split())
+            if len(text) > 80:
+                text = text[:79] + "…"
+            self._status_error_label.config(text=text)
+            if self._status_error_after_id is not None:
+                self.master.after_cancel(self._status_error_after_id)
+            self._status_error_after_id = self.master.after(10000, self._clear_status_error)
+        except Exception:  # noqa: BLE001 — Feedback ist Best-Effort
+            pass
+
+    def _clear_status_error(self):
+        """Räumt die rote Fehlermeldung aus der Statusleiste."""
+        self._status_error_after_id = None
+        with contextlib.suppress(Exception):
+            self._status_error_label.config(text="")
+
     def _copy_text_widget(self, text_widget):
         """Copies the full content of a Text widget to the system clipboard."""
         content = text_widget.get("1.0", END).strip()
@@ -3067,6 +3141,7 @@ class App:
             return
 
         timestamp = time.strftime("%d-%m-%Y %H:%M:%S")
+        raw_message = message  # für die Statusleiste ohne Zeitstempel-Präfix
         if message.strip():
             message = f"[{timestamp}] {message}"
         try:
@@ -3085,6 +3160,10 @@ class App:
             self.console.see(END)
         except Exception:
             self._fallback_write(message, error=error)
+        if error:
+            # Zusätzlich rot in der Statusleiste + Konsole aufklappen — die
+            # Konsole allein kann eingeklappt sein, der Fehler bliebe unsichtbar.
+            self._flag_error_feedback(raw_message)
 
     def _save_config_safe(self, config: dict) -> bool:
         """Speichert die Config; OSError (z. B. volle Platte) landet sichtbar in der Konsole.
@@ -3621,6 +3700,10 @@ class App:
                 # Phase 2.4: Hinweis, wenn das Listenlimit greift.
                 if total_count > limit:
                     _emit([(f"… {total_count - limit} weitere Einträge ausgeblendet (Limit {limit})", ("dim",))])
+            else:
+                # Empty-State: sichtbar machen, dass der Tag wirklich leer ist
+                # (und nicht etwa die Liste defekt) — dezent im dim-Grau.
+                tw.insert(END, "Keine Einträge für diesen Tag\n", ("dim",))
 
     def _event_session(self, event) -> dict | None:
         """Session unter dem Mauszeiger; None auf Kopf-/Notiz-/Leerbereich."""

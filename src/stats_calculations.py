@@ -1050,7 +1050,7 @@ def calculate_overview(data: pl.DataFrame) -> dict:
         "date_max": "",
         "n_workdays_with_entries": 0,
         "n_sessions": 0,
-        "data_quality": {"open_sessions": 0, "weekend_entries": 0, "holiday_entries": 0},
+        "data_quality": {"open_sessions": 0, "running_sessions": 0, "weekend_entries": 0, "holiday_entries": 0},
     }
     if data is None or data.is_empty():
         return empty
@@ -1065,6 +1065,8 @@ def calculate_overview(data: pl.DataFrame) -> dict:
     total_hours = 0.0
     n_sessions = 0
     open_sessions = 0
+    running_sessions = 0
+    today = datetime.now().date()
     for (user, _project), group in data.partition_by(["user", "project"], as_dict=True).items():
         if user == "users":
             continue
@@ -1078,7 +1080,13 @@ def calculate_overview(data: pl.DataFrame) -> dict:
             if start_ts is not None and stop_ts is not None:
                 intervals.append((start_ts, stop_ts))
             elif start_ts is not None:
-                open_sessions += 1
+                # Ein offener Start von HEUTE ist im Normalfall die gerade
+                # laufende Session — kein Datenqualitäts-Problem. Nur ältere
+                # ungepaarte Starts sind echte verwaiste Sessions.
+                if hasattr(start_ts, "date") and start_ts.date() == today:
+                    running_sessions += 1
+                else:
+                    open_sessions += 1
         n_sessions += len(intervals)
         total_hours += merge_intervals_seconds(intervals) / 3600.0
 
@@ -1126,6 +1134,7 @@ def calculate_overview(data: pl.DataFrame) -> dict:
         "n_sessions": int(n_sessions),
         "data_quality": {
             "open_sessions": int(open_sessions),
+            "running_sessions": int(running_sessions),
             "weekend_entries": int(weekend_entries),
             "holiday_entries": int(holiday_entries),
         },

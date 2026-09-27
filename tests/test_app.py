@@ -44,10 +44,10 @@ def test_clear_console_with_error(app_instance):
 
 
 def test_update_db_content_no_users(app_instance):
-    """Test updating the day list with no users."""
+    """Ohne Benutzer/Events zeigt die Tagesliste die Empty-State-Zeile."""
     app_instance.db_conn.cursor().execute("DELETE FROM users")
     app_instance.update_db_content()
-    assert app_instance.day_list.get("1.0", "end-1c") == ""
+    assert "Keine Einträge für diesen Tag" in app_instance.day_list.get("1.0", "end-1c")
 
 
 def test_update_timer_with_duration(app_instance):
@@ -1926,3 +1926,62 @@ def test_invariant_overlap_pair_sum_vs_union_duration(app_instance):
 
     # Die Divergenz selbst ist die Invariante (4h Paarsumme vs. 3h Union).
     assert pair_sum_h * 3600 != union_secs
+
+
+# ---------------------------------------------------------------------------
+# Commit 12 — Feedback & Sichtbarkeit (Fenstertitel, Datums-Sprung, Empty-State)
+# ---------------------------------------------------------------------------
+def test_window_title_follows_timer_state(app_instance):
+    """Der Fenstertitel führt den Timer-Zustand mit (Taskleiste/Alt-Tab)."""
+    from app import WINDOW_TITLE_BREAK, WINDOW_TITLE_IDLE, WINDOW_TITLE_RUNNING
+
+    app_instance._set_button_state_running()
+    assert app_instance.master.title() == WINDOW_TITLE_RUNNING
+    app_instance._set_button_state_break()
+    assert app_instance.master.title() == WINDOW_TITLE_BREAK
+    app_instance._set_button_state_idle()
+    assert app_instance.master.title() == WINDOW_TITLE_IDLE
+
+
+def test_start_session_jumps_view_to_today(app_instance):
+    """Start bei angezeigtem Vergangenheitsdatum springt aufs heutige Datum —
+    sonst fröre die Anzeige ein (_is_viewing_today-Gate im Timer-Tick)."""
+    app_instance.name_entry.set("test_user")
+    app_instance.project_entry.set("1")
+    app_instance.date_entry.delete(0, END)
+    app_instance.date_entry.insert(0, "01-01-1991")
+    app_instance.start_session()
+    assert app_instance.date_entry.get() == datetime.today().strftime("%d-%m-%Y")
+    assert app_instance.session_active.get(("test_user", "1"), False) is True
+
+
+def test_rejected_start_keeps_viewed_date(app_instance):
+    """Ein abgewiesener Start (Session läuft bereits) lässt das angezeigte Datum in Ruhe."""
+    app_instance.name_entry.set("test_user")
+    app_instance.project_entry.set("1")
+    app_instance.start_session()
+    app_instance.date_entry.delete(0, END)
+    app_instance.date_entry.insert(0, "01-01-1991")
+    app_instance.start_session()  # bereits aktiv → nur Fehlermeldung, kein Sprung
+    assert app_instance.date_entry.get() == "01-01-1991"
+
+
+def test_day_list_empty_state(app_instance):
+    """Ein Tag ohne Einträge zeigt die dim-Empty-State-Zeile statt einer leeren Liste."""
+    app_instance.name_entry.set("user_ohne_eintraege")
+    app_instance.date_entry.delete(0, END)
+    app_instance.date_entry.insert(0, datetime.today().strftime("%d-%m-%Y"))
+    app_instance.update_db_content()
+    assert "Keine Einträge für diesen Tag" in app_instance.day_list.get("1.0", "end-1c")
+
+
+def test_error_write_expands_console_and_flags_statusbar(app_instance):
+    """error=True klappt eine eingeklappte Konsole auf und färbt die Statusleiste rot."""
+    app_instance._console_collapsed = True
+    app_instance._apply_console_collapsed()
+    app_instance.write("Testfehler: Datenbank nicht erreichbar", error=True)
+    assert app_instance._console_collapsed is False
+    assert "Testfehler" in app_instance._status_error_label.cget("text")
+    # Selbstheilung: der Clear-Callback räumt die Meldung wieder weg.
+    app_instance._clear_status_error()
+    assert app_instance._status_error_label.cget("text") == ""
