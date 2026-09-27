@@ -773,6 +773,50 @@ def test_shortcut_guard_skips_text_widgets(app_instance):
     assert app_instance.date_entry.get() != datetime.today().strftime("%d-%m-%Y")
 
 
+def test_shortcut_guard_blocks_session_actions_in_text_widget(app_instance):
+    """Strg+E/P/S laufen über den Guard: Textfokus blockt, Button-Fokus nicht."""
+
+    class _Ev:
+        def __init__(self, widget):
+            self.widget = widget
+
+    fired = []
+    assert app_instance._shortcut_guard(_Ev(app_instance.note_entry), lambda: fired.append(1)) is None
+    assert fired == []
+    assert app_instance._shortcut_guard(_Ev(app_instance.start_button), lambda: fired.append(1)) == "break"
+    assert fired == [1]
+
+
+def test_shortcut_guard_blocks_during_modal_grab(app_instance):
+    """Bei aktivem modalem Grab feuern globale Shortcuts nicht."""
+    from tkinter import TclError, Toplevel
+
+    class _Ev:
+        def __init__(self, widget):
+            self.widget = widget
+
+    dlg = Toplevel(app_instance.master)
+    dlg.update()
+    try:
+        dlg.grab_set()
+    except TclError:
+        dlg.wait_visibility()
+        dlg.grab_set()
+
+    fired = []
+    try:
+        assert app_instance.master.grab_current() is not None
+        assert app_instance._shortcut_guard(_Ev(app_instance.start_button), lambda: fired.append(1)) is None
+        assert fired == []
+    finally:
+        dlg.grab_release()
+        dlg.destroy()
+
+    # Nach dem Grab feuert der Shortcut wieder normal.
+    assert app_instance._shortcut_guard(_Ev(app_instance.start_button), lambda: fired.append(1)) == "break"
+    assert fired == [1]
+
+
 def test_note_field_height_from_config(app_instance):
     """Das Notizfeld übernimmt die konfigurierte Zeilenzahl (Default 2)."""
     assert int(app_instance.note_entry.cget("height")) == int(app_instance.config.get("note_field_lines", 2)) == 2

@@ -746,10 +746,13 @@ class App:
         # Keyboard shortcuts
         # bind_all statt bind: die Shortcuts sollen auch im Mini-Modus-Toplevel
         # funktionieren (bind auf master greift dort nicht).
-        master.bind_all("<Control-s>", lambda e: self.start_session())
-        master.bind_all("<Control-e>", lambda e: self.stop_session())
+        # Strg+S/E/P über _shortcut_guard: die Tk-Emacs-Bindings (Strg+E =
+        # Zeilenende, Strg+P = Zeile hoch) gehören in Textfeldern dem Widget —
+        # sonst stoppt/pausiert Tippen im Notizfeld still die Session.
+        master.bind_all("<Control-s>", lambda e: self._shortcut_guard(e, self.start_session))
+        master.bind_all("<Control-e>", lambda e: self._shortcut_guard(e, self.stop_session))
         master.bind_all("<Control-m>", lambda e: self._toggle_mini_mode())
-        master.bind_all("<Control-p>", lambda e: self.pause_session())
+        master.bind_all("<Control-p>", lambda e: self._shortcut_guard(e, self.pause_session))
         # F5 ersetzt den früheren ⟳-Button (Anzeige aus der DB neu laden).
         master.bind_all("<F5>", lambda e: self.update_duration())
         # Datums-Navigation ohne Maus: Strg+←/→ = Tag zurück/vor, Strg+T = heute.
@@ -771,10 +774,16 @@ class App:
         ``bind_all`` feuert VOR den Klassen-Bindings der Widgets; Strg+←/→
         (Wortsprung) und Strg+T (Zeichen-Tausch) sind aber Standard-Editier-
         Tasten in Entry/Text/Combobox — dort gehört die Taste dem Widget.
+
+        Bei aktivem modalem Grab (Einstellungen, Session-Editor, …) feuern
+        globale Shortcuts ebenfalls nicht: der Dialog besitzt die Tastatur
+        exklusiv, Hauptfenster-Aktionen wären dort unsichtbare Nebenwirkungen.
         """
         widget = event.widget
         try:
             if widget is not None and widget.winfo_class() in ("Entry", "TEntry", "Text", "TCombobox", "Spinbox"):
+                return None
+            if self.master.grab_current() is not None:
                 return None
         except Exception:  # noqa: BLE001 — Widget kann bereits zerstört sein
             return None
