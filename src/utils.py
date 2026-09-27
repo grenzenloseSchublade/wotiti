@@ -171,7 +171,10 @@ def _holiday_set_cached(country: str, subdiv: str | None, year: int) -> frozense
             kwargs["subdiv"] = subdiv
         h = mod.country_holidays(country, **kwargs)
         return frozenset(h.keys())
-    except (KeyError, NotImplementedError, Exception) as e:  # noqa: BLE001
+    # Bewusste Graceful-Degradation: JEDER Fehler beim Feiertags-Lookup
+    # (unbekanntes Land/Subdivision, Lib-Interna) darf die App nie stören —
+    # dann gibt es eben keine Feiertagsmarkierung.
+    except Exception as e:  # noqa: BLE001
         logger.warning("Feiertags-Lookup für %s/%s/%s fehlgeschlagen: %s", country, subdiv, year, e)
         return frozenset()
 

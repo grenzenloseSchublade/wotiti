@@ -1,6 +1,7 @@
 """Kleine, wiederverwendbare UI-Bausteine (tkinter), geteilt von App und WeekView."""
 
-from tkinter import Label, Toplevel
+import contextlib
+from tkinter import END, Label, TclError, Toplevel
 
 # Farbpalette für die Projekt-Farbcodierung in der Wochenansicht. Distinkte,
 # kräftige Farben; die Zuordnung erfolgt stabil über den Projektnamen.
@@ -24,6 +25,93 @@ def project_color(name: str) -> str:
         return WEEK_PROJECT_COLORS[0]
     idx = sum(ord(c) for c in name) % len(WEEK_PROJECT_COLORS)
     return WEEK_PROJECT_COLORS[idx]
+
+
+def resolve_project_color(config, name: str) -> str:
+    """Löst die Anzeigefarbe eines Projekts auf: config-Farbe zuerst, sonst Hash.
+
+    Persistierte Zuordnung aus ``config['project_colors']`` hat Vorrang,
+    Fallback ist die stabile Hash-Farbe (:func:`project_color`). Tagesliste
+    (Farbbalken) und Wochenansicht (Segmente/Legende) MÜSSEN beide über diesen
+    Helper auflösen — nur so zeigt dasselbe Projekt in beiden Pfaden garantiert
+    dieselbe Farbe, auch ohne persistierte config-Farbe.
+    """
+    colors = config.get("project_colors") if isinstance(config, dict) else None
+    color = colors.get(name) if isinstance(colors, dict) else None
+    return color or project_color(name)
+
+
+# ---------------------------------------------------------------------------
+# Wort-Navigation für Text-Widgets
+# ---------------------------------------------------------------------------
+
+
+def _word_pos(w, back: bool) -> str:
+    """Index des vorherigen Wortanfangs bzw. der nächsten Wortgrenze.
+
+    Nutzt Tks eigene Prozeduren (native Wort-Semantik inkl. Satzzeichen);
+    Index-Arithmetik mit ``wordstart``/``wordend`` nur als Fallback, da sie
+    auf Whitespace/Satzzeichen ungenau ist.
+    """
+    try:
+        if back:
+            return str(w.tk.call("tk::TextPrevPos", w._w, "insert", "tcl_startOfPreviousWord"))
+        return str(w.tk.call("tk::TextNextWord", w._w, "insert"))
+    except TclError:
+        return w.index("insert -1c wordstart" if back else "insert wordend")
+
+
+def _word_jump(w, back: bool) -> str:
+    w.mark_set("insert", _word_pos(w, back))
+    w.tag_remove("sel", "1.0", END)
+    w.see("insert")
+    return "break"
+
+
+def _word_select(w, back: bool) -> str:
+    # Übernimmt das Anchor-Handling der nativen Shift-Navigation.
+    with contextlib.suppress(TclError):
+        w.tk.call("tk::TextKeySelect", w._w, _word_pos(w, back))
+    return "break"
+
+
+def _delete_word(w, back: bool) -> str:
+    pos = _word_pos(w, back)
+    if back:
+        w.delete(pos, "insert")
+    else:
+        w.delete("insert", pos)
+    return "break"
+
+
+def _select_all(w, _event=None) -> str:
+    w.tag_remove("sel", "1.0", END)
+    w.tag_add("sel", "1.0", "end-1c")
+    w.mark_set("insert", "end-1c")
+    return "break"
+
+
+def bind_word_navigation(text_widget) -> None:
+    """Explizite Wort-Navigation für ein Text-Widget.
+
+    Die Tk-Klassenbindings für Strg+Pfeil greifen je nach Desktop/WM nicht
+    zuverlässig (globale Shortcuts können die Events schlucken). Widget-
+    Bindings feuern vor Klasse und ``all`` und machen das Verhalten mit
+    ``"break"`` deterministisch — der globale Datums-Shortcut (Strg+Pfeil,
+    ``bind_all``) bleibt dadurch garantiert außen vor. Strg+A überschreibt
+    zudem den Tk-Default „Zeilenanfang" mit „alles markieren".
+    """
+    w = text_widget
+    w.bind("<Control-Left>", lambda e: _word_jump(w, back=True))
+    w.bind("<Control-Right>", lambda e: _word_jump(w, back=False))
+    w.bind("<Control-Shift-Left>", lambda e: _word_select(w, back=True))
+    w.bind("<Control-Shift-Right>", lambda e: _word_select(w, back=False))
+    w.bind("<Control-BackSpace>", lambda e: _delete_word(w, back=True))
+    w.bind("<Control-Delete>", lambda e: _delete_word(w, back=False))
+    w.bind("<Control-a>", lambda e: _select_all(w))
+    # Bei aktivem Caps Lock liefert die A-Taste Keysym 'A' — ohne diese
+    # Zusatzbindung wäre Strg+A dann wirkungslos (Tk-Idiom, vgl. tk.tcl).
+    w.bind("<Control-A>", lambda e: _select_all(w))
 
 
 class _ToolTip:

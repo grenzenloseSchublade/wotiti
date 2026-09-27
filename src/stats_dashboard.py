@@ -1328,8 +1328,8 @@ def update_advanced_stats(db_path, weekend_include, pattern_value):
 
         return stats_fig, daily_fig, switches_fig, users, pattern_out
 
-    except Exception as e:
-        logger.error("Fehler beim Laden der erweiterten Statistiken: %s", e)
+    except Exception:
+        logger.exception("Fehler beim Laden der erweiterten Statistiken")
         return empty_fig, empty_fig, empty_fig, empty_options, []
 
 
@@ -1348,8 +1348,8 @@ def update_daily_patterns(db_path, selected_users, weekend_include):
             patterns = analyze_daily_patterns(data)
             return plot_daily_patterns(patterns)
 
-        except Exception as e:
-            logger.error("Fehler beim Laden der Tagesmuster: %s", e)
+        except Exception:
+            logger.exception("Fehler beim Laden der Tagesmuster")
             return go.Figure(layout=GRAPH_LAYOUT)
 
     return go.Figure(layout=GRAPH_LAYOUT)
@@ -1385,112 +1385,94 @@ def update_time_series_analysis(db_path, weekend_include):
         )
         return weekly_fig, weekday_fig
 
-    except Exception as e:
-        logger.error("Fehler bei der Zeitreihenanalyse: %s", e)
+    except Exception:
+        logger.exception("Fehler bei der Zeitreihenanalyse")
         return empty_fig, empty_fig
+
+
+def _register_chart_callback(output_id, cache_key, compute, plot, error_msg, *, with_breaks=False):
+    """Registriert einen Standard-Chart-Callback (db-path + weekend-include → figure).
+
+    Die einfachen Chart-Callbacks sind strukturell identisch: Daten laden,
+    Statistik unter ``cache_key`` cachen, plotten; ohne ``db_path`` oder bei
+    Fehlern eine leere Figur. Fehler landen MIT Traceback im Log
+    (``logger.exception``) — nur die Meldung ohne Stack war zur Diagnose
+    unbrauchbar. ``with_breaks`` reicht ``compute`` zusätzlich die
+    gefilterten ``break_events`` (als erstes Argument).
+    """
+
+    @app.callback(
+        Output(output_id, "figure"),
+        [Input("db-path", "data"), Input("weekend-include", "value")],
+    )
+    def _update(db_path, weekend_include):
+        if not db_path:
+            return go.Figure(layout=GRAPH_LAYOUT)
+        try:
+            data = get_filtered_data(db_path, weekend_include)
+            we = _weekend_flag(weekend_include)
+            if with_breaks:
+                breaks = get_filtered_breaks(db_path, weekend_include)
+                result = get_cached_stat(f"{cache_key}_we={int(we)}", lambda: compute(breaks, data))
+            else:
+                result = get_cached_stat(f"{cache_key}_we={int(we)}", lambda: compute(data))
+            return plot(result)
+        except Exception:
+            logger.exception(error_msg)
+            return go.Figure(layout=GRAPH_LAYOUT)
+
+    return _update
 
 
 # Hinweis: Cluster- und Regressions-Callbacks wurden mit dem Tab „Erweitert"
 # entfernt (für Single-User ohne Aussagekraft). Von der ANOVA bleibt nur der
-# Projekt-Vergleich (Karte im Tab „Projekte & Muster").
-@app.callback(
-    Output("anova-project-chart", "figure"),
-    [Input("db-path", "data"), Input("weekend-include", "value")],
+# Projekt-Vergleich (Karte im Tab „Projekte & Muster") — plot_anova_results
+# liefert (user_fig, project_fig), gezeigt wird nur project_fig; ohne
+# Ergebnisse eine leere Figur (explorative ANOVA).
+_register_chart_callback(
+    "anova-project-chart",
+    "anova_analysis",
+    perform_anova_analysis,
+    lambda res: plot_anova_results(res)[1] if res else go.Figure(layout=GRAPH_LAYOUT),
+    "Fehler bei der ANOVA-Analyse",
 )
-def update_anova_analysis(db_path, weekend_include):
-    """Aktualisiert den Projekt-Unterschiede-Chart (explorative ANOVA)."""
-    empty_fig = go.Figure(layout=GRAPH_LAYOUT)
 
-    if not db_path:
-        return empty_fig
-
-    try:
-        data = get_filtered_data(db_path, weekend_include)
-        we = _weekend_flag(weekend_include)
-        anova_results = get_cached_stat(f"anova_analysis_we={int(we)}", lambda: perform_anova_analysis(data))
-        if not anova_results:
-            return empty_fig
-        _user_fig, project_fig = plot_anova_results(anova_results)
-        return project_fig
-
-    except Exception as e:
-        logger.error("Fehler bei der ANOVA-Analyse: %s", e)
-        return empty_fig
-
-
-@app.callback(
-    Output("hour-heatmap-chart", "figure"),
-    [Input("db-path", "data"), Input("weekend-include", "value")],
+# Aktivitäts-Heatmap (Wochentag × Stunde).
+_register_chart_callback(
+    "hour-heatmap-chart",
+    "hour_weekday_matrix",
+    calculate_hour_weekday_matrix,
+    plot_hour_heatmap,
+    "Fehler bei der Heatmap",
 )
-def update_hour_heatmap(db_path, weekend_include):
-    """Aktualisiert die Aktivitäts-Heatmap (Wochentag × Stunde)."""
-    if not db_path:
-        return go.Figure(layout=GRAPH_LAYOUT)
-    try:
-        data = get_filtered_data(db_path, weekend_include)
-        we = _weekend_flag(weekend_include)
-        matrix = get_cached_stat(f"hour_weekday_matrix_we={int(we)}", lambda: calculate_hour_weekday_matrix(data))
-        return plot_hour_heatmap(matrix)
-    except Exception as e:
-        logger.error("Fehler bei der Heatmap: %s", e)
-        return go.Figure(layout=GRAPH_LAYOUT)
 
-
-@app.callback(
-    Output("break-analysis-chart", "figure"),
-    [Input("db-path", "data"), Input("weekend-include", "value")],
+# Arbeit-vs-Pause-Analyse aus break_events.
+_register_chart_callback(
+    "break-analysis-chart",
+    "break_statistics",
+    calculate_break_statistics,
+    plot_break_analysis,
+    "Fehler bei der Pausen-Analyse",
+    with_breaks=True,
 )
-def update_break_analysis(db_path, weekend_include):
-    """Aktualisiert die Arbeit-vs-Pause-Analyse aus break_events."""
-    if not db_path:
-        return go.Figure(layout=GRAPH_LAYOUT)
-    try:
-        data = get_filtered_data(db_path, weekend_include)
-        breaks = get_filtered_breaks(db_path, weekend_include)
-        we = _weekend_flag(weekend_include)
-        stats = get_cached_stat(f"break_statistics_we={int(we)}", lambda: calculate_break_statistics(breaks, data))
-        return plot_break_analysis(stats)
-    except Exception as e:
-        logger.error("Fehler bei der Pausen-Analyse: %s", e)
-        return go.Figure(layout=GRAPH_LAYOUT)
 
-
-@app.callback(
-    Output("start-hour-dist-chart", "figure"),
-    [Input("db-path", "data"), Input("weekend-include", "value")],
+# Startzeit-Verteilung.
+_register_chart_callback(
+    "start-hour-dist-chart",
+    "start_hour_dist",
+    calculate_start_hour_distribution,
+    plot_start_hour_distribution,
+    "Fehler bei der Startzeit-Verteilung",
 )
-def update_start_hour_dist(db_path, weekend_include):
-    """Aktualisiert die Startzeit-Verteilung."""
-    if not db_path:
-        return go.Figure(layout=GRAPH_LAYOUT)
-    try:
-        data = get_filtered_data(db_path, weekend_include)
-        we = _weekend_flag(weekend_include)
-        dist = get_cached_stat(f"start_hour_dist_we={int(we)}", lambda: calculate_start_hour_distribution(data))
-        return plot_start_hour_distribution(dist)
-    except Exception as e:
-        logger.error("Fehler bei der Startzeit-Verteilung: %s", e)
-        return go.Figure(layout=GRAPH_LAYOUT)
 
-
-@app.callback(
-    Output("session-duration-dist-chart", "figure"),
-    [Input("db-path", "data"), Input("weekend-include", "value")],
+# Session-Dauer-Verteilung.
+_register_chart_callback(
+    "session-duration-dist-chart",
+    "session_duration_dist",
+    calculate_session_duration_distribution,
+    plot_session_duration_distribution,
+    "Fehler bei der Dauer-Verteilung",
 )
-def update_session_duration_dist(db_path, weekend_include):
-    """Aktualisiert die Session-Dauer-Verteilung."""
-    if not db_path:
-        return go.Figure(layout=GRAPH_LAYOUT)
-    try:
-        data = get_filtered_data(db_path, weekend_include)
-        we = _weekend_flag(weekend_include)
-        dist = get_cached_stat(
-            f"session_duration_dist_we={int(we)}", lambda: calculate_session_duration_distribution(data)
-        )
-        return plot_session_duration_distribution(dist)
-    except Exception as e:
-        logger.error("Fehler bei der Dauer-Verteilung: %s", e)
-        return go.Figure(layout=GRAPH_LAYOUT)
 
 
 @app.callback(

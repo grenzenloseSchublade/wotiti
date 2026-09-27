@@ -15,7 +15,7 @@ from db_helper import (
     get_daily_meta_for_range,
     set_daily_transferred_bulk,
 )
-from ui_widgets import WEEK_PROJECT_COLORS, _ToolTip
+from ui_widgets import WEEK_PROJECT_COLORS, _ToolTip, resolve_project_color
 from utils import is_holiday, round_hours_to_minutes, save_config
 
 logger = logging.getLogger(__name__)
@@ -451,7 +451,9 @@ class WeekView:
                     cell,
                     text="\n".join([block_char] * n_blocks),
                     bg=cell_bg,
-                    fg=color_map.get(proj, WEEK_PROJECT_COLORS[0]),
+                    # Fallback über resolve_project_color: identische Auflösung
+                    # wie der Farbbalken der Tagesliste.
+                    fg=color_map.get(proj) or resolve_project_color(app.config, proj),
                     font=("Courier New", 7),
                 )
                 seg.pack(side="top")
@@ -506,7 +508,7 @@ class WeekView:
                     self._legend_frame,
                     text=f"█ {proj} {total}",
                     bg="#C0C0C0",
-                    fg=color_map.get(proj, WEEK_PROJECT_COLORS[0]),
+                    fg=color_map.get(proj) or resolve_project_color(app.config, proj),
                     font=("MS Sans Serif", 8, "bold"),
                 ).pack(side="left", padx=4)
             Label(

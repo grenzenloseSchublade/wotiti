@@ -6,6 +6,7 @@ from tkinter import END, Tk
 import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
+import ui_widgets
 from app import App
 
 
@@ -892,12 +893,12 @@ def test_note_word_jump_and_select_all(app_instance):
     w.insert("1.0", "alpha beta gamma")
     w.mark_set("insert", "end-1c")
 
-    assert app_instance._note_word_jump(back=True) == "break"
+    assert ui_widgets._word_jump(w, back=True) == "break"
     assert w.index("insert") == "1.11"  # Wortanfang von "gamma"
-    app_instance._note_word_jump(back=True)
+    ui_widgets._word_jump(w, back=True)
     assert w.index("insert") == "1.6"  # Wortanfang von "beta"
 
-    assert app_instance._note_select_all() == "break"
+    assert ui_widgets._select_all(w) == "break"
     ranges = w.tag_ranges("sel")
     assert ranges and w.get(ranges[0], ranges[1]) == "alpha beta gamma"
 
@@ -908,8 +909,26 @@ def test_note_delete_word_back(app_instance):
     w.delete("1.0", END)
     w.insert("1.0", "alpha beta gamma")
     w.mark_set("insert", "end-1c")
-    assert app_instance._note_delete_word(back=True) == "break"
+    assert ui_widgets._delete_word(w, back=True) == "break"
     assert w.get("1.0", "end-1c") == "alpha beta "
+
+
+def test_project_color_resolution_shared(app_instance):
+    """Tagesliste und Wochenansicht lösen Projektfarben identisch auf.
+
+    Beide Pfade nutzen resolve_project_color: ohne persistierte config-Farbe
+    die stabile Hash-Farbe, mit persistierter Farbe gewinnt die config.
+    """
+    app_instance.config.pop("project_colors", None)
+    expected = ui_widgets.project_color("Projekt X")
+    assert ui_widgets.resolve_project_color(app_instance.config, "Projekt X") == expected
+    tag = app_instance._day_list_bar_tag("Projekt X")
+    assert str(app_instance.day_list.tag_cget(tag, "foreground")) == expected
+    # Persistierte config-Farbe hat Vorrang (wie in der Wochenansicht).
+    app_instance.config["project_colors"] = {"Projekt X": "#123456"}
+    assert ui_widgets.resolve_project_color(app_instance.config, "Projekt X") == "#123456"
+    tag2 = app_instance._day_list_bar_tag("Projekt X")
+    assert str(app_instance.day_list.tag_cget(tag2, "foreground")) == "#123456"
 
 
 def test_project_header_row_carries_session(app_instance):
@@ -1106,7 +1125,7 @@ def test_note_shift_return_replaces_selection(app_instance):
     w = app_instance.note_entry
     w.delete("1.0", END)
     w.insert("1.0", "alles markiert")
-    app_instance._note_select_all()
+    ui_widgets._select_all(w)
     assert app_instance._on_note_shift_return() == "break"
     assert w.get("1.0", "end-1c") == "\n"
     assert not w.tag_ranges("sel")

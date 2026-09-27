@@ -1,6 +1,6 @@
 import os
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -13,6 +13,7 @@ from db_helper import (
     create_main_table,
     delete_event,
     delete_session,
+    fetch_day_events,
     get_all_projects,
     get_all_users,
     get_event_by_id,
@@ -1535,3 +1536,30 @@ def test_backup_database_daily_noop_without_conn_or_file(tmp_path):
     finally:
         conn.close()
     assert not (tmp_path / "backups").exists()
+
+
+def test_fetch_day_events_window_filter_order_limit(db_conn):
+    """fetch_day_events: Fenster [lo, hi), optionale Filter, Chronologie, Limit."""
+    day = datetime(2023, 10, 2, 9, 0, 0)
+    log_start(project="A", name="anna", timestamp=day, conn=db_conn)
+    log_stop(project="A", name="anna", timestamp=day.replace(hour=10), conn=db_conn)
+    log_start(project="B", name="bernd", timestamp=day.replace(hour=11), conn=db_conn)
+    # Außerhalb des Fensters — darf nie auftauchen.
+    log_start(project="A", name="anna", timestamp=datetime(2023, 10, 9, 9, 0, 0), conn=db_conn)
+
+    lo, hi = "2023-10-02 00:00:00", "2023-10-03 00:00:00"
+    rows = fetch_day_events(db_conn, lo, hi)
+    # Zeilenformat (id, user, project, event_type, timestamp), chronologisch.
+    assert [(r[1], r[2], r[3]) for r in rows] == [
+        ("anna", "A", "start"),
+        ("anna", "A", "stop"),
+        ("bernd", "B", "start"),
+    ]
+    assert [r[4] for r in rows] == sorted(r[4] for r in rows)
+
+    assert fetch_day_events(db_conn, lo, hi, user="anna") == [r for r in rows if r[1] == "anna"]
+    assert fetch_day_events(db_conn, lo, hi, user="anna", project="A") == [
+        r for r in rows if r[1] == "anna" and r[2] == "A"
+    ]
+    assert fetch_day_events(db_conn, lo, hi, limit=2) == rows[:2]
+    assert fetch_day_events(None, lo, hi) == []

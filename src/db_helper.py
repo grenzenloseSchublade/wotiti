@@ -1409,6 +1409,49 @@ def _timestamp_window(first_day, last_day) -> tuple[str, str]:
     return lo.strftime(TIMESTAMP_FORMAT), hi.strftime(TIMESTAMP_FORMAT)
 
 
+def fetch_day_events(
+    conn: sqlite3.Connection | None,
+    ts_lo: str,
+    ts_hi: str,
+    user: str | None = None,
+    project: str | None = None,
+    limit: int | None = None,
+) -> list[tuple]:
+    """Lädt Events eines Timestamp-Fensters ``[ts_lo, ts_hi)`` für die Anzeige.
+
+    Liefert Zeilen ``(id, user, project, event_type, timestamp)`` chronologisch
+    — exakt das Format, das die FIFO-Paarung (``_pair_day_sessions`` in der
+    App) erwartet. ``user``/``project`` filtern optional; ``limit`` deckelt
+    entartete Datenbestände.
+
+    WICHTIG (Paarungs-Invariante): Alle Anzeige-Pfade (Tagesliste,
+    Doppel-Stop-Guard und Überschneidungs-Prüfung des Session-Editors) müssen
+    ihre Events über diese Funktion laden — nur wenn alle Pfade dieselbe
+    Event-Menge sehen, paaren sie identisch.
+    """
+    if conn is None:
+        return []
+    sql = (
+        "SELECT e.id, u.name, e.project, e.event_type, e.timestamp "
+        "FROM events e JOIN users u ON u.id = e.user_id "
+        "WHERE e.timestamp >= ? AND e.timestamp < ?"
+    )
+    params: list = [ts_lo, ts_hi]
+    if user is not None:
+        sql += " AND u.name = ?"
+        params.append(user)
+    if project is not None:
+        sql += " AND e.project = ?"
+        params.append(project)
+    sql += " ORDER BY e.timestamp"
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
+    cursor = conn.cursor()
+    cursor.execute(sql, tuple(params))
+    return cursor.fetchall()
+
+
 def _parse_ts(timestamp_str: str) -> datetime | None:
     """Parst einen DB-Timestamp; ``None`` bei ungültigem Format.
 

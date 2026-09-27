@@ -29,7 +29,6 @@ from tkinter import (
     Scrollbar,
     Spinbox,
     StringVar,
-    TclError,
     Text,
     Toplevel,
     W,
@@ -62,6 +61,7 @@ from db_helper import (
     create_events_table,
     create_main_table,
     delete_session,
+    fetch_day_events,
     get_all_projects,
     get_all_users,
     get_archivable_overview,
@@ -84,7 +84,13 @@ from db_helper import (
     write_heartbeat,
 )
 from idle_monitor import get_idle_seconds
-from ui_widgets import WEEK_PROJECT_COLORS, _ToolTip, project_color  # noqa: F401  (Re-Export für bestehende Importe)
+from ui_widgets import (  # noqa: F401  (Re-Export für bestehende Importe)
+    WEEK_PROJECT_COLORS,
+    _ToolTip,
+    bind_word_navigation,
+    project_color,
+    resolve_project_color,
+)
 from utils import (
     APP_AUTHOR,
     APP_LICENSE,
@@ -473,7 +479,8 @@ class App:
         # Spezifischeres Binding gewinnt in Tk automatisch vor <Return>.
         self.note_entry.bind("<Shift-Return>", self._on_note_shift_return)
         self.note_entry.bind("<FocusOut>", self._on_note_changed)
-        self._bind_note_navigation()
+        # Explizite Wort-Navigation (Strg+Pfeil/BackSpace/Delete/A) im Notizfeld.
+        bind_word_navigation(self.note_entry)
         _ToolTip(
             self.note_entry,
             "Notiz für dieses Datum + Projekt (max. 44 Wörter) · Shift+Enter: Zeilenumbruch · Strg+N: fokussieren",
@@ -3560,14 +3567,11 @@ class App:
     def _day_list_bar_tag(self, project: str) -> str:
         """Lazy-Tag für den Projekt-Farbbalken (▌) in der Projektfarbe.
 
-        Nutzt die in der Wochenansicht persistierte Zuordnung
-        (config['project_colors']), fällt sonst auf ``project_color()`` zurück —
-        Balken und Wochen-Segmente zeigen so dieselbe Farbe.
+        Nutzt ``resolve_project_color`` (persistierte config-Farbe zuerst,
+        Fallback Hash-Farbe) — Balken und Wochen-Segmente zeigen so dieselbe
+        Farbe.
         """
-        colors = self.config.get("project_colors")
-        color = colors.get(project) if isinstance(colors, dict) else None
-        if not color:
-            color = project_color(project)
+        color = resolve_project_color(self.config, project)
         tag = f"bar_{color.lstrip('#')}"
         self.day_list.tag_configure(tag, foreground=color)
         return tag
@@ -3640,17 +3644,6 @@ class App:
                     (current_name, day_lo, day_hi),
                 )
                 total_count = cursor.fetchone()[0]
-                cursor.execute(
-                    """
-                    SELECT e.id, u.name, e.project, e.event_type, e.timestamp
-                    FROM events e
-                    JOIN users u ON u.id = e.user_id
-                    WHERE u.name = ? AND e.timestamp >= ? AND e.timestamp < ?
-                    ORDER BY e.timestamp
-                    LIMIT ?
-                """,
-                    (current_name, ts_lo, ts_hi, window_limit),
-                )
             else:
                 cursor.execute(
                     """
@@ -3661,18 +3654,7 @@ class App:
                     (day_lo, day_hi),
                 )
                 total_count = cursor.fetchone()[0]
-                cursor.execute(
-                    """
-                    SELECT e.id, u.name, e.project, e.event_type, e.timestamp
-                    FROM events e
-                    JOIN users u ON u.id = e.user_id
-                    WHERE e.timestamp >= ? AND e.timestamp < ?
-                    ORDER BY e.timestamp
-                    LIMIT ?
-                """,
-                    (ts_lo, ts_hi, window_limit),
-                )
-            events = cursor.fetchall()
+            events = fetch_day_events(self.db_conn, ts_lo, ts_hi, user=current_name or None, limit=window_limit)
             view_iso = view_day.strftime(DATE_FORMAT)
             chronological = bool(self.config.get("entry_list_chronological", False))
             # Nur Sessions des Anzeigetags behalten: eine Session gehört zum Tag
@@ -4155,18 +4137,9 @@ class App:
             eff_stop_id = stop_id
             if stop_id is None and stop_dt is not None and start_id is not None:
                 try:
-                    g_cur = self.db_conn.cursor()
                     g_lo, g_hi = _timestamp_window(start_ts.date(), start_ts.date())
-                    g_cur.execute(
-                        """
-                        SELECT e.id, u.name, e.project, e.event_type, e.timestamp
-                        FROM events e JOIN users u ON u.id = e.user_id
-                        WHERE u.name = ? AND e.project = ? AND e.timestamp >= ? AND e.timestamp < ?
-                        ORDER BY e.timestamp
-                        """,
-                        (user, project, g_lo, g_hi),
-                    )
-                    for gs in self._pair_day_sessions(g_cur.fetchall()):
+                    g_events = fetch_day_events(self.db_conn, g_lo, g_hi, user=user, project=project)
+                    for gs in self._pair_day_sessions(g_events):
                         if gs["start_id"] == start_id:
                             eff_stop_id = gs["stop_id"]
                             break
@@ -4179,18 +4152,9 @@ class App:
             # FIFO-Anzeige).
             own_ids = {i for i in (start_id, stop_id, eff_stop_id) if i is not None}
             try:
-                ov_cur = self.db_conn.cursor()
                 ov_lo, ov_hi = _timestamp_window(d_part.date(), d_part.date())
-                ov_cur.execute(
-                    """
-                    SELECT e.id, u.name, e.project, e.event_type, e.timestamp
-                    FROM events e JOIN users u ON u.id = e.user_id
-                    WHERE u.name = ? AND e.project = ? AND e.timestamp >= ? AND e.timestamp < ?
-                    ORDER BY e.timestamp
-                    """,
-                    (user, new_project, ov_lo, ov_hi),
-                )
-                day_sessions = self._pair_day_sessions(ov_cur.fetchall())
+                ov_events = fetch_day_events(self.db_conn, ov_lo, ov_hi, user=user, project=new_project)
+                day_sessions = self._pair_day_sessions(ov_events)
             except sqlite3.Error:
                 logger.exception("Überschneidungs-Prüfung fehlgeschlagen — speichere ohne Overlap-Warnung")
                 day_sessions = []
@@ -4732,73 +4696,6 @@ class App:
         # Wochenansicht ggf. aktualisieren, damit Tooltips die Notiz zeigen.
         if self._week_view_active:
             self._refresh_week_view()
-
-    def _bind_note_navigation(self) -> None:
-        """Explizite Wort-Navigation im Notizfeld.
-
-        Die Tk-Klassenbindings für Strg+Pfeil greifen je nach Desktop/WM nicht
-        zuverlässig (globale Shortcuts können die Events schlucken). Widget-
-        Bindings feuern vor Klasse und ``all`` und machen das Verhalten mit
-        ``"break"`` deterministisch — der globale Datums-Shortcut (Strg+Pfeil,
-        ``bind_all``) bleibt dadurch garantiert außen vor. Strg+A überschreibt
-        zudem den Tk-Default „Zeilenanfang" mit „alles markieren".
-        """
-        w = self.note_entry
-        w.bind("<Control-Left>", lambda e: self._note_word_jump(back=True))
-        w.bind("<Control-Right>", lambda e: self._note_word_jump(back=False))
-        w.bind("<Control-Shift-Left>", lambda e: self._note_word_select(back=True))
-        w.bind("<Control-Shift-Right>", lambda e: self._note_word_select(back=False))
-        w.bind("<Control-BackSpace>", lambda e: self._note_delete_word(back=True))
-        w.bind("<Control-Delete>", lambda e: self._note_delete_word(back=False))
-        w.bind("<Control-a>", self._note_select_all)
-        # Bei aktivem Caps Lock liefert die A-Taste Keysym 'A' — ohne diese
-        # Zusatzbindung wäre Strg+A dann wirkungslos (Tk-Idiom, vgl. tk.tcl).
-        w.bind("<Control-A>", self._note_select_all)
-
-    def _note_word_pos(self, back: bool) -> str:
-        """Index des vorherigen Wortanfangs bzw. der nächsten Wortgrenze.
-
-        Nutzt Tks eigene Prozeduren (native Wort-Semantik inkl. Satzzeichen);
-        Index-Arithmetik mit ``wordstart``/``wordend`` nur als Fallback, da sie
-        auf Whitespace/Satzzeichen ungenau ist.
-        """
-        w = self.note_entry
-        try:
-            if back:
-                return str(w.tk.call("tk::TextPrevPos", w._w, "insert", "tcl_startOfPreviousWord"))
-            return str(w.tk.call("tk::TextNextWord", w._w, "insert"))
-        except TclError:
-            return w.index("insert -1c wordstart" if back else "insert wordend")
-
-    def _note_word_jump(self, back: bool) -> str:
-        w = self.note_entry
-        w.mark_set("insert", self._note_word_pos(back))
-        w.tag_remove("sel", "1.0", END)
-        w.see("insert")
-        return "break"
-
-    def _note_word_select(self, back: bool) -> str:
-        w = self.note_entry
-        # Übernimmt das Anchor-Handling der nativen Shift-Navigation.
-        with contextlib.suppress(TclError):
-            w.tk.call("tk::TextKeySelect", w._w, self._note_word_pos(back))
-        return "break"
-
-    def _note_delete_word(self, back: bool) -> str:
-        w = self.note_entry
-        pos = self._note_word_pos(back)
-        if back:
-            w.delete(pos, "insert")
-        else:
-            w.delete("insert", pos)
-        return "break"
-
-    def _note_select_all(self, _event=None) -> str:
-        w = self.note_entry
-        w.tag_remove("sel", "1.0", END)
-        w.tag_add("sel", "1.0", "end-1c")
-        w.mark_set("insert", "end-1c")
-        return "break"
 
     def _refresh_total_label(self, project: str | None = None, name: str | None = None):
         """Refresh the total-time and daily-break labels below the timer."""
