@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import glob
 import json
 import logging
@@ -280,13 +281,16 @@ def load_config() -> dict:
         try:
             with open(CONFIG_PATH, encoding="utf-8") as f:
                 cfg = json.load(f)
-            # Fehlende Schlüssel mit Defaults auffüllen
+            # Fehlende Schlüssel mit Defaults auffüllen. deepcopy, damit
+            # mutable Defaults (project_colors) nie in die zurückgegebene
+            # Config aliast werden — sonst vergiften spätere Mutationen
+            # (WeekView-Farbzuweisung) DEFAULT_CONFIG prozessweit.
             for key, value in DEFAULT_CONFIG.items():
-                cfg.setdefault(key, value)
+                cfg.setdefault(key, copy.deepcopy(value))
             return _validate_config(cfg)
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("config.json konnte nicht gelesen werden (%s) — Defaults.", e)
-    return dict(DEFAULT_CONFIG)
+    return copy.deepcopy(DEFAULT_CONFIG)
 
 
 def save_config(config: dict) -> None:

@@ -129,6 +129,113 @@ def test_pair_sessions_lifo_overlap():
     }
 
 
+def test_pair_sessions_lifo_back_to_back_no_zero_pair():
+    """Stop A == Start B (Rücken-an-Rücken) → zwei normale Sessions.
+
+    Regression: Der frühere Tiebreak (Start vor Stop bei Gleichstand) ließ den
+    Stop um 12:00 den GLEICHZEITIGEN Start binden → 0h-Paar plus Mega-Session
+    09-13 — im Widerspruch zur FIFO-Tagesliste.
+    """
+    from datetime import datetime as _dt
+
+    from db_helper import pair_sessions_lifo
+
+    evs = [
+        ("start", _dt(2026, 6, 23, 9, 0)),
+        ("stop", _dt(2026, 6, 23, 12, 0)),
+        ("start", _dt(2026, 6, 23, 12, 0)),
+        ("stop", _dt(2026, 6, 23, 13, 0)),
+    ]
+    pairs = sorted(pair_sessions_lifo(evs))
+    assert pairs == [
+        (_dt(2026, 6, 23, 9, 0), _dt(2026, 6, 23, 12, 0)),
+        (_dt(2026, 6, 23, 12, 0), _dt(2026, 6, 23, 13, 0)),
+    ]
+
+
+def test_pair_sessions_lifo_lone_equal_ts_pair_stays_zero_duration():
+    """Einzelnes Start/Stop-Paar mit identischem Zeitstempel bleibt 0h-Paar.
+
+    Ohne älteren offenen Start bindet der Stop den gleichzeitigen Start —
+    keine zwei Waisen (verwaister Stop + ewig „offener" Start).
+    """
+    from datetime import datetime as _dt
+
+    from db_helper import pair_sessions_lifo
+
+    ts = _dt(2026, 6, 23, 12, 0)
+    for evs in ([("start", ts), ("stop", ts)], [("stop", ts), ("start", ts)]):
+        assert list(pair_sessions_lifo(evs)) == [(ts, ts)]
+
+
+def test_close_stale_sessions_back_to_back_closes_younger_start(db_conn):
+    """Rücken-an-Rücken + Absturz: Der JÜNGERE Start ist der offene.
+
+    start 09, stop 12, start 12 (App stirbt) → der Stop um 12:00 gehört zur
+    09-12-Session; close_stale_sessions muss den 12:00-Start schließen (Stop
+    bei 12:00), nicht den 09:00-Start — sonst wären die 3 h verloren.
+    """
+    from datetime import datetime as _dt
+
+    from db_helper import calculate_daily_duration, close_stale_sessions
+
+    log_start(project="p", name="btb_user", timestamp=_dt(2026, 6, 23, 9, 0), conn=db_conn)
+    log_stop(project="p", name="btb_user", timestamp=_dt(2026, 6, 23, 12, 0), conn=db_conn)
+    log_start(project="p", name="btb_user", timestamp=_dt(2026, 6, 23, 12, 0), conn=db_conn)
+
+    assert close_stale_sessions(db_conn) == 1
+    stops = [
+        r[0] for r in db_conn.execute("SELECT timestamp FROM events WHERE event_type = 'stop' ORDER BY id").fetchall()
+    ]
+    assert stops == ["2026-06-23 12:00:00", "2026-06-23 12:00:00"]
+    assert calculate_daily_duration(project="p", name="btb_user", date="23-06-2026", conn=db_conn) == 3 * 3600
+
+
+def test_log_stop_dst_fold_clamped_to_start(db_conn):
+    """Zeitumstellung (Uhr zurück): Stop naiv VOR dem offenen Start → geclampt.
+
+    Ohne Clamp würde der Stop beim Paaren zur Waise und die Session bliebe
+    scheinbar offen (Zeit via close_stale_sessions endgültig weg).
+    """
+    from datetime import datetime as _dt
+
+    from db_helper import pair_sessions_lifo
+
+    log_start(project="p", name="dst_user", timestamp=_dt(2026, 10, 25, 2, 45), conn=db_conn)
+    log_stop(project="p", name="dst_user", timestamp=_dt(2026, 10, 25, 2, 15), conn=db_conn)
+
+    rows = db_conn.execute("SELECT event_type, timestamp FROM events ORDER BY id").fetchall()
+    assert rows == [("start", "2026-10-25 02:45:00"), ("stop", "2026-10-25 02:45:00")]
+    ts = _dt(2026, 10, 25, 2, 45)
+    assert list(pair_sessions_lifo([("start", ts), ("stop", ts)])) == [(ts, ts)]
+
+
+def test_log_stop_far_before_start_not_clamped(db_conn):
+    """Bewusst rückdatierter Stop (> 1 h vor dem offenen Start) bleibt unberührt."""
+    from datetime import datetime as _dt
+
+    log_start(project="p", name="manual_user", timestamp=_dt(2026, 6, 23, 9, 0), conn=db_conn)
+    log_stop(project="p", name="manual_user", timestamp=_dt(2026, 6, 22, 17, 0), conn=db_conn)
+
+    row = db_conn.execute("SELECT timestamp FROM events WHERE event_type = 'stop'").fetchone()
+    assert row == ("2026-06-22 17:00:00",)
+
+
+def test_log_break_stop_invalid_started_at_returns_false(db_conn):
+    """Hand-editierter ``started_at`` → ValueError wird gefangen, kein Crash."""
+    from db_helper import create_break_events_table, log_break_stop
+
+    create_break_events_table(db_conn)
+    user_id = check_user(db_conn, "brk_user")
+    db_conn.execute(
+        "INSERT INTO break_events (user_id, project, break_kind, started_at, is_auto, source)"
+        " VALUES (?, 'p', 'manual', 'kaputt', 0, 'manual_break')",
+        (user_id,),
+    )
+    db_conn.commit()
+    assert log_break_stop(project="p", name="brk_user", conn=db_conn) is False
+
+
 def test_merge_intervals_seconds_union():
     """merge_intervals_seconds zählt überlappende Intervalle nur einmal (Union)."""
     from datetime import datetime as _dt

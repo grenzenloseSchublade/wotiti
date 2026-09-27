@@ -120,8 +120,12 @@ def get_cached_data(db_path, force=False):
                     if not has_events and has_legacy:
                         migrate_legacy_user_tables(conn)
                         data = read_database(db_path)
-            except sqlite3.Error:
-                pass
+            except sqlite3.Error as e:
+                # Nicht still verschlucken — und den Fehl-Zustand nicht als
+                # gültig cachen: mtime zurücksetzen, damit der nächste Aufruf
+                # erneut liest (z. B. nach kurzzeitig gesperrter DB).
+                logger.warning("Legacy-Migration beim Laden von %s fehlgeschlagen: %s", db_path, e)
+                _DATA_CACHE["db_mtime"] = None
         _DATA_CACHE["data"] = data
         _DATA_CACHE["stats"] = {}
 

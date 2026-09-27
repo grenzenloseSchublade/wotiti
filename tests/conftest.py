@@ -21,6 +21,11 @@ import utils
 def _isolate_config_and_db(tmp_path, monkeypatch):
     cfg_path = tmp_path / "config.json"
     cfg = dict(utils.DEFAULT_CONFIG)
-    cfg["database_path"] = str(tmp_path / "test_app_database.db")
+    db_path = tmp_path / "test_app_database.db"
+    # Leere Datei vorab anlegen: Tests arbeiten legitim auf einer frischen DB —
+    # der Fehlt-DB-Dialog des App-Starts (App._confirm_create_missing_db) soll
+    # dabei nicht feuern. sqlite behandelt eine leere Datei als neue Datenbank.
+    db_path.touch()
+    cfg["database_path"] = str(db_path)
     cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
     monkeypatch.setattr(utils, "CONFIG_PATH", str(cfg_path))

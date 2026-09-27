@@ -715,7 +715,25 @@ class App:
 
         # Database connection
         try:
-            self.db_conn = create_connection(self._db_path)
+            # create_connection legt eine fehlende DB-Datei kommentarlos neu an
+            # (inkl. Verzeichnis). Beim App-Start wäre das fatal: Liegt die
+            # konfigurierte DB z. B. auf einem nicht gemounteten Laufwerk,
+            # liefe das Tracking still in eine leere Datenbank. Daher sichtbar
+            # warnen und erst nach Bestätigung neu anlegen.
+            if not os.path.exists(self._db_path):
+                self.write(f"Konfigurierte Datenbank nicht gefunden: {self._db_path}", error=True)
+                if self._confirm_create_missing_db(self._db_path):
+                    self.write(f"Neue Datenbank wird angelegt: {self._db_path}")
+                    self.db_conn = create_connection(self._db_path)
+                else:
+                    self.write(
+                        "Start ohne Datenbank — Pfad prüfen (Laufwerk eingebunden?) und in den "
+                        "Einstellungen die Datenbank laden.",
+                        error=True,
+                    )
+                    self.db_conn = None
+            else:
+                self.db_conn = create_connection(self._db_path)
             if self.db_conn:
                 logger.info("Datenbankverbindung hergestellt: %s", self._db_path)
                 create_main_table(self.db_conn)
@@ -1954,13 +1972,13 @@ class App:
                 "include_holidays_in_exclusion": bool(include_holidays_var.get()),
                 "count_weekend_work": bool(count_weekend_work_var.get()),
             }
-            save_config(new_config)
-            logger.info(
-                "Einstellungen gespeichert: theme=%s, port=%s, db=%s",
-                new_config["theme"],
-                new_config["dashboard_port"],
-                new_config["database_path"],
-            )
+            if self._save_config_safe(new_config):
+                logger.info(
+                    "Einstellungen gespeichert: theme=%s, port=%s, db=%s",
+                    new_config["theme"],
+                    new_config["dashboard_port"],
+                    new_config["database_path"],
+                )
             self.config = new_config
             was_pomodoro_enabled = self.pomodoro_enabled
             self.pomodoro_enabled = bool(new_config.get("pomodoro_enabled", False))
@@ -3035,6 +3053,21 @@ class App:
         except Exception:
             self._fallback_write(message, error=error)
 
+    def _save_config_safe(self, config: dict) -> bool:
+        """Speichert die Config; OSError (z. B. volle Platte) landet sichtbar in der Konsole.
+
+        ``save_config`` schreibt via tmp+rename — schlägt das fehl, darf der
+        aufrufende Tk-Callback nicht mit Traceback sterben und der Nutzer muss
+        es erfahren (die Einstellung wäre beim nächsten Start sonst still weg).
+        """
+        try:
+            save_config(config)
+            return True
+        except OSError as e:
+            logger.error("Konfiguration konnte nicht gespeichert werden: %s", e)
+            self.write(f"Konfiguration konnte nicht gespeichert werden: {e}", error=True)
+            return False
+
     def _report_stale_sessions(self, stale_count: int, last_seen: datetime | None) -> None:
         """Macht das Aufräumen verwaister Sessions in der App-Konsole sichtbar.
 
@@ -3050,6 +3083,18 @@ class App:
         self.write(
             f"{stale_count} verwaiste Session(s) nach unsauberem Beenden geschlossen — {ende}.",
             error=True,
+        )
+
+    def _confirm_create_missing_db(self, path: str) -> bool:
+        """Rückfrage beim App-Start, ob eine fehlende konfigurierte DB neu angelegt werden soll."""
+        return messagebox.askyesno(
+            "Datenbank nicht gefunden",
+            f"Die konfigurierte Datenbank existiert nicht:\n{path}\n\n"
+            "Neu anlegen?\n\n"
+            "„Nein“ startet ohne Datenbank — z. B. wenn das Laufwerk noch nicht "
+            "eingebunden ist, erst den Pfad prüfen und die Datenbank in den "
+            "Einstellungen laden.",
+            parent=self.master,
         )
 
     def _open_database(self, path: str) -> bool:
@@ -3133,7 +3178,7 @@ class App:
             messagebox.showerror("Fehler", "Datenbank konnte nicht geladen werden.", parent=parent)
             return
         self.config["database_path"] = path
-        save_config(self.config)
+        self._save_config_safe(self.config)
         self._combobox_dirty = True
         self._refresh_comboboxes(force=True)
         self.name_entry.set(self.config.get("default_user", "Hans"))

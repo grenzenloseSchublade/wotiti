@@ -447,6 +447,33 @@ def test_pair_sessions_separate_projects_not_merged(app_instance):
     assert by_proj == {"A": (1, 3), "B": (2, 4)}
 
 
+def test_pairing_invariant_display_vs_stats_back_to_back(app_instance):
+    """Invariante: Anzeige (FIFO) und Stats (LIFO) paaren „Stop A == Start B" identisch.
+
+    Zwei Rücken-an-Rücken-Sessions (09-12, 12-13) müssen in BEIDEN Pfaden als
+    zwei normale Sessions erscheinen — kein 0h-Paar, keine Mega-Session. Sonst
+    weichen Tagesliste und Statistik-Summen/Session-Filter voneinander ab
+    (Memory session-pairing).
+    """
+    from db_helper import pair_sessions_lifo
+
+    events = [
+        _ev(1, "start", "09:00"),
+        _ev(2, "stop", "12:00"),
+        _ev(3, "start", "12:00"),
+        _ev(4, "stop", "13:00"),
+    ]
+    display_pairs = sorted((s["start_ts"], s["stop_ts"]) for s in app_instance._pair_day_sessions(events))
+    lifo_pairs = sorted(
+        pair_sessions_lifo([(etype, datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")) for _id, _u, _p, etype, ts in events])
+    )
+    expected = [
+        (datetime(2026, 6, 23, 9, 0), datetime(2026, 6, 23, 12, 0)),
+        (datetime(2026, 6, 23, 12, 0), datetime(2026, 6, 23, 13, 0)),
+    ]
+    assert display_pairs == lifo_pairs == expected
+
+
 def test_disable_pomodoro_during_break_keeps_session(app_instance):
     """POM-01: Pomodoro während einer aktiven Pomodoro-Pause deaktivieren darf
     die laufende Session NICHT stoppen.
@@ -1451,5 +1478,67 @@ def test_stale_cleanup_visible_in_console_after_crash():
         assert "23-06-2026 12:00:00" in console_text
         row = app.db_conn.execute("SELECT timestamp FROM events WHERE event_type = 'stop'").fetchone()
         assert row == ("2026-06-23 12:00:00",)
+    finally:
+        root.destroy()
+
+
+# --- Fehlende konfigurierte DB beim App-Start: Rückfrage statt stillem Neuanlegen ---
+
+
+def _point_config_to_missing_db(tmp_path):
+    """Config auf eine nicht existierende DB in einem fehlenden Verzeichnis zeigen lassen."""
+    import utils
+
+    cfg = utils.load_config()
+    missing = tmp_path / "nicht_gemountet" / "missing.db"
+    cfg["database_path"] = str(missing)
+    utils.save_config(cfg)
+    return missing
+
+
+def test_missing_db_decline_creates_nothing(tmp_path, monkeypatch):
+    """Nutzer verneint: keine Datei, kein Verzeichnis, db_conn=None, Konsole warnt."""
+    missing = _point_config_to_missing_db(tmp_path)
+    asked = []
+    monkeypatch.setattr(App, "_confirm_create_missing_db", lambda self, p: (asked.append(p), False)[1])
+
+    root = Tk()
+    try:
+        app = App(root)
+        assert asked == [str(missing)]
+        assert app.db_conn is None
+        assert not missing.exists()
+        assert not missing.parent.exists()  # create_connection hätte das Verzeichnis angelegt
+        console_text = app.console.get("1.0", END)
+        assert "nicht gefunden" in console_text
+    finally:
+        root.destroy()
+
+
+def test_missing_db_confirm_creates_db(tmp_path, monkeypatch):
+    """Nutzer bestätigt: DB wird (samt Verzeichnis) angelegt und normal geöffnet."""
+    missing = _point_config_to_missing_db(tmp_path)
+    monkeypatch.setattr(App, "_confirm_create_missing_db", lambda self, p: True)
+
+    root = Tk()
+    try:
+        app = App(root)
+        assert app.db_conn is not None
+        assert missing.exists()
+    finally:
+        root.destroy()
+
+
+def test_existing_db_starts_without_prompt(monkeypatch):
+    """Vorhandene DB (Standard-Fixture) → keine Rückfrage beim Start."""
+
+    def _boom(self, p):
+        raise AssertionError("Rückfrage darf bei vorhandener DB nicht erscheinen")
+
+    monkeypatch.setattr(App, "_confirm_create_missing_db", _boom)
+    root = Tk()
+    try:
+        app = App(root)
+        assert app.db_conn is not None
     finally:
         root.destroy()

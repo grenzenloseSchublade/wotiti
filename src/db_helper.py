@@ -5,6 +5,7 @@ import os
 import re
 import sqlite3
 from datetime import datetime, timedelta
+from itertools import groupby
 from sqlite3 import Error
 
 from utils import DATABASE_PATH
@@ -322,6 +323,7 @@ def get_daily_meta(conn: sqlite3.Connection | None, user: str, project: str, dat
     """Liefert {note, transferred, transferred_at} für (user, project, date_iso)."""
     if not conn or not user or not project or not date_iso:
         return _DAILY_META_DEFAULT()
+    cur = None
     try:
         cur = conn.cursor()
         cur.execute(
@@ -341,7 +343,8 @@ def get_daily_meta(conn: sqlite3.Connection | None, user: str, project: str, dat
         logger.error("Error fetching daily meta (%s/%s/%s): %s", user, project, date_iso, e)
         return _DAILY_META_DEFAULT()
     finally:
-        cur.close()
+        if cur is not None:
+            cur.close()
 
 
 def get_daily_note(conn: sqlite3.Connection | None, user: str, project: str, date_iso: str) -> str:
@@ -497,6 +500,7 @@ def get_daily_meta_for_range(
     """
     if not conn or not user or not date_iso_list:
         return {}
+    cur = None
     try:
         cur = conn.cursor()
         placeholders = ",".join("?" for _ in date_iso_list)
@@ -517,7 +521,8 @@ def get_daily_meta_for_range(
         logger.error("Error fetching daily meta range for %s: %s", user, e)
         return {}
     finally:
-        cur.close()
+        if cur is not None:
+            cur.close()
 
 
 def migrate_legacy_user_tables(conn: sqlite3.Connection | None) -> bool:
@@ -528,6 +533,7 @@ def migrate_legacy_user_tables(conn: sqlite3.Connection | None) -> bool:
     if not create_events_table(conn):
         return False
 
+    cursor = None
     try:
         cursor = conn.cursor()
         cursor.execute("""
@@ -593,7 +599,8 @@ def migrate_legacy_user_tables(conn: sqlite3.Connection | None) -> bool:
         logger.error("Error migrating legacy tables: %s", e)
         return False
     finally:
-        cursor.close()
+        if cursor is not None:
+            cursor.close()
 
 
 def check_user(conn: sqlite3.Connection | None, name: str) -> int | None:
@@ -605,6 +612,7 @@ def check_user(conn: sqlite3.Connection | None, name: str) -> int | None:
     if not name:
         return None
 
+    cur = None
     try:
         cur = conn.cursor()
         cur.execute("SELECT id FROM users WHERE name = ?", (name,))
@@ -622,7 +630,8 @@ def check_user(conn: sqlite3.Connection | None, name: str) -> int | None:
         logger.error("Error checking user: %s", e)
         return None
     finally:
-        cur.close()
+        if cur is not None:
+            cur.close()
 
 
 def check_project(conn: sqlite3.Connection | None, name: str) -> int | None:
@@ -634,6 +643,7 @@ def check_project(conn: sqlite3.Connection | None, name: str) -> int | None:
     if not name:
         return None
 
+    cur = None
     try:
         cur = conn.cursor()
         cur.execute("SELECT id FROM projects WHERE name = ?", (name,))
@@ -651,7 +661,8 @@ def check_project(conn: sqlite3.Connection | None, name: str) -> int | None:
         logger.error("Error checking project: %s", e)
         return None
     finally:
-        cur.close()
+        if cur is not None:
+            cur.close()
 
 
 def get_all_users(conn: sqlite3.Connection | None, include_archived: bool = False) -> list[str]:
@@ -749,6 +760,7 @@ def migrate_projects_to_table(conn: sqlite3.Connection | None) -> bool:
     """Migrate existing project names from events into the projects table."""
     if not conn:
         return False
+    cur = None
     try:
         cur = conn.cursor()
         cur.execute("SELECT DISTINCT project FROM events")
@@ -760,7 +772,8 @@ def migrate_projects_to_table(conn: sqlite3.Connection | None) -> bool:
         logger.error("Error migrating projects: %s", e)
         return False
     finally:
-        cur.close()
+        if cur is not None:
+            cur.close()
 
 
 def log_event(
@@ -796,6 +809,34 @@ def log_event(
 
         # Format timestamp (Single Source of Truth)
         ts_obj = timestamp if timestamp else datetime.now()
+
+        # DST-Fold (Uhr um 1 h zurückgestellt): Ein Stop, der naiv VOR dem
+        # zuletzt geschriebenen (noch offenen) Start liegt, würde beim Paaren
+        # zur Waise und die Session bliebe scheinbar ewig offen — die Zeit wäre
+        # via close_stale_sessions endgültig weg. Stattdessen auf den Start
+        # clampen (Null-Dauer, wie log_break_stop bei negativer Pausendauer).
+        # Insertion-Order (id) statt Zeitstempel-Order, weil genau die im
+        # Fold-Fall nicht monoton ist. Abstand strikt < 1 h: mehr kann die
+        # Zeitumstellung nicht erzeugen (03:00 MESZ existiert als Startzeit
+        # nicht) — bewusst rückdatierte Stops (manuelle Einträge) und exakt
+        # 1 h zurückeditierte Stops bleiben unberührt.
+        if event_type == "stop":
+            cursor.execute(
+                "SELECT event_type, timestamp FROM events WHERE user_id = ? AND project = ? ORDER BY id DESC LIMIT 1",
+                (user_id, project),
+            )
+            last = cursor.fetchone()
+            if last is not None and last[0] == "start":
+                last_ts = _parse_ts(last[1])
+                if last_ts is not None and ts_obj < last_ts < ts_obj + timedelta(hours=1):
+                    logger.warning(
+                        "log_event: Stop (%s) liegt vor letztem offenen Start (%s) — "
+                        "Zeitumstellung angenommen, Stop auf den Start geclampt.",
+                        ts_obj.strftime(TIMESTAMP_FORMAT),
+                        last[1],
+                    )
+                    ts_obj = last_ts
+
         timestamp_str = ts_obj.strftime(TIMESTAMP_FORMAT)
 
         # Datum konsequent aus Zeitstempel ableiten. Vom Aufrufer übergebenes
@@ -981,7 +1022,9 @@ def log_break_stop(
         )
         conn.commit()
         return True
-    except Error as e:
+    except (Error, ValueError) as e:
+        # ValueError: hand-editierter ``started_at``-Timestamp — darf nicht
+        # bis in den Tk-Callback durchschlagen (wie in calculate_duration).
         logger.error("Error logging break stop: %s", e)
         return False
     finally:
@@ -1080,15 +1123,32 @@ def pair_sessions_lifo(events):
     Mitternachts-Sessions bleiben korrekt gepaart (jüngster offener Start bindet
     den Folgetag-Stopp).
 
+    Tiebreak bei identischem Zeitstempel: In einer Gleich-Timestamp-Gruppe
+    binden Stops zuerst offene Starts aus FRÜHEREN Zeitstempeln. Sonst
+    entstünde bei Rücken-an-Rücken-Sessions (Stop A == Start B) ein
+    Null-Dauer-Paar plus Mega-Session — im Widerspruch zur FIFO-Tagesliste
+    (``_pair_day_sessions``), die für dieselben Daten zwei normale Sessions
+    zeigt. Erst wenn kein älterer offener Start existiert, bindet ein Stop
+    einen gleichzeitigen Start (bewusstes Null-Dauer-Paar statt zweier Waisen).
+
     Yields ``(start_dt, stop_dt)``: ``stop_dt=None`` für offene/verwaiste Starts,
     ``start_dt=None`` für verwaiste Stops.
     """
-    ordered = sorted(events, key=lambda e: (e[1], 0 if e[0] == "start" else 1))
+    ordered = sorted(events, key=lambda e: e[1])
     stack: list = []
-    for etype, ts in ordered:
-        if etype == "start":
-            stack.append(ts)
-        elif etype == "stop":
+    for _ts, group in groupby(ordered, key=lambda e: e[1]):
+        starts: list = []
+        deferred_stops: list = []
+        for etype, ts in group:
+            if etype == "start":
+                starts.append(ts)
+            elif etype == "stop":
+                if stack:
+                    yield stack.pop(), ts
+                else:
+                    deferred_stops.append(ts)
+        stack.extend(starts)
+        for ts in deferred_stops:
             if stack:
                 yield stack.pop(), ts
             else:
@@ -1484,17 +1544,33 @@ def close_stale_sessions(conn: sqlite3.Connection | None) -> int:
 
         leftover_starts = []  # (user_id, project, ts_str, date_str)
         for (uid, project), evs in groups.items():
-            # Zeitstempel-String ist ISO-sortierbar; Start vor Stop bei Gleichstand.
-            evs.sort(key=lambda r: (r[2], 0 if r[1] == "start" else 1, r[0]))
+            # Zeitstempel-String ist ISO-sortierbar; id als Tiebreak macht die
+            # Reihenfolge deterministisch. Gleicher Tiebreak wie in
+            # pair_sessions_lifo: In einer Gleich-Timestamp-Gruppe binden Stops
+            # zuerst offene Starts aus FRÜHEREN Zeitstempeln — sonst bliebe bei
+            # „Stop A == Start B" der falsche (ältere) Start übrig und würde
+            # hier geschlossen, obwohl die jüngere Session die offene ist.
+            evs.sort(key=lambda r: (r[2], r[0]))
             stack = []
-            for eid, etype, ts_str, date_str in evs:
-                if etype == "start":
-                    stack.append((eid, ts_str, date_str))
-                # Stop bindet den jüngsten offenen Start; verwaister Stop
-                # (leerer Stack) wird ignoriert.
-                elif etype == "stop" and stack:
-                    stack.pop()
-            for _eid, ts_str, date_str in stack:
+            for _ts_str, grp in groupby(evs, key=lambda r: r[2]):
+                starts = []
+                deferred_stops = 0
+                for _eid, etype, ts_str, date_str in grp:
+                    if etype == "start":
+                        starts.append((ts_str, date_str))
+                    elif etype == "stop":
+                        # Stop bindet den jüngsten ÄLTEREN offenen Start.
+                        if stack:
+                            stack.pop()
+                        else:
+                            deferred_stops += 1
+                stack.extend(starts)
+                # Übrige Stops binden gleichzeitige Starts (Null-Dauer-Paar);
+                # verwaister Stop ohne jeden Start wird ignoriert.
+                for _ in range(deferred_stops):
+                    if stack:
+                        stack.pop()
+            for ts_str, date_str in stack:
                 leftover_starts.append((uid, project, ts_str, date_str))
 
         for uid, project, ts_str, date_str in leftover_starts:
@@ -1580,6 +1656,7 @@ def get_event_by_id(conn: sqlite3.Connection | None, event_id: int) -> dict | No
     """Return a single event as dict, or None if not found."""
     if not conn:
         return None
+    cur = None
     try:
         cur = conn.cursor()
         cur.execute(
@@ -1606,7 +1683,8 @@ def get_event_by_id(conn: sqlite3.Connection | None, event_id: int) -> dict | No
         logger.error("Error fetching event %s: %s", event_id, e)
         return None
     finally:
-        cur.close()
+        if cur is not None:
+            cur.close()
 
 
 def update_event(
@@ -1638,10 +1716,12 @@ def update_event(
             )
         final_date = derived_date
 
-        # Verwende eine explizite Transaktion, damit ``check_project`` und
-        # das UPDATE atomar sind.
+        # Projekt-Auflösung VOR der Transaktion: ``check_project`` committet
+        # für sich — mitten im ``with conn``-Block würde das die Atomarität
+        # des UPDATE brechen (Muster wie in log_event).
+        check_project(conn, project)
+
         with conn:
-            check_project(conn, project)
             cur = conn.cursor()
             cur.execute(
                 """
@@ -1780,6 +1860,7 @@ def delete_event(conn: sqlite3.Connection | None, event_id: int) -> bool:
     """Delete a single event by ID."""
     if not conn:
         return False
+    cur = None
     try:
         cur = conn.cursor()
         cur.execute("DELETE FROM events WHERE id = ?", (event_id,))
@@ -1790,7 +1871,8 @@ def delete_event(conn: sqlite3.Connection | None, event_id: int) -> bool:
         logger.error("Error deleting event %s: %s", event_id, e)
         return False
     finally:
-        cur.close()
+        if cur is not None:
+            cur.close()
 
 
 def delete_session(
