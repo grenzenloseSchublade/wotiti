@@ -1,4 +1,3 @@
-import contextlib
 import os
 import sys
 from datetime import datetime, timedelta
@@ -8,7 +7,6 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 from app import App
-from utils import DATABASE_PATH
 
 
 @pytest.fixture
@@ -17,9 +15,6 @@ def app_instance():
     root = Tk()
     app_instance = App(root)
     yield app_instance
-    print(os.path.abspath(os.path.dirname(DATABASE_PATH)))
-    with contextlib.suppress(OSError):
-        os.remove(DATABASE_PATH)
     root.destroy()
 
 
@@ -85,8 +80,23 @@ def test_new_project_sentinel_in_combobox(app_instance):
 
 
 def test_idle_timeout_config_default(app_instance):
-    """Idle-Timeout wird aus der Konfiguration übernommen (Default 120)."""
-    assert isinstance(app_instance.idle_timeout_minutes, int)
+    """Ohne expliziten Config-Wert gilt der Default von 120 Minuten."""
+    assert app_instance.idle_timeout_minutes == 120
+
+
+def test_idle_timeout_config_custom_value():
+    """Ein gesetzter Config-Wert übersteuert den Default."""
+    import utils
+
+    cfg = utils.load_config()
+    cfg["idle_timeout_minutes"] = 45
+    utils.save_config(cfg)
+    root = Tk()
+    try:
+        app = App(root)
+        assert app.idle_timeout_minutes == 45
+    finally:
+        root.destroy()
 
 
 def test_add_manual_event_rejects_today(app_instance):
