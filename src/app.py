@@ -42,9 +42,11 @@ else:
     winsound = None
 
 from db_helper import (
+    _WINDOW_MARGIN_DAYS,
     DATE_FORMAT,
     TIMESTAMP_FORMAT,
     UI_DATE_FORMAT,
+    _timestamp_window,
     calculate_daily_break_duration,
     calculate_daily_duration,
     calculate_duration,
@@ -161,6 +163,9 @@ class App:
         # (siehe _check_suspend_gap).
         self._last_tick_wall = time.time()
         self._last_tick_monotonic = time.monotonic()
+        # Kalendertag des letzten Timer-Ticks — erkennt den Tageswechsel um
+        # Mitternacht (siehe _check_day_rollover).
+        self._timer_last_date = datetime.today().date()
         self._last_date_view_input_cache = None
         self._date_entry_normal_bg = "#FFFFFF"
         self._date_entry_past_bg = "#FFFACD"
@@ -3226,14 +3231,32 @@ class App:
             self._status_date_label.config(text=f"Ansicht: {view_date}{kw}{suffix}")
             current_name = self.name_entry.get().strip()
             limit = 500
+            # Events über das Timestamp-Fenster des Anzeigetags laden statt über
+            # die date-Spalte: nur so wird eine Mitternachts-Session (23:50 →
+            # 00:30) vollständig gepaart — über die date-Spalte bliebe sie am
+            # Starttag ewig „laufend" und hinterließe am Folgetag einen
+            # verwaisten Stop. Rand ±_WINDOW_MARGIN_DAYS wie in
+            # calculate_daily_duration, damit Start UND Stop tagübergreifender
+            # Sessions mitgelesen werden.
+            try:
+                view_day = datetime.strptime(view_date, UI_DATE_FORMAT).date()
+            except ValueError:
+                return
+            ts_lo, ts_hi = _timestamp_window(view_day, view_day)
+            day_lo = datetime.combine(view_day, datetime.min.time()).strftime(TIMESTAMP_FORMAT)
+            day_hi = datetime.combine(view_day + timedelta(days=1), datetime.min.time()).strftime(TIMESTAMP_FORMAT)
+            # SQL-Deckel nur als Schutz vor entarteten Datenbeständen — auf die
+            # Fensterbreite skaliert, damit Randtage den Anzeigetag nicht aus
+            # dem Limit verdrängen.
+            window_limit = limit * (2 * _WINDOW_MARGIN_DAYS + 1)
             if current_name:
                 cursor.execute(
                     """
                     SELECT COUNT(*) FROM events e
                     JOIN users u ON u.id = e.user_id
-                    WHERE u.name = ? AND e.date = ?
+                    WHERE u.name = ? AND e.timestamp >= ? AND e.timestamp < ?
                     """,
-                    (current_name, view_date),
+                    (current_name, day_lo, day_hi),
                 )
                 total_count = cursor.fetchone()[0]
                 cursor.execute(
@@ -3241,20 +3264,20 @@ class App:
                     SELECT e.id, u.name, e.project, e.event_type, e.timestamp
                     FROM events e
                     JOIN users u ON u.id = e.user_id
-                    WHERE u.name = ? AND e.date = ?
+                    WHERE u.name = ? AND e.timestamp >= ? AND e.timestamp < ?
                     ORDER BY e.timestamp
                     LIMIT ?
                 """,
-                    (current_name, view_date, limit),
+                    (current_name, ts_lo, ts_hi, window_limit),
                 )
             else:
                 cursor.execute(
                     """
                     SELECT COUNT(*) FROM events e
                     JOIN users u ON u.id = e.user_id
-                    WHERE e.date = ?
+                    WHERE e.timestamp >= ? AND e.timestamp < ?
                     """,
-                    (view_date,),
+                    (day_lo, day_hi),
                 )
                 total_count = cursor.fetchone()[0]
                 cursor.execute(
@@ -3262,19 +3285,23 @@ class App:
                     SELECT e.id, u.name, e.project, e.event_type, e.timestamp
                     FROM events e
                     JOIN users u ON u.id = e.user_id
-                    WHERE e.date = ?
-                    ORDER BY u.name, e.timestamp
+                    WHERE e.timestamp >= ? AND e.timestamp < ?
+                    ORDER BY e.timestamp
                     LIMIT ?
                 """,
-                    (view_date, limit),
+                    (ts_lo, ts_hi, window_limit),
                 )
             events = cursor.fetchall()
-            try:
-                view_iso = datetime.strptime(view_date, UI_DATE_FORMAT).strftime(DATE_FORMAT)
-            except ValueError:
-                view_iso = None
+            view_iso = view_day.strftime(DATE_FORMAT)
             chronological = bool(self.config.get("entry_list_chronological", False))
-            sessions = self._pair_day_sessions(events) if events else []
+            # Nur Sessions des Anzeigetags behalten: eine Session gehört zum Tag
+            # ihres Starts (ein verwaister Stop zum Tag des Stops) — die
+            # Mitternachts-Session erscheint so vollständig am Starttag.
+            sessions = [
+                s
+                for s in (self._pair_day_sessions(events) if events else [])
+                if s["sort_ts"] and s["sort_ts"].date() == view_day
+            ]
 
             # Meta (Notiz/✓) je (user, project) cachen — wenige Abfragen/Tag.
             meta_cache: dict[tuple, dict] = {}
@@ -3317,7 +3344,7 @@ class App:
                             }
                             note_only.setdefault(uname, []).append(proj)
 
-            if events or note_only:
+            if sessions or note_only:
 
                 def _emit(segments, session=None):
                     """Fügt eine Zeile aus (Text, Tags)-Segmenten ein + Mapping."""
@@ -3731,22 +3758,52 @@ class App:
                 messagebox.showwarning("Fehler", "Mindestens Start- oder Endzeit angeben.", parent=win)
                 return
             if start_dt and stop_dt and stop_dt < start_dt:
-                messagebox.showwarning("Fehler", "Ende liegt vor dem Start.", parent=win)
-                return
+                # Ende vor Start = Session über Mitternacht → Ende auf den
+                # Folgetag legen (23:50 → 00:30 ist so direkt speicherbar).
+                stop_dt += timedelta(days=1)
 
-            # Überschneidung mit anderer Session desselben Projekts am selben Tag?
-            # Warnen, aber auf Wunsch erlauben (robust gepaart via FIFO-Anzeige).
-            own_ids = {i for i in (start_id, stop_id) if i is not None}
+            # Doppel-Stop-Guard: Zeigte eine (veraltete) Ansicht die Session als
+            # offen, obwohl in der DB längst ein Stop zum Start gehört, würde
+            # log_stop unten ein ZWEITES Stop-Event anlegen. Daher vor dem
+            # Nachtragen frisch aus der DB paaren und einen bereits vorhandenen
+            # Stop aktualisieren statt neu einzufügen.
+            eff_stop_id = stop_id
+            if stop_id is None and stop_dt is not None and start_id is not None:
+                try:
+                    g_cur = self.db_conn.cursor()
+                    g_lo, g_hi = _timestamp_window(start_ts.date(), start_ts.date())
+                    g_cur.execute(
+                        """
+                        SELECT e.id, u.name, e.project, e.event_type, e.timestamp
+                        FROM events e JOIN users u ON u.id = e.user_id
+                        WHERE u.name = ? AND e.project = ? AND e.timestamp >= ? AND e.timestamp < ?
+                        ORDER BY e.timestamp
+                        """,
+                        (user, project, g_lo, g_hi),
+                    )
+                    for gs in self._pair_day_sessions(g_cur.fetchall()):
+                        if gs["start_id"] == start_id:
+                            eff_stop_id = gs["stop_id"]
+                            break
+                except Exception:
+                    logger.exception("Doppel-Stop-Prüfung fehlgeschlagen")
+
+            # Überschneidung mit anderer Session desselben Projekts? Kandidaten
+            # über das Timestamp-Fenster des Zieltags laden (deckt Mitternachts-
+            # Sessions ab); warnen, aber auf Wunsch erlauben (robust gepaart via
+            # FIFO-Anzeige).
+            own_ids = {i for i in (start_id, stop_id, eff_stop_id) if i is not None}
             try:
                 ov_cur = self.db_conn.cursor()
+                ov_lo, ov_hi = _timestamp_window(d_part.date(), d_part.date())
                 ov_cur.execute(
                     """
                     SELECT e.id, u.name, e.project, e.event_type, e.timestamp
                     FROM events e JOIN users u ON u.id = e.user_id
-                    WHERE u.name = ? AND e.project = ? AND e.date = ?
+                    WHERE u.name = ? AND e.project = ? AND e.timestamp >= ? AND e.timestamp < ?
                     ORDER BY e.timestamp
                     """,
-                    (user, new_project, d_part.strftime(UI_DATE_FORMAT)),
+                    (user, new_project, ov_lo, ov_hi),
                 )
                 day_sessions = self._pair_day_sessions(ov_cur.fetchall())
             except Exception:
@@ -3765,7 +3822,7 @@ class App:
             if overlap and not messagebox.askyesno(
                 "Überschneidung",
                 "Diese Zeiten überschneiden sich mit einer anderen Session "
-                f"desselben Projekts ({new_project}) am selben Tag.\n\nTrotzdem speichern?",
+                f"desselben Projekts ({new_project}).\n\nTrotzdem speichern?",
                 parent=win,
             ):
                 return
@@ -3776,8 +3833,8 @@ class App:
                 ok = update_event(self.db_conn, start_id, new_project, start_dt.strftime(TIMESTAMP_FORMAT)) and ok
             elif start_dt is not None:
                 ok = log_start(project=new_project, name=user, timestamp=start_dt, conn=self.db_conn) and ok
-            if stop_id is not None:
-                ok = update_event(self.db_conn, stop_id, new_project, stop_dt.strftime(TIMESTAMP_FORMAT)) and ok
+            if eff_stop_id is not None:
+                ok = update_event(self.db_conn, eff_stop_id, new_project, stop_dt.strftime(TIMESTAMP_FORMAT)) and ok
             elif stop_dt is not None:
                 ok = log_stop(project=new_project, name=user, timestamp=stop_dt, conn=self.db_conn) and ok
             if not ok:
@@ -3801,7 +3858,7 @@ class App:
                     set_daily_transferred(self.db_conn, user, new_project, new_iso, new_transferred, today_iso)
 
             # Plausi-Check (auf vorhandenem Event).
-            check_id = stop_id if stop_id is not None else start_id
+            check_id = eff_stop_id if eff_stop_id is not None else start_id
             if check_id is not None:
                 okv, msg = validate_event_pair(self.db_conn, check_id)
                 if not okv:
@@ -3931,9 +3988,35 @@ class App:
         self._bring_main_window_to_front()
         self.timer_subtitle_label.config(text=f"Automatisch gestoppt (Standby ~{gap_minutes} min)", fg="#B58900")
 
+    def _check_day_rollover(self) -> None:
+        """Erkennt den Tageswechsel zwischen zwei Timer-Ticks.
+
+        Läuft eine Session über Mitternacht und zeigt das Datumsfeld noch den
+        alten „heute"-Tag, rollt es auf den neuen Tag — sonst friert die
+        Anzeige um 00:00 ein (``_is_viewing_today()`` wird False, die Anzeige
+        fällt auf die Vortagssumme zurück und tickt nicht mehr). Ein bewusst
+        gewähltes anderes Datum bleibt unangetastet.
+        """
+        today = datetime.today().date()
+        prev = self._timer_last_date
+        if today == prev:
+            return
+        self._timer_last_date = today
+        if not any(self.session_active.values()):
+            return
+        if self._get_selected_date() != prev.strftime(UI_DATE_FORMAT):
+            return  # Nutzer betrachtet bewusst einen anderen Tag
+        # Wie in _step_date: Notiz des alten Tages sichern, bevor der
+        # Notiz-Kontext mit dem Datum wechselt.
+        self._flush_pending_note()
+        self.date_entry.delete(0, END)
+        self.date_entry.insert(0, today.strftime(UI_DATE_FORMAT))
+        self._on_date_changed()
+
     def update_timer_realtime(self):
         """Update the timer label with the elapsed time."""
         self._check_suspend_gap()
+        self._check_day_rollover()
         project = self._get_project_silent()
         name = self._get_name_silent()
 

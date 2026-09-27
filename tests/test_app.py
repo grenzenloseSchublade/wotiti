@@ -1019,6 +1019,253 @@ def test_note_shift_return_replaces_selection(app_instance):
     assert not w.tag_ranges("sel")
 
 
+# ---------------------------------------------------------------------------
+# Mitternacht/Datumsgrenze: Tagesliste, Session-Editor, Timer-Rollover
+# ---------------------------------------------------------------------------
+
+
+def _log_midnight_session(app_instance, name, project="1"):
+    """Legt eine 23:50 → 00:30-Session (über Mitternacht) in der DB an."""
+    from db_helper import log_start, log_stop
+
+    start = datetime(2026, 6, 23, 23, 50)
+    log_start(project=project, name=name, timestamp=start, conn=app_instance.db_conn)
+    log_stop(project=project, name=name, timestamp=start + timedelta(minutes=40), conn=app_instance.db_conn)
+    return start
+
+
+def _view_day(app_instance, name, date_str):
+    app_instance.name_entry.set(name)
+    app_instance.date_entry.delete(0, END)
+    app_instance.date_entry.insert(0, date_str)
+    app_instance.update_db_content()
+
+
+def _find_editor(app_instance):
+    from tkinter import Toplevel
+
+    wins = [w for w in app_instance.master.winfo_children() if isinstance(w, Toplevel)]
+    assert wins, "Session-Editor wurde nicht geöffnet"
+    return wins[-1]
+
+
+def _invoke_editor_button(win, label):
+    from tkinter import Button
+
+    stack = [win]
+    while stack:
+        w = stack.pop()
+        stack.extend(w.winfo_children())
+        if isinstance(w, Button) and w.cget("text") == label:
+            w.invoke()
+            return
+    raise AssertionError(f"Button '{label}' nicht gefunden")
+
+
+def _editor_entries(win):
+    """Die drei Entry-Felder des Editors in Aufbaureihenfolge: Datum, Start, Ende.
+
+    ttk.Combobox erbt von tkinter.Entry — die Projekt-Combobox muss daher
+    explizit ausgefiltert werden.
+    """
+    from tkinter import Entry
+    from tkinter.ttk import Combobox
+
+    return [w for w in win.winfo_children() if isinstance(w, Entry) and not isinstance(w, Combobox)]
+
+
+def _patch_messageboxes(monkeypatch):
+    """Blockierende Dialoge abfangen; Warnungen/Fehler werden gesammelt."""
+    import app as app_module
+
+    calls = []
+    monkeypatch.setattr(app_module.messagebox, "showwarning", lambda *a, **k: calls.append(("warning", a)))
+    monkeypatch.setattr(app_module.messagebox, "showerror", lambda *a, **k: calls.append(("error", a)))
+    monkeypatch.setattr(app_module.messagebox, "askyesno", lambda *a, **k: True)
+    return calls
+
+
+def _user_events(app_instance, name):
+    cur = app_instance.db_conn.cursor()
+    return cur.execute(
+        "SELECT e.event_type, e.timestamp FROM events e JOIN users u ON u.id = e.user_id "
+        "WHERE u.name = ? ORDER BY e.timestamp, e.id",
+        (name,),
+    ).fetchall()
+
+
+def test_day_list_midnight_session_closed_on_start_day(app_instance):
+    """23:50 → 00:30 erscheint am STARTTAG als abgeschlossene Session (0:40),
+    nicht ewig als „läuft" (Regression: date-Spalten-Filter sah den Stop nie)."""
+    name = "mid_list"
+    _log_midnight_session(app_instance, name)
+    _view_day(app_instance, name, "23-06-2026")
+
+    assert len(app_instance._day_sessions) == 1
+    s = app_instance._day_sessions[0]
+    assert s["start_id"] is not None and s["stop_id"] is not None
+    assert abs(s["dur_h"] - 40 / 60) < 1e-9
+    text = app_instance.day_list.get("1.0", "end-1c")
+    assert "23:50–00:30" in text
+    assert "läuft" not in text
+    assert "0:40 h" in text
+
+
+def test_day_list_midnight_session_no_orphan_stop_on_next_day(app_instance):
+    """Der Folgetag zeigt KEINEN verwaisten Stop der Mitternachts-Session."""
+    name = "mid_next"
+    _log_midnight_session(app_instance, name)
+    _view_day(app_instance, name, "24-06-2026")
+
+    assert app_instance._day_sessions == []
+    assert "00:30" not in app_instance.day_list.get("1.0", "end-1c")
+
+
+def test_day_list_regular_day_unaffected_by_window(app_instance):
+    """Normale Sessions des Nachbartags rutschen NICHT in den Anzeigetag."""
+    from db_helper import log_start, log_stop
+
+    name = "mid_iso"
+    _log_midnight_session(app_instance, name)
+    # Zusätzliche normale Session am Folgetag.
+    log_start(project="1", name=name, timestamp=datetime(2026, 6, 24, 9, 0), conn=app_instance.db_conn)
+    log_stop(project="1", name=name, timestamp=datetime(2026, 6, 24, 10, 0), conn=app_instance.db_conn)
+
+    _view_day(app_instance, name, "23-06-2026")
+    assert [s["start_ts"].strftime("%H:%M") for s in app_instance._day_sessions] == ["23:50"]
+    _view_day(app_instance, name, "24-06-2026")
+    assert [s["start_ts"].strftime("%H:%M") for s in app_instance._day_sessions] == ["09:00"]
+    assert "1:00 h" in app_instance.day_list.get("1.0", "end-1c")
+
+
+def test_editor_midnight_session_roundtrip_no_duplicate(app_instance, monkeypatch):
+    """Mitternachts-Session im Editor unverändert speichern: kein zweites
+    Stop-Event, Ende bleibt auf dem Folgetag (Regression: 5 min statt 40 +
+    verwaister Stop)."""
+    calls = _patch_messageboxes(monkeypatch)
+    name = "mid_edit"
+    _log_midnight_session(app_instance, name)
+    _view_day(app_instance, name, "23-06-2026")
+    session = app_instance._day_sessions[0]
+    assert session["stop_id"] is not None
+
+    app_instance._edit_event(session=session)
+    _invoke_editor_button(_find_editor(app_instance), "Speichern")
+
+    assert calls == []
+    events = _user_events(app_instance, name)
+    assert [e[0] for e in events] == ["start", "stop"]
+    assert events[0][1] == "2026-06-23 23:50:00"
+    assert events[1][1] == "2026-06-24 00:30:00"
+
+
+def test_editor_double_stop_guard_updates_existing_stop(app_instance, monkeypatch):
+    """Zeigt eine veraltete Ansicht die Session als offen, obwohl der Stop in
+    der DB existiert, aktualisiert Speichern den vorhandenen Stop statt ein
+    zweites Stop-Event anzulegen (Doppel-Stop-Guard)."""
+    calls = _patch_messageboxes(monkeypatch)
+    name = "mid_guard"
+    start = _log_midnight_session(app_instance, name)
+    cur = app_instance.db_conn.cursor()
+    start_id = cur.execute(
+        "SELECT e.id FROM events e JOIN users u ON u.id = e.user_id WHERE u.name = ? AND e.event_type = 'start'",
+        (name,),
+    ).fetchone()[0]
+    # Session-Dict, wie es der alte date-Spalten-Filter geliefert hätte: offen.
+    stale = {
+        "user": name,
+        "project": "1",
+        "start_id": start_id,
+        "stop_id": None,
+        "start_ts": start,
+        "stop_ts": None,
+        "dur_h": None,
+        "sort_ts": start,
+        "date_iso": "2026-06-23",
+    }
+
+    app_instance._edit_event(session=stale)
+    win = _find_editor(app_instance)
+    end_entry = _editor_entries(win)[2]
+    end_entry.delete(0, END)
+    end_entry.insert(0, "00:30")
+    _invoke_editor_button(win, "Speichern")
+
+    assert calls == []
+    events = _user_events(app_instance, name)
+    assert [e[0] for e in events] == ["start", "stop"]  # kein Duplikat
+    assert events[0][1] == "2026-06-23 23:50:00"  # Start unangetastet
+    assert events[1][1] == "2026-06-24 00:30:00"
+
+
+def test_editor_end_before_start_assumes_next_day(app_instance, monkeypatch):
+    """Ende < Start beim Stop-Nachtragen → Ende landet auf dem Folgetag
+    (früher: Warnung „Ende liegt vor dem Start", Speichern unmöglich)."""
+    from db_helper import log_start
+
+    calls = _patch_messageboxes(monkeypatch)
+    name = "mid_open"
+    log_start(project="1", name=name, timestamp=datetime(2026, 6, 23, 22, 0), conn=app_instance.db_conn)
+    _view_day(app_instance, name, "23-06-2026")
+    session = app_instance._day_sessions[0]
+    assert session["stop_id"] is None
+
+    app_instance._edit_event(session=session)
+    win = _find_editor(app_instance)
+    end_entry = _editor_entries(win)[2]
+    end_entry.delete(0, END)
+    end_entry.insert(0, "01:00")
+    _invoke_editor_button(win, "Speichern")
+
+    assert calls == []
+    events = _user_events(app_instance, name)
+    assert [e[0] for e in events] == ["start", "stop"]
+    assert events[0][1] == "2026-06-23 22:00:00"  # Start unangetastet
+    assert events[1][1] == "2026-06-24 01:00:00"
+
+
+def test_timer_rollover_rolls_date_field(app_instance):
+    """Tageswechsel bei laufender Session: das Datumsfeld rollt vom alten
+    „heute" auf den neuen Tag (Timer friert nicht ein)."""
+    _start_test_session(app_instance, name="roll_user")
+    yesterday = datetime.today().date() - timedelta(days=1)
+    app_instance._timer_last_date = yesterday
+    app_instance.date_entry.delete(0, END)
+    app_instance.date_entry.insert(0, yesterday.strftime("%d-%m-%Y"))
+
+    app_instance._check_day_rollover()
+
+    assert app_instance.date_entry.get() == datetime.today().strftime("%d-%m-%Y")
+    assert app_instance._timer_last_date == datetime.today().date()
+    assert app_instance._is_viewing_today() is True
+
+
+def test_timer_rollover_keeps_deliberate_other_date(app_instance):
+    """Betrachtet der Nutzer bewusst einen anderen Tag, bleibt das Datum stehen."""
+    _start_test_session(app_instance, name="roll_keep")
+    app_instance._timer_last_date = datetime.today().date() - timedelta(days=1)
+    app_instance.date_entry.delete(0, END)
+    app_instance.date_entry.insert(0, "01-01-2020")
+
+    app_instance._check_day_rollover()
+
+    assert app_instance.date_entry.get() == "01-01-2020"
+    assert app_instance._timer_last_date == datetime.today().date()
+
+
+def test_timer_rollover_noop_without_session(app_instance):
+    """Ohne laufende Session wird nur der Tick-Tag nachgezogen, das Feld bleibt."""
+    yesterday = datetime.today().date() - timedelta(days=1)
+    app_instance._timer_last_date = yesterday
+    app_instance.date_entry.delete(0, END)
+    app_instance.date_entry.insert(0, yesterday.strftime("%d-%m-%Y"))
+
+    app_instance._check_day_rollover()
+
+    assert app_instance.date_entry.get() == yesterday.strftime("%d-%m-%Y")
+    assert app_instance._timer_last_date == datetime.today().date()
+
+
 def test_toggle_row_transferred_roundtrip(app_instance):
     """Der Kontextmenü-Toggle setzt/entfernt den ✓-Status für die Zielzeile."""
     from db_helper import get_daily_meta, log_start, log_stop
