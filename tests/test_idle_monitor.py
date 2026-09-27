@@ -79,6 +79,8 @@ def _fake_windll(last_input_tick, current_tick):
 
 
 def test_windows_idle_normal_case(monkeypatch):
+    # Plattform mitfaken: _idle_seconds_windows guardet auf sys.platform.
+    monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(ctypes, "windll", _fake_windll(1_000, 6_000), raising=False)
     assert idle_monitor._idle_seconds_windows() == 5.0
 
@@ -86,6 +88,7 @@ def test_windows_idle_normal_case(monkeypatch):
 def test_windows_tick_overflow_clamps_to_zero(monkeypatch):
     # Nach dem 32-Bit-Überlauf liegt der aktuelle Tick UNTER dem letzten
     # Input-Tick → konservativ 0.0 statt riesiger negativer Idle-Zeit.
+    monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(ctypes, "windll", _fake_windll(4_000_000_000, 100), raising=False)
     assert idle_monitor._idle_seconds_windows() == 0.0
 
@@ -97,6 +100,7 @@ def test_windows_api_failure_returns_none(monkeypatch):
             return 0  # API-Fehlschlag
 
     windll = types.SimpleNamespace(user32=_User32(), kernel32=None)
+    monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(ctypes, "windll", windll, raising=False)
     assert idle_monitor._idle_seconds_windows() is None
 

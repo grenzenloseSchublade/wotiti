@@ -1557,7 +1557,9 @@ def close_stale_sessions(conn: sqlite3.Connection | None) -> int:
         return 0
     closed = 0
     heartbeat = read_heartbeat(conn)
-    hb_ts_str = heartbeat.strftime(TIMESTAMP_FORMAT) if heartbeat else None
+    # Timestamp- und Datums-String zusammen ableiten: entweder beide oder keiner
+    # (macht die Kopplung auch für den Typchecker sichtbar).
+    hb_strs = (heartbeat.strftime(TIMESTAMP_FORMAT), heartbeat.strftime(UI_DATE_FORMAT)) if heartbeat else None
     try:
         from collections import defaultdict
 
@@ -1603,8 +1605,8 @@ def close_stale_sessions(conn: sqlite3.Connection | None) -> int:
         for uid, project, ts_str, date_str in leftover_starts:
             # Zeitstempel-Strings sind ISO-sortierbar: Heartbeat nur verwenden,
             # wenn er NACH dem Start liegt (sonst Null-Dauer wie bisher).
-            if hb_ts_str is not None and hb_ts_str > ts_str:
-                stop_ts, stop_date = hb_ts_str, heartbeat.strftime(UI_DATE_FORMAT)
+            if hb_strs is not None and hb_strs[0] > ts_str:
+                stop_ts, stop_date = hb_strs
             else:
                 stop_ts, stop_date = ts_str, date_str
             cursor.execute(

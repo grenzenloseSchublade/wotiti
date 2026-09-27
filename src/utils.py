@@ -12,7 +12,7 @@ from collections.abc import Callable
 from datetime import datetime
 from functools import lru_cache
 from tkinter import Tk, filedialog
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 if TYPE_CHECKING:  # nur für Annotations — Laufzeit-Import bleibt lazy
     import polars as pl
@@ -47,7 +47,15 @@ SYNTHWAVE_COLORS = {
 MODERN_SEQUENCE = ["#8be9fd", "#ff79c6", "#f1fa8c", "#50fa7b", "#ffb86c", "#bd93f9", "#ff5555", "#6272a4"]
 SYNTHWAVE_SEQUENCE = ["#00d4ff", "#ff00ff", "#ffff00", "#e94560", "#50fa7b", "#bd93f9", "#ff5555", "#ff79c6"]
 
-THEMES = {
+
+class _Theme(TypedDict):
+    """Farbschema eines Themes: benannte Farben + Sequenz für Diagramme."""
+
+    colors: dict[str, str]
+    sequence: list[str]
+
+
+THEMES: dict[str, _Theme] = {
     "Modern": {"colors": MODERN_COLORS, "sequence": MODERN_SEQUENCE},
     "Synthwave": {"colors": SYNTHWAVE_COLORS, "sequence": SYNTHWAVE_SEQUENCE},
 }

@@ -807,7 +807,7 @@ def perform_cluster_analysis(data):
     if len(inertias) < 2:
         optimal_k = k_range[0] if k_range else 2
     else:
-        optimal_k = k_range[np.argmin(np.diff(inertias)) + 1]
+        optimal_k = k_range[np.argmin(np.diff(inertias)) + 1]  # ty: ignore[no-matching-overload]
 
     # Finales Clustering
     kmeans = KMeans(n_clusters=optimal_k, random_state=42)
@@ -821,9 +821,10 @@ def perform_cluster_analysis(data):
         profile = {
             "cluster": cluster,
             "size": cluster_data.height,
-            "avg_start": float(cluster_data["avg_start_hour"].mean()),
-            "avg_switches": float(cluster_data["switches_per_day"].mean()),
-            "avg_duration": float(cluster_data["avg_duration"].mean()),
+            # KMeans lässt keine leeren Cluster zu — mean() liefert hier nie None.
+            "avg_start": float(cluster_data["avg_start_hour"].mean()),  # ty: ignore[invalid-argument-type]
+            "avg_switches": float(cluster_data["switches_per_day"].mean()),  # ty: ignore[invalid-argument-type]
+            "avg_duration": float(cluster_data["avg_duration"].mean()),  # ty: ignore[invalid-argument-type]
             "users": cluster_data["user"].to_list(),
         }
         cluster_profiles.append(profile)

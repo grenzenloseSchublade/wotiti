@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Untere und obere Grenze aus requires-python (>=3.10,<3.14) —
+        # bei Änderung in pyproject.toml hier nachziehen.
+        python-version: ["3.10", "3.13"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --locked --all-extras
+
+      - name: Lint (ruff check)
+        run: uv run ruff check .
+
+      - name: Format (ruff format --check)
+        run: uv run ruff format --check .
+
+      - name: Install Xvfb
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb
+
+      - name: Tests (pytest unter Xvfb)
+        run: xvfb-run -a uv run pytest tests/ -q
+
+  # Nicht-blockierender Typcheck, strikt auf die bereits sauberen Module
+  # gescoped — NICHT global ausweiten, app.py & Co. sind (noch) nicht typclean.
+  typecheck:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --locked --all-extras
+
+      - name: Typecheck (ty, gescoped)
+        run: >
+          uvx ty@0.0.84 check
+          src/db_helper.py
+          src/utils.py
+          src/week_view.py
+          src/single_instance.py
+          src/idle_monitor.py
+          src/stats_calculations.py

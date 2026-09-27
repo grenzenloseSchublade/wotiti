@@ -37,6 +37,10 @@ def _warn_once(msg: str) -> None:
 
 def _idle_seconds_windows() -> float | None:
     """Idle-Zeit unter Windows via GetLastInputInfo."""
+    # Defensiver Guard: ctypes.windll existiert nur unter Windows — macht die
+    # Zugriffe darunter auch für Typchecker nachweisbar sicher.
+    if sys.platform != "win32":
+        return None
 
     class LASTINPUTINFO(ctypes.Structure):
         _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
@@ -44,9 +48,9 @@ def _idle_seconds_windows() -> float | None:
     try:
         info = LASTINPUTINFO()
         info.cbSize = ctypes.sizeof(info)
-        if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):  # type: ignore[attr-defined]
+        if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):
             return None
-        tick = ctypes.windll.kernel32.GetTickCount()  # type: ignore[attr-defined]
+        tick = ctypes.windll.kernel32.GetTickCount()
         # GetTickCount läuft nach ~49.7 Tagen über; bei Überlauf konservativ 0.
         millis = tick - info.dwTime
         if millis < 0:
