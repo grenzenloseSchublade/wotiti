@@ -427,11 +427,6 @@ def get_daily_meta(conn: sqlite3.Connection | None, user: str, project: str, dat
             cur.close()
 
 
-def get_daily_note(conn: sqlite3.Connection | None, user: str, project: str, date_iso: str) -> str:
-    """Liefert nur die Notiz für (user, project, date_iso) oder einen leeren String."""
-    return get_daily_meta(conn, user, project, date_iso)["note"]
-
-
 def _apply_transferred_row(cur, user_id: int, project: str, date_iso: str, transferred: bool, transferred_at) -> int:
     """Setzt/entfernt den Übertragen-Status EINER Zeile (gemeinsamer Kern).
 

@@ -160,11 +160,6 @@ def is_weekend(d) -> bool:
         return False
 
 
-def _holiday_set_for_year(country: str, subdiv: str | None, year: int):
-    """Gecachte Holiday-Lookup-Map für (country, subdiv, year). Leer bei Fehler."""
-    return _holiday_set_cached(country or "DE", (subdiv or None), int(year))
-
-
 @lru_cache(maxsize=128)
 def _holiday_set_cached(country: str, subdiv: str | None, year: int) -> frozenset:
     mod = _try_import_holidays()

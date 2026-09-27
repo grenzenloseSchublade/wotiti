@@ -4,7 +4,7 @@ Statistik-Berechnungsmodul für die Zeiterfassungsanalyse.
 Dieses Modul enthält Funktionen zur Analyse von Arbeitszeitdaten, einschließlich:
 - Grundlegende Statistiken (Durchschnitte, Summen)
 - Zeitreihenanalyse (Trends, Muster)
-- Fortgeschrittene Analysen (Clustering, Regression, ANOVA)
+- Fortgeschrittene Analysen (ANOVA)
 
 Die Funktionen erwarten Zeitstempel im Format 'dd-mm-yyyy HH:MM:SS' und
 arbeiten mit pandas DataFrames für effiziente Datenverarbeitung.
@@ -16,7 +16,7 @@ from datetime import datetime
 import numpy as np
 import polars as pl
 
-# Hinweis: scipy/sklearn/statsmodels werden bewusst NICHT auf Modulebene
+# Hinweis: scipy/statsmodels werden bewusst NICHT auf Modulebene
 # importiert (kosten >1s Startzeit), sondern lokal in den perform_*-Funktionen
 # — das Modul muss auch ohne diese Pakete importierbar sein.
 from db_helper import merge_intervals_seconds, pair_sessions_lifo
@@ -301,41 +301,6 @@ def calculate_average_hours_per_user(data, count_weekend_work: bool | None = Non
         average_hours_user = total_hours_user / num_days
         average_hours.append({"user": user, "average_hours": average_hours_user})
 
-    return pl.DataFrame(average_hours)
-
-
-def calculate_average_hours_per_period(data, period_days, count_weekend_work: bool | None = None):
-    """Kalenderbasierter Perioden-Durchschnitt der Stunden je User.
-
-    Semantik: Gesamtstunden geteilt durch die Anzahl der Perioden im
-    **Kalender-Zeitraum** (erster bis letzter Zeitstempel des Users,
-    inklusive), nicht durch die Zahl der Tage mit Einträgen. Nur Tage mit
-    Einträgen zu zählen würde den Schnitt systematisch aufblähen (z. B.
-    21 aktive Tage über 29 Kalendertage: ~+40 % pro Woche).
-
-    Args:
-        period_days: Periodenlänge in Tagen (7 = Woche, 30 = Monat, ...).
-    """
-    if data.is_empty():
-        return pl.DataFrame()
-    data = data.sort(["user", "timestamp"])
-    average_hours = []
-    for user in _unique_list(data, "user"):
-        if user == "users":
-            continue
-        group = data.filter(pl.col("user") == user)
-        # Paarung je (User, Projekt), Summe über die Projekte des Users.
-        total_hours = sum(
-            _merged_total_hours(project_group)
-            for project_group in group.partition_by(["project"], as_dict=True).values()
-        )
-        # Kalender-Spanne (inkl. Randtage) statt Anzahl aktiver Tage.
-        min_ts = group.select(pl.col("timestamp").min()).to_series()[0]
-        max_ts = group.select(pl.col("timestamp").max()).to_series()[0]
-        span_days = (max_ts.date() - min_ts.date()).days + 1 if min_ts and max_ts else 1
-        num_periods = max(1.0, span_days / period_days)
-        average_hours_user = total_hours / num_periods
-        average_hours.append({"user": user, "average_hours": average_hours_user, "period_days": period_days})
     return pl.DataFrame(average_hours)
 
 
@@ -731,211 +696,6 @@ def analyze_time_series(data, count_weekend_work: bool | None = None):
     )
 
     return daily_df, weekly_avg, weekday_avg
-
-
-def perform_cluster_analysis(data):
-    """
-    Führt Clusteranalyse der Arbeitsmuster durch.
-
-    Analysierte Merkmale:
-    1. Durchschnittliche Startzeit
-    2. Projektwechselhäufigkeit
-    3. Arbeitsdauer
-
-    Clustering-Methode:
-    - K-Means mit automatischer k-Bestimmung
-    - Standardisierte Features
-    - Ellenbogenmethode für optimales k
-
-    Cluster-Interpretation:
-    - "Frühe Konzentrierte": Früher Start, wenig Wechsel
-    - "Flexible Wechsler": Mittlere Startzeit, viele Wechsel
-    - "Späte Beständige": Später Start, moderate Wechsel
-
-    Args:
-        data (pl.DataFrame): Arbeitszeitdaten
-
-    Returns:
-        tuple: (features_df, cluster_profiles)
-            - features_df: DataFrame mit User-Features und Cluster-Zuordnung
-            - cluster_profiles: Liste der Cluster-Charakteristiken
-    """
-    if data.is_empty():
-        return pl.DataFrame(), []
-
-    # Lokale Imports: sklearn kostet >1s Startzeit und wird nur hier gebraucht
-    # (Muster wie der statsmodels-Import in perform_anova_analysis).
-    from sklearn.cluster import KMeans
-    from sklearn.preprocessing import StandardScaler
-
-    # Feature-Extraktion für Clustering
-    user_features = []
-    for user in _unique_list(data, "user"):
-        if user == "users":
-            continue
-        user_data = data.filter(pl.col("user") == user)
-
-        start_times = user_data.filter(pl.col("event_type") == "start").select("timestamp").to_series().to_list()
-        avg_start_hour = float(np.mean([t.hour for t in start_times])) if start_times else 0.0
-
-        num_days = max(1, user_data.select(pl.col("date").unique()).height)
-        switches_per_day = calculate_project_switches(user_data).height / num_days
-
-        avg_hours_df = calculate_average_hours_per_user(user_data)
-        avg_row = avg_hours_df.filter(pl.col("user") == user)
-        avg_duration = avg_row["average_hours"][0] if avg_row.height > 0 else 0
-
-        user_features.append(
-            {
-                "user": user,
-                "avg_start_hour": avg_start_hour,
-                "switches_per_day": switches_per_day,
-                "avg_duration": avg_duration,
-            }
-        )
-
-    features_df = pl.DataFrame(user_features)
-
-    if features_df.is_empty() or features_df.height < 2:
-        return features_df, []
-
-    # Standardisierung der Features
-    scaler = StandardScaler()
-    X = scaler.fit_transform(features_df.select(["avg_start_hour", "switches_per_day", "avg_duration"]).to_numpy())
-
-    # Clustering (optimal k wird automatisch bestimmt)
-    k_range = range(2, min(5, len(X) + 1))
-    inertias = []
-
-    for k in k_range:
-        kmeans = KMeans(n_clusters=k, random_state=42)
-        kmeans.fit(X)
-        inertias.append(kmeans.inertia_)
-
-    # Optimales k durch Ellenbogenmethode
-    if len(inertias) < 2:
-        optimal_k = k_range[0] if k_range else 2
-    else:
-        optimal_k = k_range[np.argmin(np.diff(inertias)) + 1]  # ty: ignore[no-matching-overload]
-
-    # Finales Clustering
-    kmeans = KMeans(n_clusters=optimal_k, random_state=42)
-    clusters = kmeans.fit_predict(X)
-    features_df = features_df.with_columns(pl.Series("cluster", clusters))
-
-    # Cluster-Charakteristiken
-    cluster_profiles = []
-    for cluster in range(optimal_k):
-        cluster_data = features_df.filter(pl.col("cluster") == cluster)
-        profile = {
-            "cluster": cluster,
-            "size": cluster_data.height,
-            # KMeans lässt keine leeren Cluster zu — mean() liefert hier nie None.
-            "avg_start": float(cluster_data["avg_start_hour"].mean()),  # ty: ignore[invalid-argument-type]
-            "avg_switches": float(cluster_data["switches_per_day"].mean()),  # ty: ignore[invalid-argument-type]
-            "avg_duration": float(cluster_data["avg_duration"].mean()),  # ty: ignore[invalid-argument-type]
-            "users": cluster_data["user"].to_list(),
-        }
-        cluster_profiles.append(profile)
-
-    return features_df, cluster_profiles
-
-
-def perform_regression_analysis(data):
-    """
-    Führt Regressionsanalyse für Arbeitsdauer durch.
-
-    Prädiktoren:
-    - User-ID (kategorisch, One-Hot)
-    - Projekt (kategorisch, One-Hot)
-    - Startstunde (numerisch, volle Stunde des Session-Starts)
-    - Wochentag (kategorisch, One-Hot)
-
-    Modelldetails:
-    - Lineare Regression
-    - One-Hot-Encoding nur für die kategorischen Variablen
-    - R² ist die **In-Sample-Modellanpassung** (auf den Trainingsdaten),
-      keine Vorhersagegenauigkeit — es gibt kein Holdout/keine
-      Kreuzvalidierung. Deshalb liefert das Ergebnis das ehrliche Label
-      ``r2_label`` ("Modellanpassung (in-sample R²)") mit.
-
-    Anwendungsfälle:
-    1. Explorative Identifikation wichtiger Einflussfaktoren
-    2. Grobe Einordnung, wie viel Varianz die Prädiktoren erklären
-
-    Args:
-        data (pl.DataFrame): Arbeitszeitdaten
-
-    Returns:
-        dict: Regressionsergebnisse mit model, importance, r2_score,
-            r2_label, actual_vs_predicted
-    """
-    if data.is_empty():
-        return {}
-
-    # Lokaler Import: sklearn nur bei Bedarf laden (Startzeit).
-    from sklearn.linear_model import LinearRegression
-
-    # Feature-Vorbereitung
-    work_sessions = []
-
-    for (user, project), group in data.partition_by(["user", "project"], as_dict=True).items():
-        if user == "users":
-            continue
-
-        for start, stop in _paired_sessions(group):
-            duration = (stop - start).total_seconds() / 3600
-            work_sessions.append(
-                {
-                    "user": user,
-                    "project": project,
-                    "start_hour": start.hour,
-                    "weekday": start.weekday(),
-                    "duration": duration,
-                }
-            )
-
-    sessions_df = pl.DataFrame(work_sessions)
-    if sessions_df.is_empty():
-        return {}
-
-    # Dummy-Variablen NUR für die kategorischen Features — start_hour bleibt
-    # numerisch (wie im Docstring beschrieben).
-    X_df = sessions_df.select(["user", "project", "start_hour", "weekday"]).to_dummies(
-        columns=["user", "project", "weekday"]
-    )
-    X = X_df.to_numpy()
-    y = sessions_df["duration"].to_numpy()
-
-    # Regression
-    model = LinearRegression()
-    model.fit(X, y)
-
-    # Feature Importance
-    importance = pl.DataFrame(
-        {
-            "feature": X_df.columns,
-            "importance": np.abs(model.coef_),
-        }
-    ).sort("importance", descending=True)
-
-    # Modellperformance
-    predictions = model.predict(X)
-    r2_score = model.score(X, y)
-
-    return {
-        "model": model,
-        "importance": importance,
-        "r2_score": r2_score,
-        # Ehrliches Label: in-sample-Anpassung, keine Vorhersagegenauigkeit.
-        "r2_label": "Modellanpassung (in-sample R²)",
-        "actual_vs_predicted": pl.DataFrame(
-            {
-                "actual": y,
-                "predicted": predictions,
-            }
-        ),
-    }
 
 
 def perform_anova_analysis(data):

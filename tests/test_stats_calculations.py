@@ -335,28 +335,6 @@ def test_filter_sessions_by_date_range_keeps_pairs_together():
 # ---------------------------------------------------------------------------
 
 
-def test_period_average_uses_calendar_span():
-    """Wochenschnitt = Stunden / Kalender-Spanne, nicht / aktive Tage.
-
-    21 aktive Tage (je 4h) über eine 29-Tage-Spanne: 84h. Richtig sind
-    84 / (29/7) ≈ 20.28 h/Woche — die alte Rechnung über aktive Tage
-    lieferte 84 / (21/7) = 28 h/Woche (~+40 % aufgebläht).
-    """
-    from stats_calculations import calculate_average_hours_per_period
-
-    active_days = [f"2026-06-{d:02d}" for d in range(1, 21)] + ["2026-06-29"]
-    assert len(active_days) == 21
-    events = []
-    for day in active_days:
-        events.append(("u", "p", "start", f"{day} 09:00:00"))
-        events.append(("u", "p", "stop", f"{day} 13:00:00"))
-    df = _df(events)
-
-    result = calculate_average_hours_per_period(df, 7)
-    avg = result.filter(pl.col("user") == "u")["average_hours"][0]
-    assert avg == pytest.approx(84.0 * 7 / 29, rel=1e-6)  # NICHT 28.0
-
-
 def test_weekly_avg_keys_carry_iso_year():
     """KW1/2025 und KW1/2026 dürfen nicht zusammengeworfen werden.
 
@@ -537,22 +515,6 @@ def test_module_imports_without_sklearn_scipy():
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stderr
     assert "IMPORT_OK" in result.stdout
-
-
-def test_regression_returns_honest_r2_label_and_numeric_start_hour():
-    """r2_label deklariert in-sample-Anpassung; start_hour bleibt numerisches Feature."""
-    from stats_calculations import perform_regression_analysis
-
-    events = []
-    for day in range(1, 9):
-        events.append(("u", "A" if day % 2 else "B", "start", f"2026-06-{day:02d} {8 + day % 3:02d}:00:00"))
-        events.append(("u", "A" if day % 2 else "B", "stop", f"2026-06-{day:02d} {12 + day % 4:02d}:00:00"))
-    results = perform_regression_analysis(_df(events))
-    assert results["r2_label"] == "Modellanpassung (in-sample R²)"
-    # start_hour wurde NICHT dummy-codiert (eine numerische Spalte, keine start_hour_*-Dummies).
-    features = results["importance"]["feature"].to_list()
-    assert "start_hour" in features
-    assert not any(f.startswith("start_hour_") for f in features)
 
 
 def test_new_calcs_handle_empty():
