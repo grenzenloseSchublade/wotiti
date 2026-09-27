@@ -7,7 +7,7 @@ den Listbox-Bereich und wird über den „Woche ›"/„‹ Timer"-Link umgescha
 
 import logging
 from datetime import datetime, timedelta
-from tkinter import Button, Frame, Label
+from tkinter import Button, Frame, Label, messagebox
 
 from db_helper import (
     compute_last_n_days_hours,
@@ -16,7 +16,7 @@ from db_helper import (
     set_daily_transferred_bulk,
 )
 from ui_widgets import WEEK_PROJECT_COLORS, _ToolTip
-from utils import is_holiday, save_config
+from utils import is_holiday, round_hours_to_minutes, save_config
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +106,9 @@ class WeekView:
 
         # „✓ Woche": markiert alle sichtbaren (Projekt, Tag)-Einträge der Woche
         # als übertragen; wenn schon alles übertragen ist, wird zu „↺ Woche"
-        # (zurücknehmen). Kein Bestätigungsdialog — der Toggle selbst ist das Undo.
+        # (zurücknehmen). Setzen bleibt dialogfrei (der Toggle selbst ist das
+        # Undo); nur das Wochen-Zurücksetzen fragt nach, weil es auch einzeln
+        # gesetzte Marker samt ursprünglichem Übertragungsdatum löscht.
         self._btn_transfer = Button(
             nav_frame,
             text="✓ Woche",
@@ -185,13 +187,17 @@ class WeekView:
     # ------------------------------------------------------------------
     # Übertragen-Status (Tages-Klick + Wochen-Button)
     # ------------------------------------------------------------------
-    def _transfer_toggle(self, items: list[tuple[str, str]], scope_label: str) -> None:
+    def _transfer_toggle(self, items: list[tuple[str, str]], scope_label: str, confirm_reset: bool = False) -> None:
         """Toggelt den Übertragen-Status für ``items`` = [(project, date_iso)].
 
         Zielzustand: sind bereits **alle** Einträge übertragen, wird
         zurückgesetzt, sonst gesetzt (selbstkorrigierend bei Mischzuständen).
         Wirkt auf genau die sichtbaren Paare — im Modus „Nur aktuelles" also
         nur auf das gewählte Projekt (»what you see is what you check«).
+
+        ``confirm_reset``: Rückfrage vor dem Zurücksetzen (Wochen-Button) —
+        das löscht auch einzeln gesetzte Marker samt ursprünglichem
+        Übertragungsdatum unwiderruflich. Setzen bleibt immer dialogfrei.
         """
         app = self.app
         if not app.db_conn or not items:
@@ -205,6 +211,15 @@ class WeekView:
         dates = sorted({d for _, d in items})
         meta = get_daily_meta_for_range(app.db_conn, name, dates)
         target = not all(meta.get((p, d), {}).get("transferred") for p, d in items)
+        if not target and confirm_reset:
+            noun = "Eintrag" if len(items) == 1 else "Einträge"
+            if not messagebox.askyesno(
+                "Übertragen zurücksetzen",
+                f"{scope_label}: {len(items)} {noun} auf »offen« zurücksetzen?\n\n"
+                "Auch einzeln gesetzte Marker gehen dabei samt ihrem "
+                "Übertragungsdatum verloren.",
+            ):
+                return
         today_iso = datetime.now().date().strftime("%Y-%m-%d")
         changed = set_daily_transferred_bulk(
             app.db_conn, name, items, target, transferred_at=(today_iso if target else None)
@@ -221,7 +236,7 @@ class WeekView:
         self._transfer_toggle([(p, iso_date) for p in projects], label)
 
     def _on_week_transfer(self) -> None:
-        self._transfer_toggle(list(self._week_items), f"KW {self._week_kw}")
+        self._transfer_toggle(list(self._week_items), f"KW {self._week_kw}", confirm_reset=True)
 
     # ------------------------------------------------------------------
     # Projektfarben (persistiert in config['project_colors'])
@@ -316,6 +331,16 @@ class WeekView:
         except Exception as e:  # noqa: BLE001
             logger.warning("Wochenansicht konnte nicht berechnet werden: %s", e)
             return
+
+        # Jeden (Projekt, Tag)-Einzelwert minutengenau runden — exakt so zeigt
+        # _fmt_hours_hm ihn an. Tagessummen und Legenden-Σ entstehen unten aus
+        # DIESEN gerundeten Werten, damit Σ immer der Summe der angezeigten
+        # H:MM-Zellen entspricht (Firmensystem-Abgleich, ±1-min-Falle).
+        # Werte, die auf 0 Minuten runden (<30 s), fallen weg — sie würden
+        # ohnehin nur als „0:00" angezeigt und nichts zur Summe beitragen.
+        days = [
+            (iso, {p: rh for p, h in by_proj.items() if (rh := round_hours_to_minutes(h)) > 0}) for iso, by_proj in days
+        ]
 
         # Titel und Navigation aktualisieren.
         kw = end_date.isocalendar()[1]
@@ -465,7 +490,8 @@ class WeekView:
 
         # Legende: Farbsymbol + Projektname + Wochensumme fuer alle in dieser
         # Woche aktiven Projekte, plus Σ-Gesamt. Summen aus den bereits
-        # geladenen Tagesdaten — kein zusätzlicher DB-Zugriff.
+        # geladenen (minutengerundeten) Tagesdaten — kein zusätzlicher
+        # DB-Zugriff, Σ = Summe der angezeigten Zellwerte.
         if seen_projects:
             proj_totals: dict[str, float] = {}
             for _iso, by_proj in days:

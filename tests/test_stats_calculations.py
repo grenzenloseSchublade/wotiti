@@ -569,3 +569,39 @@ def test_new_calcs_handle_empty():
     assert calculate_session_duration_distribution(empty).is_empty()
     bs = calculate_break_statistics(empty, empty)
     assert bs["totals"]["break_hours"] == 0.0
+
+
+def test_week_matrix_totals_from_minute_rounded_cells():
+    """KW-Report: Zeilen-/Spalten-/Gesamt-Σ = Summe der minutengerundeten H:MM-Zellen.
+
+    3 × 20:20 min (Zelle „0:20") ergeben 1:00 h — nicht 1:01 h (61,0 ungerundete
+    Minuten); 3 × 20:40 min (Zelle „0:21") ergeben 1:03 h — nicht 1:02 h.
+    Genau diese ±1-min-Abweichung fiel beim Firmensystem-Abgleich auf.
+    """
+    from stats_calculations import calculate_week_matrix
+    from utils import fmt_hours_hm
+
+    events = []
+    for day in ("2026-07-06", "2026-07-07", "2026-07-08"):  # Mo–Mi der W28
+        events += [
+            ("u", "P1", "start", f"{day} 09:00:00"),
+            ("u", "P1", "stop", f"{day} 09:20:20"),  # 20 min 20 s → Zelle „0:20 h"
+            ("u", "P2", "start", f"{day} 10:00:00"),
+            ("u", "P2", "stop", f"{day} 10:20:40"),  # 20 min 40 s → Zelle „0:21 h"
+        ]
+    m = calculate_week_matrix(_df(events), 2026, 28)
+
+    days3 = m["days"][:3]
+    assert [fmt_hours_hm(m["hours"][("P1", d)]) for d in days3] == ["0:20 h"] * 3
+    assert [fmt_hours_hm(m["hours"][("P2", d)]) for d in days3] == ["0:21 h"] * 3
+    # Zeilen-Σ = Summe der ANGEZEIGTEN Zellen, nicht der ungerundeten Floats.
+    assert fmt_hours_hm(m["project_totals"]["P1"]) == "1:00 h"  # vorher fälschlich 1:01 h
+    assert fmt_hours_hm(m["project_totals"]["P2"]) == "1:03 h"  # vorher fälschlich 1:02 h
+    assert m["project_totals"]["P1"] == pytest.approx(60 / 60)
+    assert m["project_totals"]["P2"] == pytest.approx(63 / 60)
+    # Spalten-Σ und Gesamt-Σ aus denselben gerundeten Zellwerten — alles konsistent.
+    for d in days3:
+        assert fmt_hours_hm(m["day_totals"][d]) == "0:41 h"
+    assert fmt_hours_hm(m["total"]) == "2:03 h"
+    assert m["total"] == pytest.approx(sum(m["day_totals"].values()))
+    assert m["total"] == pytest.approx(sum(m["project_totals"].values()))

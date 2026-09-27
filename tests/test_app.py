@@ -2153,3 +2153,115 @@ def test_project_dialog_return_on_cancel_creates_nothing(app_instance):
     assert app_instance._on_dialog_return(_KeyEv(cancel), lambda: pytest.fail("Anlegen darf nicht feuern")) == "break"
     assert not win.winfo_exists()
     assert get_all_projects(app_instance.db_conn) == before
+
+
+# ---------------------------------------------------------------------------
+# Tippfehler-Falle: get_name/get_project prüfen case-insensitiv gegen Bestand
+# ---------------------------------------------------------------------------
+
+
+def _patch_askyesno_recording(monkeypatch, answer=True):
+    """askyesno protokollieren und mit ``answer`` beantworten."""
+    import app as app_module
+
+    asks = []
+
+    def _ask(*a, **k):
+        asks.append(a)
+        return answer
+
+    monkeypatch.setattr(app_module.messagebox, "askyesno", _ask)
+    return asks
+
+
+def test_get_name_exact_match_stays_silent(app_instance, monkeypatch):
+    """Exakter Bestands-Treffer: unverändert übernehmen, kein Dialog."""
+    from db_helper import check_user
+
+    check_user(app_instance.db_conn, "TestKunde")
+    asks = _patch_askyesno_recording(monkeypatch)
+    app_instance.name_entry.set("TestKunde")
+    assert app_instance.get_name() == "TestKunde"
+    assert asks == []
+
+
+def test_get_name_adopts_existing_case_variant(app_instance, monkeypatch):
+    """„testkunde" statt „TestKunde": Bestandsname wird übernommen — kein neuer
+    (case-sensitiver) Benutzer, kein Dialog, Hinweis in der Konsole, Feld korrigiert."""
+    from db_helper import check_user
+
+    check_user(app_instance.db_conn, "TestKunde")
+    asks = _patch_askyesno_recording(monkeypatch)
+    app_instance.name_entry.set("tEstKunde")
+    assert app_instance.get_name() == "TestKunde"
+    assert asks == []
+    assert app_instance.name_entry.get() == "TestKunde"
+    assert "übernommen" in app_instance.console.get("1.0", END)
+
+
+def test_get_name_adopts_archived_case_variant(app_instance, monkeypatch):
+    """Auch archivierte Benutzer zählen zum Bestand — sonst entstünde genau
+    das Case-Duplikat, das der Check verhindern soll."""
+    from db_helper import check_user, set_archived
+
+    check_user(app_instance.db_conn, "AlterNutzer")
+    set_archived(app_instance.db_conn, "user", "AlterNutzer", True)
+    asks = _patch_askyesno_recording(monkeypatch)
+    app_instance.name_entry.set("alternutzer")
+    assert app_instance.get_name() == "AlterNutzer"
+    assert asks == []
+
+
+def test_get_name_unknown_asks_no_aborts(app_instance, monkeypatch):
+    """Komplett unbekannter Name: Rückfrage — „Nein" liefert None (kein Anlegen)."""
+    from db_helper import get_all_users
+
+    asks = _patch_askyesno_recording(monkeypatch, answer=False)
+    app_instance.name_entry.set("Nagelneu")
+    assert app_instance.get_name() is None
+    assert len(asks) == 1
+    assert "Nagelneu" not in get_all_users(app_instance.db_conn, include_archived=True)
+
+
+def test_get_name_unknown_asks_yes_returns_name(app_instance, monkeypatch):
+    """Rückfrage mit „Ja": Name wird zurückgegeben (Anlegen passiert erst in der DB-Schicht)."""
+    asks = _patch_askyesno_recording(monkeypatch, answer=True)
+    app_instance.name_entry.set("Nagelneu")
+    assert app_instance.get_name() == "Nagelneu"
+    assert len(asks) == 1
+
+
+def test_get_project_adopts_existing_case_variant(app_instance, monkeypatch):
+    """Dieselbe Falle beim Projekt: Case-Variante übernimmt das Bestands-Projekt."""
+    from db_helper import check_project
+
+    check_project(app_instance.db_conn, "Backend")
+    asks = _patch_askyesno_recording(monkeypatch)
+    app_instance.project_entry.set("backend")
+    assert app_instance.get_project() == "Backend"
+    assert asks == []
+    assert app_instance.project_entry.get() == "Backend"
+
+
+def test_get_project_unknown_asks_no_aborts(app_instance, monkeypatch):
+    asks = _patch_askyesno_recording(monkeypatch, answer=False)
+    app_instance.project_entry.set("GanzNeu")
+    assert app_instance.get_project() is None
+    assert len(asks) == 1
+
+
+def test_start_session_with_case_variant_uses_existing_user(app_instance, monkeypatch):
+    """End-to-End: Start mit „hans" trackt auf den bestehenden „Hans" —
+    es entsteht KEIN zweiter Benutzer und keine Rückfrage."""
+    from db_helper import check_project, get_all_users
+
+    check_project(app_instance.db_conn, "1")  # Projekt existiert bereits
+    asks = _patch_askyesno_recording(monkeypatch)
+    app_instance.name_entry.set("hans")  # Bestands-„Hans" kommt aus default_user
+    app_instance.project_entry.set("1")
+    app_instance.start_session()
+    assert asks == []
+    assert app_instance.session_active.get(("Hans", "1")) is True
+    users = get_all_users(app_instance.db_conn, include_archived=True)
+    assert "hans" not in users
+    app_instance.stop_session()

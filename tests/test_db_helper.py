@@ -1416,3 +1416,122 @@ def test_close_stale_breaks_noop_cases(db_conn):
     assert close_stale_breaks(db_conn) == 0
     row = db_conn.execute("SELECT ended_at, duration_seconds FROM break_events").fetchone()
     assert row == ("2026-06-23 12:05:00", 300)
+
+
+# ---------------------------------------------------------------------------
+# backup_database_daily: tägliches Backup mit Rotation (sqlite3-Backup-API)
+# ---------------------------------------------------------------------------
+
+
+def _make_backup_source_db(path):
+    """Frische DB mit einem Benutzer — als Quelle für Backup-Tests."""
+    conn = create_connection(str(path))
+    create_main_table(conn)
+    check_user(conn, "backup_user")
+    return conn
+
+
+def test_backup_database_daily_creates_todays_backup(tmp_path):
+    """Erstes Backup des Tages: backups/<name>-YYYY-MM-DD.db, lesbare Kopie."""
+    from datetime import datetime as _dt
+
+    from db_helper import backup_database_daily
+
+    db_path = tmp_path / "meine.db"
+    conn = _make_backup_source_db(db_path)
+    try:
+        target = backup_database_daily(conn, str(db_path))
+    finally:
+        conn.close()
+
+    expected = tmp_path / "backups" / f"meine-{_dt.now().strftime('%Y-%m-%d')}.db"
+    assert target == str(expected)
+    assert expected.is_file()
+    # Konsistente, lesbare Kopie (Backup-API kopiert auch den WAL-Anteil mit).
+    backup_conn = create_connection(str(expected))
+    try:
+        assert get_all_users(backup_conn) == ["backup_user"]
+    finally:
+        backup_conn.close()
+    # Kein .tmp-Rest der atomaren Erstellung.
+    assert list((tmp_path / "backups").glob("*.tmp")) == []
+
+
+def test_backup_database_daily_idempotent_same_day(tmp_path):
+    """Zweiter Aufruf am selben Tag: gleiche Datei, kein Neuschreiben."""
+    from db_helper import backup_database_daily
+
+    db_path = tmp_path / "app.db"
+    conn = _make_backup_source_db(db_path)
+    try:
+        first = backup_database_daily(conn, str(db_path))
+        stat_before = os.stat(first)
+        check_user(conn, "spaeter_user")  # DB ändert sich NACH dem Backup
+        second = backup_database_daily(conn, str(db_path))
+    finally:
+        conn.close()
+
+    assert second == first
+    assert os.stat(first).st_mtime_ns == stat_before.st_mtime_ns  # nicht neu geschrieben
+    assert len(list((tmp_path / "backups").glob("*.db"))) == 1
+    # Der später angelegte Benutzer ist im (älteren) Tages-Backup nicht enthalten.
+    backup_conn = create_connection(first)
+    try:
+        assert get_all_users(backup_conn) == ["backup_user"]
+    finally:
+        backup_conn.close()
+
+
+def test_backup_database_daily_rotation_keeps_last_seven(tmp_path):
+    """Nur die jüngsten 7 Backups DIESER DB bleiben; fremde Stämme unberührt."""
+    from datetime import datetime as _dt
+
+    from db_helper import backup_database_daily
+
+    db_path = tmp_path / "app.db"
+    conn = _make_backup_source_db(db_path)
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    old_names = [f"app-2020-01-{d:02d}.db" for d in range(1, 10)]  # 9 alte Backups
+    for n in old_names:
+        (backup_dir / n).write_bytes(b"alt")
+    (backup_dir / "andere-2020-01-01.db").write_bytes(b"fremd")  # anderer DB-Stamm
+
+    try:
+        assert backup_database_daily(conn, str(db_path)) is not None
+    finally:
+        conn.close()
+
+    kept = sorted(p.name for p in backup_dir.glob("app-*.db"))
+    today_name = f"app-{_dt.now().strftime('%Y-%m-%d')}.db"
+    assert len(kept) == 7
+    assert kept == sorted([*old_names[3:], today_name])  # die 3 ältesten sind weg
+    assert (backup_dir / "andere-2020-01-01.db").exists()  # fremder Stamm bleibt
+
+
+def test_backup_database_daily_failure_returns_none(tmp_path):
+    """Backup-Fehler („backups" ist eine Datei → makedirs scheitert):
+    None statt Exception — der App-Start darf nie am Backup scheitern."""
+    from db_helper import backup_database_daily
+
+    db_path = tmp_path / "app.db"
+    conn = _make_backup_source_db(db_path)
+    (tmp_path / "backups").write_text("blockiert")
+    try:
+        assert backup_database_daily(conn, str(db_path)) is None
+    finally:
+        conn.close()
+    assert (tmp_path / "backups").read_text() == "blockiert"
+
+
+def test_backup_database_daily_noop_without_conn_or_file(tmp_path):
+    """Ohne Verbindung bzw. ohne existierende DB-Datei: None, kein Ordner."""
+    from db_helper import backup_database_daily
+
+    assert backup_database_daily(None, str(tmp_path / "x.db")) is None
+    conn = _make_backup_source_db(tmp_path / "y.db")
+    try:
+        assert backup_database_daily(conn, str(tmp_path / "fehlt.db")) is None
+    finally:
+        conn.close()
+    assert not (tmp_path / "backups").exists()

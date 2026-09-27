@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import glob
 import logging
 import os
 import re
@@ -59,6 +60,58 @@ def create_connection(db_file: str = DATABASE_PATH) -> sqlite3.Connection | None
         return conn
     except Error as e:
         logger.error("Error creating database connection: %s", e)
+        return None
+
+
+def backup_database_daily(conn: sqlite3.Connection | None, db_path: str, keep: int = 7) -> str | None:
+    """Tägliches DB-Backup mit Rotation — still, ohne UI-Element.
+
+    Legt höchstens einmal pro Kalendertag über die sqlite3-Backup-API eine
+    konsistente Kopie unter ``<db-verzeichnis>/backups/<name>-YYYY-MM-DD.db``
+    an (WAL-sicher — ein nacktes Datei-Copy könnte den WAL-Anteil verlieren).
+    Existiert das heutige Backup bereits, passiert nichts (idempotent, z. B.
+    bei mehreren App-Starts am selben Tag). Danach werden nur die jüngsten
+    ``keep`` Backups DIESER Datenbank behalten, ältere gelöscht — Backups
+    anderer Datenbanken im selben Ordner bleiben unberührt.
+
+    Fehler werden nur geloggt (Rückgabe ``None``): ein fehlgeschlagenes
+    Backup darf den App-Start nie verhindern.
+
+    Rückgabe: Pfad des heutigen Backups, ``None`` bei Fehler oder ohne DB.
+    """
+    if conn is None or not db_path or not os.path.isfile(db_path):
+        return None
+    try:
+        base_dir = os.path.dirname(os.path.abspath(db_path))
+        stem = os.path.splitext(os.path.basename(db_path))[0]
+        backup_dir = os.path.join(base_dir, "backups")
+        target = os.path.join(backup_dir, f"{stem}-{datetime.now().strftime('%Y-%m-%d')}.db")
+        if not os.path.exists(target):
+            os.makedirs(backup_dir, exist_ok=True)
+            # Erst in eine Temp-Datei sichern, dann atomar umbenennen: ein
+            # Abbruch mittendrin hinterließe sonst ein kaputtes Tages-Backup,
+            # das die Existenz-Prüfung oben fälschlich als „erledigt" wertet.
+            tmp_target = target + ".tmp"
+            dst = sqlite3.connect(tmp_target)
+            try:
+                conn.backup(dst)
+            finally:
+                dst.close()
+            os.replace(tmp_target, target)
+            logger.info("Tages-Backup angelegt: %s", target)
+        # Rotation: Dateinamen sortieren lexikografisch = chronologisch
+        # (YYYY-MM-DD); glob.escape schützt Sonderzeichen im DB-Namen.
+        pattern = glob.escape(os.path.join(backup_dir, f"{stem}-")) + "????-??-??.db"
+        backups = sorted(glob.glob(pattern))
+        for old in backups[:-keep] if keep > 0 else backups:
+            try:
+                os.remove(old)
+                logger.info("Altes Backup rotiert: %s", old)
+            except OSError as e:
+                logger.warning("Altes Backup konnte nicht gelöscht werden (%s): %s", old, e)
+        return target
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Tägliches DB-Backup fehlgeschlagen: %s", e)
         return None
 
 

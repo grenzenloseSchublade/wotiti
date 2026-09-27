@@ -29,3 +29,18 @@ def _isolate_config_and_db(tmp_path, monkeypatch):
     cfg["database_path"] = str(db_path)
     cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
     monkeypatch.setattr(utils, "CONFIG_PATH", str(cfg_path))
+
+
+@pytest.fixture(autouse=True)
+def _no_blocking_askyesno(monkeypatch):
+    """askyesno darf die headless Suite nie blockieren (echter Modal-Dialog!).
+
+    Seit der Tippfehler-Rückfrage in ``get_name``/``get_project`` („Benutzer X
+    neu anlegen?") würde jeder ``start_session``-Test mit frischem Namen sonst
+    auf DISPLAY=:1 ewig auf einen Klick warten. Default-Antwort „Ja" entspricht
+    dem Verhalten vor der Rückfrage; Tests, die Antworten oder Aufrufe prüfen,
+    patchen askyesno gezielt selbst und überschreiben damit diesen Default.
+    """
+    from tkinter import messagebox
+
+    monkeypatch.setattr(messagebox, "askyesno", lambda *a, **k: True)

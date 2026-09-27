@@ -48,6 +48,7 @@ from db_helper import (
     TIMESTAMP_FORMAT,
     UI_DATE_FORMAT,
     _timestamp_window,
+    backup_database_daily,
     calculate_daily_break_duration,
     calculate_daily_duration,
     calculate_duration,
@@ -793,6 +794,11 @@ class App:
                 migrate_legacy_user_tables(self.db_conn)
                 migrate_projects_to_table(self.db_conn)
                 migrate_repair_dates(self.db_conn)
+                # Tägliches Backup NACH den Migrationen: gesichert wird der
+                # bereits migrierte Stand (ein Restore trifft das aktuelle
+                # Schema). Ein Fehlschlag warnt nur — die App startet trotzdem.
+                if backup_database_daily(self.db_conn, self._db_path) is None:
+                    self.write("Tägliches Datenbank-Backup fehlgeschlagen — Details im Log.", error=True)
                 # Archivierten Default-Benutzer respektieren: nicht still
                 # reaktivieren, sondern auf den ersten aktiven ausweichen.
                 active_users = get_all_users(self.db_conn)
@@ -1419,6 +1425,11 @@ class App:
 
         def _refresh_db_list():
             dbs = sorted(glob.glob(os.path.join(PATH_TO_DATA, "**", "*.db"), recursive=True))
+            # Die aktive DB immer anbieten und anzeigen — auch wenn sie (über
+            # »Durchsuchen…«) außerhalb des Datenordners liegt. Sonst zeigte
+            # die Combobox nach »Laden« einen falschen Pfad (ersten Treffer).
+            if self._db_path and self._db_path not in dbs:
+                dbs.insert(0, self._db_path)
             db_var["values"] = dbs
             if self._db_path in dbs:
                 db_var.set(self._db_path)
@@ -1490,10 +1501,20 @@ class App:
                 except OSError as e:
                     messagebox.showerror("Fehler", f"Löschen fehlgeschlagen:\n{e}", parent=win)
 
+        def _after_db_load():
+            # »Laden« lässt den Dialog offen (ungespeicherte Felder bleiben
+            # stehen) — nur die DB-abhängige Anzeige wird nachgezogen: die
+            # DB-Liste (Combobox springt auf die jetzt aktive DB) und die
+            # Vorschlagslisten für Standard-Benutzer/-Projekt aus der neuen DB.
+            _refresh_db_list()
+            if self.db_conn:
+                default_user_var["values"] = get_all_users(self.db_conn)
+                default_proj_var["values"] = get_all_projects(self.db_conn)
+
         Button(
             btn_row,
             text="Laden",
-            command=lambda: self._activate_database(db_var.get(), win),
+            command=lambda: self._activate_database(db_var.get(), win, on_success=_after_db_load),
             **{k: v for k, v in btn.items() if k != "fg"},
             fg="#006400",
         ).pack(side="left", padx=(0, 5))
@@ -1502,6 +1523,16 @@ class App:
         Button(
             btn_row, text="DB löschen", command=_delete_db, fg="#B00020", **{k: v for k, v in btn.items() if k != "fg"}
         ).pack(side="left")
+
+        # Dezenter Hinweis: diese Buttons wirken sofort, nicht erst beim
+        # »Speichern« des Dialogs (Bestands-Stil: klein/grau).
+        Label(
+            db_frame,
+            text="Laden, Neue DB und DB löschen wirken sofort — unabhängig von »Speichern«.",
+            bg="#C0C0C0",
+            fg="#666666",
+            font=("MS Sans Serif", 8),
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(3, 0))
 
         db_frame.grid_columnconfigure(1, weight=1)
 
@@ -1519,7 +1550,7 @@ class App:
                 font=("MS Sans Serif", 9, "italic"),
                 wraplength=480,
                 justify="left",
-            ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+            ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
         # ── Benutzer ──
         user_frame = LabelFrame(
@@ -1948,6 +1979,14 @@ class App:
             font=("MS Sans Serif", 9),
             activebackground="#C0C0C0",
         ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        # Dezenter Hinweis: Archivieren wirkt sofort, nicht erst beim »Speichern«.
+        Label(
+            mgmt_frame,
+            text="Aus-/Einblenden wirkt sofort — unabhängig von »Speichern«.",
+            bg="#C0C0C0",
+            fg="#666666",
+            font=("MS Sans Serif", 8),
+        ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(2, 0))
         mgmt_frame.grid_columnconfigure(0, weight=1)
         mgmt_frame.grid_columnconfigure(1, weight=1)
         _refresh_mgmt()
@@ -2723,7 +2762,7 @@ class App:
         if not val or val == NEW_PROJECT_LABEL:
             self.write("Projekt darf nicht leer sein.", error=True)
             return None
-        return val
+        return self._resolve_typed_name(val, kind="project")
 
     def get_name(self):
         val = self.name_entry.get().strip()
@@ -2736,6 +2775,46 @@ class App:
         # Bestandsnutzer wie "Jörg" dürfen nicht ausgesperrt werden.
         if not re.match(r"^[\w\-\s]+$", val):
             self.write("Name darf nur Buchstaben, Zahlen, Leerzeichen, - und _ enthalten.", error=True)
+            return None
+        return self._resolve_typed_name(val, kind="user")
+
+    def _resolve_typed_name(self, val: str, kind: str) -> str | None:
+        """Fängt die Tippfehler-Falle frei getippter Namen ab (Benutzer/Projekt).
+
+        ``check_user``/``check_project`` legen unbekannte Namen kommentarlos
+        und case-sensitiv neu an — ein vertipptes „hans" statt „Hans" verteilte
+        die Zeiten still auf zwei Benutzer. Daher vor der Verwendung gegen den
+        Bestand (inkl. archivierter Einträge, sonst entstünde genau das
+        Case-Duplikat) prüfen:
+        - exakter Treffer → unverändert übernehmen;
+        - nur Case-abweichender Treffer → bestehenden Namen verwenden
+          (Hinweis in der Konsole, Eingabefeld wird korrigiert);
+        - komplett unbekannt → Rückfrage, ob wirklich neu angelegt werden soll
+          (das eigentliche Anlegen passiert erst in der DB-Schicht beim Start).
+        """
+        if not self.db_conn:
+            return val
+        if kind == "user":
+            existing = get_all_users(self.db_conn, include_archived=True)
+            label = "Benutzer"
+        else:
+            existing = get_all_projects(self.db_conn, include_archived=True)
+            label = "Projekt"
+        if val in existing:
+            return val
+        match = next((e for e in existing if e.lower() == val.lower()), None)
+        if match is not None:
+            self.write(f"{label} »{match}« aus dem Bestand übernommen (Eingabe war »{val}«).")
+            if kind == "user":
+                self.name_entry.set(match)
+            else:
+                self._set_project(match)
+            return match
+        if not messagebox.askyesno(
+            "Neuer Benutzer" if kind == "user" else "Neues Projekt",
+            f"{label} »{val}« ist nicht bekannt.\n\nNeu anlegen?",
+            parent=self.master,
+        ):
             return None
         return val
 
@@ -3321,11 +3400,15 @@ class App:
             self.date_entry.delete(0, END)
             self.date_entry.insert(0, row[0])
 
-    def _activate_database(self, path: str, win=None) -> None:
+    def _activate_database(self, path: str, win=None, on_success=None) -> None:
         """Wechselt sofort zur Datenbank ``path`` (One-Click »Laden« aus den Einstellungen).
 
-        Öffnet die DB, speichert den Pfad in der Config, lädt Comboboxen neu,
-        springt auf den jüngsten Tag mit Daten und schließt den Dialog.
+        Öffnet die DB, speichert den Pfad in der Config, lädt Comboboxen neu
+        und springt auf den jüngsten Tag mit Daten. ``win`` dient nur als
+        Dialog-Parent und wird bewusst NICHT geschlossen — andere, noch nicht
+        gespeicherte Einstellungs-Felder blieben sonst nicht stehen.
+        ``on_success`` zieht nach dem Wechsel die Anzeige des Aufrufers nach
+        (z. B. DB-Combobox der Einstellungen).
         """
         parent = win or self.master
         # Getippte Notiz noch in der ALTEN Datenbank sichern, bevor die
@@ -3360,8 +3443,8 @@ class App:
         self._jump_to_latest_data_date(self.name_entry.get().strip())
         self._force_date_refresh()
         self.write(f"Datenbank geladen: {path}")
-        if win is not None:
-            win.destroy()
+        if on_success is not None:
+            on_success()
 
     def _pair_day_sessions(self, events) -> list[dict]:
         """Paart Start/Stop-Events je (user, project) zu Sessions.

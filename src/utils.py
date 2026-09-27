@@ -209,6 +209,16 @@ def fmt_hours_hm(hours: float) -> str:
     return f"{h}:{m:02d} h"
 
 
+def round_hours_to_minutes(hours: float) -> float:
+    """Dezimalstunden auf ganze Minuten gerundet — exakt wie ``fmt_hours_hm`` anzeigt.
+
+    Summen für den Firmensystem-Abgleich (KW-Report, Wochenansicht) müssen aus
+    diesen minutengerundeten Einzelwerten gebildet werden: Summen ungerundeter
+    Floats weichen sonst um ±1 min von der Summe der angezeigten H:MM-Zellen ab.
+    """
+    return round(hours * 60) / 60.0
+
+
 def prewarm_holiday_cache(country: str = "DE", subdiv: str | None = None) -> None:
     """Wärmt den Feiertags-Cache (aktuelles + vorheriges Jahr) im Hintergrund vor.
 

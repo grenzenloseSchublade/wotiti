@@ -20,7 +20,7 @@ import polars as pl
 # importiert (kosten >1s Startzeit), sondern lokal in den perform_*-Funktionen
 # — das Modul muss auch ohne diese Pakete importierbar sein.
 from db_helper import merge_intervals_seconds, pair_sessions_lifo
-from utils import is_non_workday, load_config
+from utils import is_non_workday, load_config, round_hours_to_minutes
 
 logger = logging.getLogger(__name__)
 
@@ -470,6 +470,10 @@ def calculate_week_matrix(data: pl.DataFrame, iso_year: int, iso_week: int) -> d
       "project_totals": {project: float},
       "total": float,
     }
+
+    ``day_totals``/``project_totals``/``total`` sind Summen der
+    **minutengerundeten** Zellwerte — konsistent zur H:MM-Anzeige und zum
+    manuellen Nachrechnen beim Firmensystem-Abgleich.
     """
     from datetime import date as _date
     from datetime import timedelta as _td
@@ -502,6 +506,11 @@ def calculate_week_matrix(data: pl.DataFrame, iso_year: int, iso_week: int) -> d
     result["hours"] = hours
     result["projects"] = sorted({project for project, _day in hours})
     for (project, day), h in hours.items():
+        # Summen aus den MINUTENGERUNDETEN Zellwerten bilden (so zeigt
+        # fmt_hours_hm sie an und so werden sie ins Firmensystem übertragen) —
+        # Summen ungerundeter Floats weichen sonst um ±1 min von der Summe
+        # der angezeigten H:MM-Zellen ab.
+        h = round_hours_to_minutes(h)
         result["day_totals"][day] += h
         result["project_totals"][project] = result["project_totals"].get(project, 0.0) + h
     result["total"] = sum(result["project_totals"].values())

@@ -75,8 +75,24 @@ def test_week_day_click_mixed_state_sets_all(app_instance):
     assert get_daily_meta(app_instance.db_conn, "test_user", "A", iso_today)["transferred_at"] == "2025-01-01"
 
 
-def test_week_button_marks_week_and_untoggles(app_instance):
-    """„✓ Woche" markiert alle sichtbaren Einträge; danach bietet er „↺ Woche" an."""
+def test_week_button_marks_week_and_untoggles(app_instance, monkeypatch):
+    """„✓ Woche" markiert dialogfrei; „↺ Woche" (Reset) fragt vorher nach.
+
+    Der Wochen-Reset löscht auch einzeln gesetzte Marker samt ursprünglichem
+    Übertragungsdatum — daher askyesno NUR in Reset-Richtung; „Nein" lässt
+    alles unverändert.
+    """
+    import week_view as week_view_module
+
+    asks = []
+    answer = {"value": True}
+
+    def _ask(*a, **k):
+        asks.append(a)
+        return answer["value"]
+
+    monkeypatch.setattr(week_view_module.messagebox, "askyesno", _ask)
+
     iso_today = _seed_today(app_instance, projects=("A", "B"))
     week_view = app_instance.week_view
     week_view.refresh()
@@ -85,11 +101,23 @@ def test_week_button_marks_week_and_untoggles(app_instance):
     assert set(week_view._week_items) == {("A", iso_today), ("B", iso_today)}
 
     week_view._on_week_transfer()
+    assert asks == []  # Setzen bleibt dialogfrei
     for project in ("A", "B"):
         assert get_daily_meta(app_instance.db_conn, "test_user", project, iso_today)["transferred"] is True
     assert week_view._btn_transfer.cget("text") == "↺ Woche"
 
+    # Reset mit „Nein": Rückfrage kommt, Status bleibt unangetastet.
+    answer["value"] = False
     week_view._on_week_transfer()
+    assert len(asks) == 1
+    for project in ("A", "B"):
+        assert get_daily_meta(app_instance.db_conn, "test_user", project, iso_today)["transferred"] is True
+    assert week_view._btn_transfer.cget("text") == "↺ Woche"
+
+    # Reset mit „Ja": zurückgesetzt.
+    answer["value"] = True
+    week_view._on_week_transfer()
+    assert len(asks) == 2
     for project in ("A", "B"):
         assert get_daily_meta(app_instance.db_conn, "test_user", project, iso_today)["transferred"] is False
     assert week_view._btn_transfer.cget("text") == "✓ Woche"
@@ -303,3 +331,35 @@ def test_time_machine_last_iso_week_of_previous_year(app_instance):
     assert any(t.startswith("1:00") for t in mo_texts)
     # In der Vergangenheit ist der ›-Button aktiv (zurück Richtung Gegenwart).
     assert wv._btn_forward.cget("state") == "normal"
+
+
+def test_week_sums_from_minute_rounded_values(app_instance):
+    """Wochensummen aus minutengerundeten Einzelwerten: 3 × 20:20 min → Σ 1:00 h.
+
+    Die Summe der ungerundeten Floats wäre 61,0 min („1:01 h") und wiche damit
+    um 1 min von der Summe der drei angezeigten 0:20-Zellwerte ab — genau die
+    Falle beim Abgleich mit dem Firmensystem.
+    """
+    from tkinter import Label
+
+    today = datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
+    for i, project in enumerate(("A", "B", "C")):
+        start = today + timedelta(hours=i)
+        stop = start + timedelta(minutes=20, seconds=20)  # 20:20 → angezeigt „0:20"
+        log_start(project=project, name="test_user", timestamp=start, conn=app_instance.db_conn)
+        log_stop(project=project, name="test_user", timestamp=stop, conn=app_instance.db_conn)
+    app_instance.name_entry.set("test_user")
+    app_instance.project_entry.set("A")
+
+    week_view = app_instance.week_view
+    week_view.refresh()
+
+    texts = [c.cget("text") for c in week_view._legend_frame.winfo_children()]
+    for project in ("A", "B", "C"):
+        assert f"█ {project} 0:20" in texts
+    assert any(t.startswith("Σ") and "1:00 h" in t for t in texts)  # nicht 1:01 h
+
+    # Auch die Tageszelle summiert die gerundeten Projektwerte (1:00, nicht 1:01).
+    col = datetime.now().date().weekday()
+    cell_texts = [c.cget("text") for c in week_view._day_frames[col].winfo_children() if isinstance(c, Label)]
+    assert any(t.startswith("1:00 h") for t in cell_texts)
