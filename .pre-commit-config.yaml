@@ -1,8 +1,12 @@
 # https://pre-commit.com
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.11.0
+    # rev an die per uv.lock aufgelöste ruff-Version (dev-Extra) angleichen,
+    # damit Hook und .venv identisch linten.
+    rev: v0.15.8
     hooks:
-      - id: ruff
+      # Seit ruff-pre-commit v0.11.6 heißt der Lint-Hook ruff-check ("ruff" ist
+      # nur noch ein Legacy-Alias).
+      - id: ruff-check
         args: [--fix]
       - id: ruff-format

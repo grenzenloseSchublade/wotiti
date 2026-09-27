@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import os
 import sqlite3
@@ -119,7 +120,9 @@ def get_cached_data(db_path, force=False):
         data = read_database(db_path)
         if data.is_empty():
             try:
-                with sqlite3.connect(db_path) as conn:
+                # closing schließt die Verbindung wirklich; das innere ``conn``
+                # bleibt Transaktions-Kontext (committet die Legacy-Migration).
+                with contextlib.closing(sqlite3.connect(db_path)) as conn, conn:
                     cursor = conn.cursor()
                     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='events';")
                     has_events = cursor.fetchone() is not None
@@ -1592,7 +1595,8 @@ def _week_meta(db_path, iso_dates):
     if not db_path or not iso_dates:
         return meta
     try:
-        with sqlite3.connect(db_path) as conn:
+        # Lese-Verbindung: closing schließt wirklich (``with conn`` würde nur committen).
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
             placeholders = ",".join("?" for _ in iso_dates)
             rows = conn.execute(
                 f"SELECT project, date, note, transferred, transferred_at FROM daily_notes "

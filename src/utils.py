@@ -362,7 +362,10 @@ def read_database(
     import polars as pl  # noqa: PLC0415 — lazy, siehe Modul-Hinweis
 
     try:
-        with sqlite3.connect(db_path) as conn:
+        # closing statt Transaktions-Kontext: reine Lese-Verbindung, die beim
+        # Verlassen tatsächlich geschlossen werden soll (``with conn`` schließt
+        # NICHT, es committet nur).
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='events';")
             if cursor.fetchone() is None:
@@ -425,7 +428,8 @@ def read_break_events(db_path: str) -> pl.DataFrame:
     import polars as pl  # noqa: PLC0415 — lazy, siehe Modul-Hinweis
 
     try:
-        with sqlite3.connect(db_path) as conn:
+        # Lese-Verbindung: siehe read_database — closing schließt wirklich.
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='break_events';")
             if cursor.fetchone() is None:

@@ -20,7 +20,24 @@ UI_DATE_FORMAT = "%d-%m-%Y"
 
 
 def create_connection(db_file: str = DATABASE_PATH) -> sqlite3.Connection | None:
-    """Create a database connection to the SQLite database specified by db_file."""
+    """Create a database connection to the SQLite database specified by db_file.
+
+    Setzt Robustheits-Pragmas auf jeder neuen Verbindung:
+
+    - ``journal_mode=WAL``: crash-sicheres Schreiben, Leser blockieren
+      Schreiber nicht. WAL ist dateipersistent, aber abwärtskompatibel
+      (SQLite >= 3.7). **Rollback bei Bedarf:** einmalig
+      ``PRAGMA journal_mode=DELETE`` auf der Datenbank ausführen — die Datei
+      ist danach wieder im klassischen Rollback-Journal-Format.
+    - ``synchronous=NORMAL``: empfohlene Paarung mit WAL (schnell, in WAL
+      dennoch konsistent nach Crash).
+    - ``foreign_keys=ON``: erzwingt referenzielle Integrität der
+      ``user_id``-Verweise. Bestandsdaten wurden per
+      ``PRAGMA foreign_key_check`` geprüft (keine Verletzungen).
+
+    Schlägt das Setzen der Pragmas fehl (z. B. Netzlaufwerk ohne
+    WAL-Unterstützung), bleibt die Verbindung trotzdem nutzbar.
+    """
     try:
         directory = os.path.dirname(db_file)
         if not os.path.exists(directory):
@@ -28,6 +45,16 @@ def create_connection(db_file: str = DATABASE_PATH) -> sqlite3.Connection | None
             logger.debug("Directory '%s' created.", directory)
 
         conn = sqlite3.connect(db_file)
+        try:
+            row = conn.execute("PRAGMA journal_mode=WAL").fetchone()
+            if row and str(row[0]).lower() != "wal":
+                # sqlite fällt still auf den alten Modus zurück (z. B. auf
+                # Dateisystemen ohne mmap/Locking) — sichtbar machen.
+                logger.warning("WAL nicht aktivierbar (journal_mode=%s); Verbindung bleibt nutzbar.", row[0])
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA foreign_keys=ON")
+        except Error as e:
+            logger.warning("DB-Pragmas konnten nicht gesetzt werden: %s", e)
         logger.debug("Database connection created successfully.")
         return conn
     except Error as e:

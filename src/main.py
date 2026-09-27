@@ -91,6 +91,25 @@ def _configure_windows_taskbar_icon(root: tk.Tk) -> None:
             root.iconbitmap(default=icon_path)
 
 
+def _enable_windows_dpi_awareness() -> None:
+    """Windows: Prozess als DPI-aware markieren — VOR dem Erzeugen von Tk().
+
+    Ohne den Aufruf streckt Windows das Fenster auf HiDPI-Displays per
+    Bitmap-Skalierung (alles verwaschen). Mit System-DPI-Awareness (Stufe 1)
+    rendert Tk scharf; der Win95-Look und alle Maße bleiben identisch.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)  # 1 = System-DPI-aware
+    except Exception:
+        # z. B. altes Windows ohne shcore oder Awareness bereits gesetzt —
+        # dann einfach beim bisherigen (unscharfen) Verhalten bleiben.
+        logger.debug("DPI-Awareness konnte nicht gesetzt werden.", exc_info=True)
+
+
 def _install_signal_handlers(root: tk.Tk, app) -> None:
     """SIGTERM/SIGINT → sauberer Stop-Pfad der App statt harter Abbruch.
 
@@ -173,6 +192,7 @@ def main():
             thread.start()
 
         # Start the Tkinter app in the main thread
+        _enable_windows_dpi_awareness()
         root = tk.Tk()
         _configure_windows_taskbar_icon(root)
         app = App(root, stats_port=stats_port, start_stats_dashboard=start_stats_dashboard)

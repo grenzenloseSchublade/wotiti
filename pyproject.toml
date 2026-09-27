@@ -20,6 +20,9 @@ dev = [
     "pyinstaller>=6.12.0",
 ]
 stats = [
+    # numpy wird in stats_calculations direkt importiert — explizit deklarieren
+    # statt sich auf den transitiven Zug über scipy/scikit-learn zu verlassen.
+    "numpy>=1.24.0",
     "scipy>=1.10.0",
     "scikit-learn>=1.2.0",
     "statsmodels>=0.13.5",

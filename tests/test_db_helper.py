@@ -1142,3 +1142,72 @@ def test_set_archived_rejects_bad_input(db_conn):
     assert set_archived(db_conn, "user", "", True) is False
     assert set_archived(None, "user", "u1", True) is False
     assert set_archived(db_conn, "user", "gibtsnicht", True) is False
+
+
+# --- Commit 9: Verbindungs-Pragmas (WAL, synchronous, foreign_keys) ---------
+
+
+def test_create_connection_sets_pragmas(tmp_path):
+    """create_connection aktiviert WAL, synchronous=NORMAL und foreign_keys."""
+    db_file = str(tmp_path / "pragma.db")
+    conn = create_connection(db_file)
+    try:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+        assert conn.execute("PRAGMA synchronous").fetchone()[0] == 1  # 1 = NORMAL
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_foreign_keys_enforced_on_write(tmp_path):
+    """foreign_keys=ON weist Events mit nicht existentem user_id ab."""
+    import sqlite3
+
+    conn = create_connection(str(tmp_path / "fk.db"))
+    try:
+        create_main_table(conn)
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO events (user_id, project, event_type, timestamp, date)"
+                " VALUES (99999, 'P', 'start', '2025-06-02 09:00:00', '02-06-2025')"
+            )
+    finally:
+        conn.close()
+
+
+def test_old_journal_db_opens_and_reads(tmp_path):
+    """Alt-DB im klassischen Rollback-Journal öffnet, liest und rollt zurück.
+
+    Simuliert eine vor der WAL-Umstellung angelegte Datenbank: Schema + Daten
+    ohne Pragmas geschrieben (journal_mode=delete). create_connection muss sie
+    öffnen, auf WAL heben und die Daten unverändert liefern; der dokumentierte
+    Rollback (PRAGMA journal_mode=DELETE) muss das Dateiformat zurückstellen.
+    """
+    import sqlite3
+
+    db_file = str(tmp_path / "alt.db")
+    old = sqlite3.connect(db_file)  # bewusst OHNE create_connection
+    old.execute("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL)")
+    old.execute(
+        "CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL,"
+        " project TEXT, event_type TEXT, timestamp DATETIME, date TEXT,"
+        " FOREIGN KEY (user_id) REFERENCES users(id))"
+    )
+    old.execute("INSERT INTO users (name) VALUES ('alt_user')")
+    old.execute(
+        "INSERT INTO events (user_id, project, event_type, timestamp, date)"
+        " VALUES (1, 'P', 'start', '2025-06-02 09:00:00', '02-06-2025')"
+    )
+    old.commit()
+    assert old.execute("PRAGMA journal_mode").fetchone()[0].lower() == "delete"
+    old.close()
+
+    conn = create_connection(db_file)
+    try:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+        rows = conn.execute("SELECT user_id, project, event_type FROM events").fetchall()
+        assert rows == [(1, "P", "start")]
+        # Dokumentierter Rollback: zurück aufs klassische Journal.
+        assert conn.execute("PRAGMA journal_mode=DELETE").fetchone()[0].lower() == "delete"
+    finally:
+        conn.close()
