@@ -4093,7 +4093,27 @@ class App:
         self._on_date_changed()
 
     def update_timer_realtime(self):
-        """Update the timer label with the elapsed time."""
+        """Update the timer label with the elapsed time.
+
+        Der eigentliche Tick läuft in ``_timer_tick``; eine Exception dort
+        wird geloggt, der Folgetick aber im ``finally`` trotzdem geplant —
+        sonst stürbe die after-Kette (Timer, Pomodoro, Idle-Auto-Stop,
+        Standby-Erkennung) dauerhaft."""
+        try:
+            self._timer_tick()
+        except Exception:
+            logger.exception("Fehler im Timer-Tick")
+        finally:
+            # Adaptives Intervall: bei laufender Session/Pause sekundengenau
+            # (1 s), im Leerlauf seltener (3 s) — reduziert unnötige
+            # Hintergrund-Ticks (Energie-/Standby-Hygiene), ohne die Anzeige
+            # spürbar zu verzögern. _check_suspend_gap (Schwelle 180 s) und
+            # der Idle-Auto-Stop (nur im Aktiv-Zweig, dort weiterhin 1 s)
+            # bleiben davon unberührt.
+            active = self.timer_running or self._break_active
+            self._reschedule_timer(1000 if active else 3000)
+
+    def _timer_tick(self):
         self._check_suspend_gap()
         self._check_day_rollover()
         project = self._get_project_silent()
@@ -4194,14 +4214,6 @@ class App:
 
         if self._db_dirty and (time.time() - self._db_dirty_since) >= 2:
             self._force_date_refresh()
-
-        # Adaptives Intervall: bei laufender Session/Pause sekundengenau (1 s),
-        # im Leerlauf seltener (3 s) — reduziert unnötige Hintergrund-Ticks
-        # (Energie-/Standby-Hygiene), ohne die Anzeige spürbar zu verzögern.
-        # _check_suspend_gap (Schwelle 180 s) und der Idle-Auto-Stop (nur im
-        # Aktiv-Zweig, dort weiterhin 1 s) bleiben davon unberührt.
-        active = self.timer_running or self._break_active
-        self._reschedule_timer(1000 if active else 3000)
 
     def _reschedule_timer(self, delay_ms: int) -> None:
         """Plant den nächsten ``update_timer_realtime``-Tick, storniert einen

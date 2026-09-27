@@ -1350,6 +1350,22 @@ def test_timer_tick_no_heartbeat_when_idle(app_instance):
     assert read_heartbeat(app_instance.db_conn) is None
 
 
+def test_timer_tick_reschedules_after_exception(app_instance, monkeypatch, caplog):
+    """Ein Fehler im Tick-Körper darf die after-Kette nicht stoppen: der
+    Folgetick wird trotzdem geplant und der Fehler geloggt."""
+
+    def boom():
+        raise RuntimeError("injizierter Tick-Fehler")
+
+    monkeypatch.setattr(app_instance, "_timer_tick", boom)
+    app_instance._timer_after_id = None
+    with caplog.at_level("ERROR", logger="app"):
+        app_instance.update_timer_realtime()
+
+    assert app_instance._timer_after_id is not None
+    assert any("Timer-Tick" in rec.message for rec in caplog.records)
+
+
 def test_on_closing_aborts_when_stop_fails(app_instance, monkeypatch):
     """Fehlgeschlagener log_stop beim Beenden: 'Nein' bricht das Schließen ab."""
     import app as app_module
