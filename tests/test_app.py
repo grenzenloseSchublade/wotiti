@@ -2386,3 +2386,99 @@ def test_start_session_with_case_variant_uses_existing_user(app_instance, monkey
     users = get_all_users(app_instance.db_conn, include_archived=True)
     assert "hans" not in users
     app_instance.stop_session()
+
+
+# --- UX-Nachzügler: Erststart-Seeding, "+"-Button, stille Refresh-Getter,
+# --- Start-ohne-DB-Feedback, Strg+M-Guard, Statusleisten-Packreihenfolge ---
+
+
+def test_first_start_seeds_default_project(app_instance):
+    """Erststart mit frischer DB legt das interne Default-Projekt "1" an —
+    App-Defaults werden ohne Rückfrage geseedet (wie der Default-Benutzer)."""
+    from db_helper import get_all_projects
+
+    assert "1" in get_all_projects(app_instance.db_conn, include_archived=True)
+
+
+def test_first_start_click_needs_no_prompt(app_instance, monkeypatch):
+    """Erster Start-Klick auf frischer DB: keine »Neu anlegen?«-Rückfrage —
+    _resolve_typed_name gilt nur für vom Nutzer getippte NEUE Namen."""
+    asks = _patch_askyesno_recording(monkeypatch)
+    app_instance.start_session()
+    assert asks == []
+    name = app_instance.name_entry.get()
+    assert app_instance.session_active.get((name, "1")) is True
+    app_instance.stop_session()
+
+
+def test_add_event_button_visible_on_startup(app_instance):
+    """Der "+"-Button ist direkt nach dem App-Start für "heute" sichtbar,
+    ohne dass das Datumsfeld erst angefasst werden muss."""
+    assert app_instance.add_event_button.grid_info() != {}
+
+
+def test_resolve_typed_name_corrects_foreign_entry(app_instance):
+    """Case-Korrektur landet im übergebenen Feld (Nachtrags-Dialog), nicht
+    im Projektfeld des Hauptfensters."""
+    from db_helper import check_project
+
+    check_project(app_instance.db_conn, "Alpha")
+    app_instance.project_entry.set("1")
+    captured = []
+    assert app_instance._resolve_typed_name("alpha", kind="project", entry_setter=captured.append) == "Alpha"
+    assert captured == ["Alpha"]
+    assert app_instance.project_entry.get() == "1"
+
+
+def test_update_duration_never_prompts(app_instance, monkeypatch):
+    """F5/»Neu laden« liest nur: für einen frisch getippten neuen Projektnamen
+    darf weder ein »Neu anlegen?«-Modal erscheinen noch etwas angelegt werden."""
+    from db_helper import get_all_projects
+
+    asks = _patch_askyesno_recording(monkeypatch)
+    app_instance.project_entry.set("GanzNeuesProjekt")
+    app_instance.update_duration()
+    assert asks == []
+    assert "GanzNeuesProjekt" not in get_all_projects(app_instance.db_conn, include_archived=True)
+
+
+def test_session_actions_warn_without_db(app_instance):
+    """Start/Stop/Pause melden bei db_conn=None sichtbar über die Statusleiste
+    statt stumm zu returnen (Start-ohne-DB-Modus)."""
+    app_instance.db_conn = None
+    for action in (app_instance.start_session, app_instance.stop_session, app_instance.pause_session):
+        app_instance._clear_status_error()
+        action()
+        assert "Keine Datenbank geladen" in app_instance._status_error_label.cget("text")
+
+
+def test_ctrl_m_shortcut_guarded(app_instance):
+    """Strg+M läuft über _shortcut_guard: mit Fokus im Notizfeld bleibt das
+    Hauptfenster stehen, von einem Button aus toggelt der Mini-Modus."""
+    app_instance.master.update()
+    # Key-Events landen beim Fokus-Widget — Fokus explizit setzen, sonst
+    # entscheidet nicht das Notizfeld über den Guard.
+    app_instance.note_entry.focus_force()
+    app_instance.master.update()
+    app_instance.note_entry.event_generate("<Control-m>")
+    app_instance.master.update()
+    assert not app_instance._mini_mode
+    app_instance.start_button.focus_force()
+    app_instance.master.update()
+    app_instance.start_button.event_generate("<Control-m>")
+    app_instance.master.update()
+    assert app_instance._mini_mode
+    # Zurück in den Normalmodus, damit der Teardown das Hauptfenster trifft.
+    app_instance._toggle_mini_mode()
+    app_instance.master.update()
+    assert not app_instance._mini_mode
+
+
+def test_sync_dot_survives_long_error_message(app_instance):
+    """Eine lange Fehlermeldung darf den Sync-Punkt nicht aus der Statusleiste
+    verdrängen — geclippt wird das (zuletzt gepackte) Fehler-Label."""
+    app_instance.master.geometry("640x480")
+    app_instance._status_date_label.config(text="Ansicht: Montag, 21. September 2026 (nicht heute)")
+    app_instance._flag_error_feedback("X" * 200)
+    app_instance.master.update()
+    assert app_instance._sync_canvas.winfo_ismapped()

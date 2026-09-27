@@ -662,22 +662,26 @@ class App:
         )
         self._status_date_label.pack(side="left", padx=4)
 
+        # Nur der Punkt — das frühere "aktuell/veraltet"-Textlabel trug keine
+        # Information, die der Punkt + Tooltip nicht auch liefert (Zustand
+        # heilt sich binnen 2 s selbst). VOR dem Fehler-Label packen: pack
+        # quetscht bei Platznot die zuletzt gepackten Widgets zuerst — eine
+        # lange Fehlermeldung darf die Sync-Ampel nie verdrängen.
+        self._sync_canvas = Canvas(self._status_frame, width=14, height=14, bg="#C0C0C0", highlightthickness=0)
+        self._sync_canvas.pack(side="right", padx=2)
+        self._sync_dot = self._sync_canvas.create_oval(2, 2, 12, 12, fill="#00AA00", outline="#006600")
+        _ToolTip(self._sync_canvas, "Sync-Status: grün = aktuell, gelb = Daten veraltet · F5 = neu laden")
+
         # Fehler zusätzlich rot in der Statusleiste — die Konsole kann
         # eingeklappt oder weggescrollt sein, die Statusleiste ist immer
         # sichtbar (Meldung heilt sich selbst, siehe _flag_error_feedback).
+        # Als LETZTES gepackt: bei schmalem Fenster wird der Fehlertext
+        # geclippt, Datum und Sync-Punkt bleiben stehen.
         self._status_error_label = Label(
             self._status_frame, text="", bg="#C0C0C0", fg="red", font=("MS Sans Serif", 8), anchor="w"
         )
         self._status_error_label.pack(side="left", padx=8)
         self._status_error_after_id = None
-
-        # Nur der Punkt — das frühere "aktuell/veraltet"-Textlabel trug keine
-        # Information, die der Punkt + Tooltip nicht auch liefert (Zustand
-        # heilt sich binnen 2 s selbst).
-        self._sync_canvas = Canvas(self._status_frame, width=14, height=14, bg="#C0C0C0", highlightthickness=0)
-        self._sync_canvas.pack(side="right", padx=2)
-        self._sync_dot = self._sync_canvas.create_oval(2, 2, 12, 12, fill="#00AA00", outline="#006600")
-        _ToolTip(self._sync_canvas, "Sync-Status: grün = aktuell, gelb = Daten veraltet · F5 = neu laden")
 
         # =====================================================
         # Grid weights
@@ -767,6 +771,11 @@ class App:
                 self._refresh_comboboxes(force=True)
                 self.name_entry.set(default_user)
                 default_project = self.config.get("default_project", "1")
+                # App-Default analog zum Default-Benutzer OHNE Rückfrage seeden:
+                # bei frischer DB liefe der erste Start-Klick sonst in die
+                # »Neu anlegen?«-Rückfrage von _resolve_typed_name — die gilt
+                # nur für vom Nutzer getippte Namen, nicht für interne Defaults.
+                check_project(self.db_conn, default_project)
                 self._set_project(default_project)
                 self.update_db_content()
                 self._load_note()
@@ -783,12 +792,14 @@ class App:
         # Keyboard shortcuts
         # bind_all statt bind: die Shortcuts sollen auch im Mini-Modus-Toplevel
         # funktionieren (bind auf master greift dort nicht).
-        # Strg+S/E/P über _shortcut_guard: die Tk-Emacs-Bindings (Strg+E =
+        # Strg+S/E/P/M über _shortcut_guard: die Tk-Emacs-Bindings (Strg+E =
         # Zeilenende, Strg+P = Zeile hoch) gehören in Textfeldern dem Widget —
-        # sonst stoppt/pausiert Tippen im Notizfeld still die Session.
+        # sonst stoppt/pausiert Tippen im Notizfeld still die Session. Strg+M
+        # ebenfalls: mitten im Tippen dürfte das Hauptfenster (samt Notizfeld)
+        # nicht in den Mini-Modus verschwinden.
         master.bind_all("<Control-s>", lambda e: self._shortcut_guard(e, self.start_session))
         master.bind_all("<Control-e>", lambda e: self._shortcut_guard(e, self.stop_session))
-        master.bind_all("<Control-m>", lambda e: self._toggle_mini_mode())
+        master.bind_all("<Control-m>", lambda e: self._shortcut_guard(e, self._toggle_mini_mode))
         master.bind_all("<Control-p>", lambda e: self._shortcut_guard(e, self.pause_session))
         # F5 ersetzt den früheren ⟳-Button (Anzeige aus der DB neu laden).
         master.bind_all("<F5>", lambda e: self.update_duration())
@@ -807,6 +818,11 @@ class App:
 
         # Session protection: ask before closing with active session
         master.protocol("WM_DELETE_WINDOW", self._on_closing)
+
+        # "+"-Button-Sichtbarkeit initial setzen: das Datumsfeld startet mit
+        # heute — ohne diesen Aufruf bliebe der Button (grid_remove beim
+        # Aufbau) bis zur ersten Datumsfeld-Interaktion versteckt.
+        self._update_add_event_button_visibility()
 
         # Pre-resolve sound path and player executable for instant playback.
         self._preload_sound()
@@ -1464,52 +1480,63 @@ class App:
         self.project_entry.config(state="disabled")
         self.name_entry.config(state="disabled")
 
+    def _warn_no_database(self) -> None:
+        """Sichtbarer Hinweis im Start-ohne-DB-Modus statt stummem Abbruch.
+
+        Der Nein-Pfad beim App-Start (fehlende DB nicht neu anlegen) lässt
+        die Buttons aktiv — ein Klick muss erklären, warum nichts passiert
+        (die Startmeldung ist längst weggescrollt bzw. selbstgelöscht).
+        """
+        self.write("Keine Datenbank geladen — Einstellungen → Laden.", error=True)
+
     def start_session(self):
-        if self.db_conn:
-            # Getippte, noch nicht gespeicherte Notiz sichern, bevor ein Reload
-            # (Start ODER Fortsetzen) sie überschreibt.
-            self._flush_pending_note()
-            if self._break_active:
-                # Start button acts as Resume during a break — always resume.
-                # Resume läuft am realen heutigen Tag — Anzeige mitziehen.
+        if not self.db_conn:
+            self._warn_no_database()
+            return
+        # Getippte, noch nicht gespeicherte Notiz sichern, bevor ein Reload
+        # (Start ODER Fortsetzen) sie überschreibt.
+        self._flush_pending_note()
+        if self._break_active:
+            # Start button acts as Resume during a break — always resume.
+            # Resume läuft am realen heutigen Tag — Anzeige mitziehen.
+            self._jump_view_to_today()
+            self._finish_break(play_sound=True, bring_to_front=True, force_resume=True)
+            return
+        project = self.get_project()
+        name = self.get_name()
+        if project is not None and name:
+            if self.session_active.get((name, project), False):
+                self.write("Session bereits gestartet. Bitte zuerst stoppen.", error=True)
+            else:
+                # Phase 1.3: ``date`` wird in der DB-Schicht aus dem realen
+                # Zeitstempel (datetime.now) abgeleitet — UI-Datumsfeld
+                # ist hier nur Anzeige/Filter und nicht Schreib-Quelle.
+                logger.info("Session gestartet: user=%s, project=%s", name, project)
+                if not log_start(project=project, name=name, conn=self.db_conn):
+                    # DB-Schreiben fehlgeschlagen — UI nicht auf "aktiv" setzen,
+                    # damit App- und DB-Zustand nicht auseinanderlaufen.
+                    self.write("Session konnte nicht gestartet werden (DB-Fehler).", error=True)
+                    return
+                self._mark_dirty()
+                # Zeigte das Datumsfeld noch einen anderen Tag, springt es
+                # jetzt auf heute — sonst fröre die Anzeige ein (das
+                # _is_viewing_today-Gate im Timer-Tick griffe jede Sekunde).
                 self._jump_view_to_today()
-                self._finish_break(play_sound=True, bring_to_front=True, force_resume=True)
-                return
-            project = self.get_project()
-            name = self.get_name()
-            if project is not None and name:
-                if self.session_active.get((name, project), False):
-                    self.write("Session bereits gestartet. Bitte zuerst stoppen.", error=True)
-                else:
-                    # Phase 1.3: ``date`` wird in der DB-Schicht aus dem realen
-                    # Zeitstempel (datetime.now) abgeleitet — UI-Datumsfeld
-                    # ist hier nur Anzeige/Filter und nicht Schreib-Quelle.
-                    logger.info("Session gestartet: user=%s, project=%s", name, project)
-                    if not log_start(project=project, name=name, conn=self.db_conn):
-                        # DB-Schreiben fehlgeschlagen — UI nicht auf "aktiv" setzen,
-                        # damit App- und DB-Zustand nicht auseinanderlaufen.
-                        self.write("Session konnte nicht gestartet werden (DB-Fehler).", error=True)
-                        return
-                    self._mark_dirty()
-                    # Zeigte das Datumsfeld noch einen anderen Tag, springt es
-                    # jetzt auf heute — sonst fröre die Anzeige ein (das
-                    # _is_viewing_today-Gate im Timer-Tick griffe jede Sekunde).
-                    self._jump_view_to_today()
-                    self.session_active[(name, project)] = True
-                    self.timer_running = True
-                    self.timer_start_time = time.time()
-                    self._session_started_ts = time.time()
-                    self._idle_check_counter = 0
-                    self._pomodoro_cycles = 0
-                    if self.pomodoro_enabled and self._pomodoro_work_deadline_ts <= 0:
-                        self._pomodoro_work_deadline_ts = time.time() + (self.pomodoro_work_minutes * 60)
-                    self._combobox_dirty = True
-                    self._refresh_comboboxes()
-                    self._force_date_refresh()
-                    self._set_button_state_running()
-                    # Start aus dem Leerlauf: sofort neu ticken, damit die Anzeige
-                    # nicht bis zum nächsten (langsameren) Leerlauf-Tick wartet.
-                    self._reschedule_timer(0)
+                self.session_active[(name, project)] = True
+                self.timer_running = True
+                self.timer_start_time = time.time()
+                self._session_started_ts = time.time()
+                self._idle_check_counter = 0
+                self._pomodoro_cycles = 0
+                if self.pomodoro_enabled and self._pomodoro_work_deadline_ts <= 0:
+                    self._pomodoro_work_deadline_ts = time.time() + (self.pomodoro_work_minutes * 60)
+                self._combobox_dirty = True
+                self._refresh_comboboxes()
+                self._force_date_refresh()
+                self._set_button_state_running()
+                # Start aus dem Leerlauf: sofort neu ticken, damit die Anzeige
+                # nicht bis zum nächsten (langsameren) Leerlauf-Tick wartet.
+                self._reschedule_timer(0)
 
     def stop_session(self, stop_timestamp: datetime | None = None):
         """End the session completely. If a break is active, close it first without auto-resume.
@@ -1523,6 +1550,7 @@ class App:
             self._finish_break(play_sound=False, bring_to_front=False, auto_resume=False)
 
         if not self.db_conn:
+            self._warn_no_database()
             return
         project = self.get_project()
         name = self.get_name()
@@ -1550,6 +1578,9 @@ class App:
 
     def pause_session(self):
         """Start a manual break. Does not resume — use Start for that."""
+        if not self.db_conn:
+            self._warn_no_database()
+            return
         self._flush_pending_note()
         if self._break_active:
             return
@@ -1883,9 +1914,13 @@ class App:
 
     def update_duration(self):
         if self.db_conn:
-            project = self.get_project()
-            name = self.get_name()
-            if project is not None and name:
+            # Stille Getter: F5/»Neu laden« liest nur — die validierenden
+            # Getter würden für einen frisch getippten neuen Namen die
+            # »Neu anlegen?«-Rückfrage auslösen, obwohl ein Refresh nichts
+            # anlegt und die Frage beim Start ohnehin (wirksam) erneut kommt.
+            project = self._get_project_silent()
+            name = self._get_name_silent()
+            if project and name:
                 date_str = self._get_selected_date()
                 # Erzwungen frisch rechnen, aber über den Cache routen, damit
                 # der nächste Timer-Tick den Wert wiederverwendet.
@@ -1904,7 +1939,7 @@ class App:
                 self._update_date_entry_visual()
                 self._mark_clean()
             else:
-                self.write("Ungültige Dauer. Bitte erneut versuchen.", error=True)
+                self.write("Projekt/Name fehlt — Anzeige nicht aktualisiert.", error=True)
                 return None
 
     # ----- Input getters with validation -----
@@ -1945,7 +1980,7 @@ class App:
             return None
         return self._resolve_typed_name(val, kind="user")
 
-    def _resolve_typed_name(self, val: str, kind: str) -> str | None:
+    def _resolve_typed_name(self, val: str, kind: str, entry_setter=None, parent=None) -> str | None:
         """Fängt die Tippfehler-Falle frei getippter Namen ab (Benutzer/Projekt).
 
         ``check_user``/``check_project`` legen unbekannte Namen kommentarlos
@@ -1958,6 +1993,11 @@ class App:
           (Hinweis in der Konsole, Eingabefeld wird korrigiert);
         - komplett unbekannt → Rückfrage, ob wirklich neu angelegt werden soll
           (das eigentliche Anlegen passiert erst in der DB-Schicht beim Start).
+
+        ``entry_setter``: korrigiert bei Case-Treffer ein fremdes Eingabefeld
+        (z. B. die Projekt-Combobox des Nachtrags-Dialogs) statt der
+        Hauptfenster-Felder. ``parent``: Dialog-Parent für die Rückfrage —
+        nötig, wenn ein modaler Dialog (grab) gerade die Tastatur besitzt.
         """
         if not self.db_conn:
             return val
@@ -1972,7 +2012,9 @@ class App:
         match = next((e for e in existing if e.lower() == val.lower()), None)
         if match is not None:
             self.write(f"{label} »{match}« aus dem Bestand übernommen (Eingabe war »{val}«).")
-            if kind == "user":
+            if entry_setter is not None:
+                entry_setter(match)
+            elif kind == "user":
                 self.name_entry.set(match)
             else:
                 self._set_project(match)
@@ -1980,7 +2022,7 @@ class App:
         if not messagebox.askyesno(
             "Neuer Benutzer" if kind == "user" else "Neues Projekt",
             f"{label} »{val}« ist nicht bekannt.\n\nNeu anlegen?",
-            parent=self.master,
+            parent=parent or self.master,
         ):
             return None
         return val
@@ -2182,9 +2224,19 @@ class App:
             if not project or project == NEW_PROJECT_LABEL:
                 messagebox.showwarning("Fehler", "Projekt darf nicht leer sein.", parent=win)
                 return
+            # Tippfehler-Schutz wie im Hauptfenster: log_event → check_user/
+            # check_project legen unbekannte Namen sonst still und
+            # case-sensitiv als Duplikat an. Case-Korrektur landet in der
+            # Dialog-Combobox, die Rückfrage über dem modalen Dialog.
+            project = self._resolve_typed_name(project, kind="project", entry_setter=proj_combo.set, parent=win)
+            if project is None:
+                return
             name = self._get_name_silent()
             if not name:
                 messagebox.showwarning("Fehler", "Name muss gesetzt sein.", parent=win)
+                return
+            name = self._resolve_typed_name(name, kind="user", parent=win)
+            if name is None:
                 return
             try:
                 t_start = datetime.strptime(start_var.get().strip(), "%H:%M")
@@ -2271,6 +2323,10 @@ class App:
         self.update_db_content()
         self._refresh_duration_display()
         self._update_date_entry_visual()
+        # "+"-Button mitziehen: _force_date_refresh läuft auch ohne
+        # _on_date_changed (z. B. Sprung auf den jüngsten Datentag nach
+        # _activate_database) — die Sichtbarkeit darf nicht veralten.
+        self._update_add_event_button_visibility()
         # Notiz für das (ggf. geänderte) Datum + Projekt nachladen.
         self._load_note()
         # Wochen-Kachel mitziehen, falls sie gerade sichtbar ist.
