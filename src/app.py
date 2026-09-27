@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import socket
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -688,7 +689,8 @@ class App:
         # =====================================================
         self.frame.grid_rowconfigure(3, weight=1)
         self.frame.grid_rowconfigure(4, weight=1)
-        for col in range(7):
+        # Alle Kinder spannen columnspan=6 — eine 7. Spalte gäbe nur toten Rand.
+        for col in range(6):
             self.frame.grid_columnconfigure(col, weight=1)
         self.console_frame.grid_rowconfigure(1, weight=1)
         self.console_frame.grid_columnconfigure(0, weight=1)
@@ -1877,6 +1879,13 @@ class App:
         Button(dev_frame, text="Log öffnen", command=_open_log, **btn).grid(row=0, column=1, sticky="e", padx=(8, 0))
         dev_frame.grid_columnconfigure(0, weight=1)
 
+        # ── Speichern / Abbrechen ──
+        # VOR den Sektionen packen: pack beschneidet bei zu kleinem Fenster die
+        # zuletzt gepackten Widgets zuerst — nur so bleibt die Buttonleiste am
+        # unteren Rand (side="bottom") immer sichtbar.
+        action_frame = Frame(win, bg="#C0C0C0")
+        action_frame.pack(side="bottom", fill="x", padx=10, pady=(10, 10))
+
         # ── Sektionen in task-basierter Reihenfolge packen (SO-9) ──
         # Top-to-bottom nach Änderungshäufigkeit: häufig angepasste Optionen
         # oben, einmalig/gesperrtes (Datenbank, Verwaltung) sowie die
@@ -1885,20 +1894,19 @@ class App:
         for i, section in enumerate(sections):
             section.pack(fill="x", padx=10, pady=(10, 5) if i == 0 else 5)
 
-        # ── Speichern / Abbrechen ──
-        # side="bottom": Buttonleiste am unteren Rand verankern, damit sie auch
-        # bei viel Inhalt / kleinem Bildschirm sichtbar bleibt (nicht abgeschnitten).
-        action_frame = Frame(win, bg="#C0C0C0")
-        action_frame.pack(side="bottom", fill="x", padx=10, pady=(10, 10))
-
         def _save():
             new_db = db_var.get().strip()
             new_port = port_var.get().strip()
-            # Phase 2.1: Bei laufender Session DB-Pfad-Wechsel hart ablehnen.
-            if sessions_active and new_db and new_db != self._db_path:
+            # Phase 2.1: Bei laufender Session/Pause DB-Pfad-Wechsel hart ablehnen.
+            # LIVE prüfen, nicht das beim Öffnen eingefrorene sessions_active:
+            # Session oder Pause kann gestartet worden sein, während der Dialog
+            # offen war.
+            tracking_live = any(self.session_active.values()) or self._break_active
+            db_would_change = bool(new_db) and os.path.abspath(new_db) != os.path.abspath(self._db_path)
+            if tracking_live and db_would_change:
                 messagebox.showwarning(
                     "Session aktiv",
-                    "DB-Pfad kann nicht gewechselt werden, solange Sessions laufen.",
+                    "DB-Pfad kann nicht gewechselt werden, solange eine Session oder Pause läuft.",
                     parent=win,
                 )
                 return
@@ -2088,6 +2096,13 @@ class App:
         ).pack(pady=(15, 10))
         # NACH dem Inhaltsaufbau: Größe an Inhalt anpassen + zentrieren.
         self._fit_and_center(about, min_w=360, ref=ref)
+        # Grabs stapeln nicht: wurde der Dialog aus den Einstellungen geöffnet,
+        # muss deren Grab nach dem Schließen wiederhergestellt werden — sonst
+        # ist der Einstellungsdialog danach nicht mehr modal.
+        if parent is not None:
+            about.wait_window()
+            if parent.winfo_exists():
+                parent.grab_set()
 
     # ----- Session management -----
     def _set_timer_color(self, state: str) -> None:
@@ -2729,17 +2744,19 @@ class App:
         self.add_event_button.grid_remove()
 
     def add_manual_event(self):
-        """Öffnet einen Dialog, um für ein Vergangenheitsdatum ein Start/Stop-Paar
-        anzulegen. Es wird **nichts** in die Datenbank geschrieben, bevor der Nutzer
-        auf "Speichern" klickt — "Abbrechen" legt keinen Eintrag an."""
+        """Öffnet einen Dialog, um für heute oder ein Vergangenheitsdatum ein
+        Start/Stop-Paar anzulegen. Es wird **nichts** in die Datenbank geschrieben,
+        bevor der Nutzer auf "Speichern" klickt — "Abbrechen" legt keinen Eintrag an."""
         date_text = self.date_entry.get().strip()
         try:
             d = datetime.strptime(date_text, UI_DATE_FORMAT).date()
         except ValueError:
             self.write("Ungültiges Datum für manuellen Eintrag.", error=True)
             return
-        if d >= datetime.today().date():
-            self.write("Manueller Eintrag nur für Vergangenheitsdaten.", error=True)
+        # Heute ist erlaubt (der "+"-Button erscheint auch für heute) — nur
+        # Zukunftsdaten blocken.
+        if d > datetime.today().date():
+            self.write("Manueller Eintrag nicht für Zukunftsdaten.", error=True)
             return
         if not self.db_conn:
             self.write("Keine Datenbankverbindung.", error=True)
@@ -3930,7 +3947,8 @@ class App:
                     (user, new_project, ov_lo, ov_hi),
                 )
                 day_sessions = self._pair_day_sessions(ov_cur.fetchall())
-            except Exception:
+            except sqlite3.Error:
+                logger.exception("Überschneidungs-Prüfung fehlgeschlagen — speichere ohne Overlap-Warnung")
                 day_sessions = []
             ps = start_dt or datetime.min
             pe = stop_dt or datetime.max

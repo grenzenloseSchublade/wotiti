@@ -99,8 +99,11 @@ def test_idle_timeout_config_custom_value():
         root.destroy()
 
 
-def test_add_manual_event_rejects_today(app_instance):
-    """add_manual_event legt für heute/Zukunft nichts an (früher Abbruch, kein Dialog)."""
+def test_add_manual_event_allows_today(app_instance):
+    """add_manual_event öffnet für heute den Dialog (wie der '+'-Button verspricht),
+    schreibt aber ohne Speichern nichts in die Datenbank."""
+    from tkinter import Toplevel
+
     app_instance.name_entry.set("u_today")
     app_instance.project_entry.set("p_today")
     app_instance.date_entry.delete(0, END)
@@ -108,6 +111,25 @@ def test_add_manual_event_rejects_today(app_instance):
     cur = app_instance.db_conn.cursor()
     before = cur.execute("SELECT COUNT(*) FROM events").fetchone()[0]
     app_instance.add_manual_event()
+    wins = [w for w in app_instance.master.winfo_children() if isinstance(w, Toplevel)]
+    assert wins, "Dialog für heute wurde nicht geöffnet"
+    wins[-1].destroy()
+    after = cur.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    assert after == before
+
+
+def test_add_manual_event_rejects_future(app_instance):
+    """Für Zukunftsdaten bricht add_manual_event früh ab: kein Dialog, kein Eintrag."""
+    from tkinter import Toplevel
+
+    app_instance.name_entry.set("u_future")
+    app_instance.project_entry.set("p_future")
+    app_instance.date_entry.delete(0, END)
+    app_instance.date_entry.insert(0, (datetime.today() + timedelta(days=1)).strftime("%d-%m-%Y"))
+    cur = app_instance.db_conn.cursor()
+    before = cur.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    app_instance.add_manual_event()
+    assert not [w for w in app_instance.master.winfo_children() if isinstance(w, Toplevel)]
     after = cur.execute("SELECT COUNT(*) FROM events").fetchone()[0]
     assert after == before
 
@@ -1542,3 +1564,51 @@ def test_existing_db_starts_without_prompt(monkeypatch):
         assert app.db_conn is not None
     finally:
         root.destroy()
+
+
+def _find_settings_db_combobox(win):
+    """Die Datenbank-Combobox des Einstellungsdialogs (in der LabelFrame 'Datenbank')."""
+    from tkinter import LabelFrame
+    from tkinter.ttk import Combobox
+
+    stack = [win]
+    while stack:
+        w = stack.pop()
+        if isinstance(w, LabelFrame) and w.cget("text") == "Datenbank":
+            for child in w.winfo_children():
+                if isinstance(child, Combobox):
+                    return child
+        stack.extend(w.winfo_children())
+    raise AssertionError("Datenbank-Combobox nicht gefunden")
+
+
+def _assert_settings_save_blocks_db_change(app_instance, monkeypatch, tmp_path):
+    """Gemeinsamer Kern: Speichern mit geändertem DB-Pfad muss blocken,
+    der Dialog offen bleiben und der DB-Pfad unverändert sein."""
+    calls = _patch_messageboxes(monkeypatch)
+    win = _find_editor(app_instance)
+    other = tmp_path / "andere.db"
+    other.touch()
+    _find_settings_db_combobox(win).set(str(other))
+    old_path = app_instance._db_path
+    _invoke_editor_button(win, "Speichern")
+    warnings = [a for kind, a in calls if kind == "warning"]
+    assert warnings and warnings[0][0] == "Session aktiv"
+    assert app_instance._db_path == old_path
+    assert win.winfo_exists()
+    win.destroy()
+
+
+def test_settings_save_blocks_db_change_with_live_session(app_instance, monkeypatch, tmp_path):
+    """Session startet, WÄHREND die Einstellungen offen sind: das beim Öffnen
+    eingefrorene sessions_active wäre False — der Live-Check muss trotzdem blocken."""
+    app_instance.open_settings()
+    app_instance.session_active[("live_user", "live_proj")] = True
+    _assert_settings_save_blocks_db_change(app_instance, monkeypatch, tmp_path)
+
+
+def test_settings_save_blocks_db_change_with_live_break(app_instance, monkeypatch, tmp_path):
+    """Auch eine laufende Pause (ohne aktive Session) blockt den DB-Wechsel."""
+    app_instance.open_settings()
+    app_instance._break_active = True
+    _assert_settings_save_blocks_db_change(app_instance, monkeypatch, tmp_path)
