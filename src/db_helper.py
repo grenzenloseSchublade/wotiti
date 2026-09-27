@@ -73,6 +73,7 @@ def create_main_table(conn: sqlite3.Connection) -> bool:
         create_break_events_table(conn)
         create_projects_table(conn)
         create_daily_notes_table(conn)
+        create_app_state_table(conn)
     return success
 
 
@@ -223,6 +224,94 @@ def _migrate_daily_notes_columns(conn: sqlite3.Connection) -> None:
         cursor.close()
     except Error as e:
         logger.warning("daily_notes column migration: %s", e)
+
+
+def create_app_state_table(conn: sqlite3.Connection) -> bool:
+    """Create the app_state key-value table (z. B. ``last_seen``-Heartbeat).
+
+    Rein additiv (``CREATE TABLE IF NOT EXISTS``): Bestands-DBs bekommen die
+    Tabelle beim ersten Start mit dieser Version; eine Alt-DB ohne die Tabelle
+    bleibt voll nutzbar, weil alle Zugriffe darauf geguardet sind.
+    """
+    sql_create_app_state_table = """
+        CREATE TABLE IF NOT EXISTS app_state (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        );
+    """
+    return execute_sql(conn, sql_create_app_state_table)
+
+
+def write_heartbeat(conn: sqlite3.Connection | None, timestamp: datetime | None = None) -> bool:
+    """Persistiert den ``last_seen``-Heartbeat (App lebt, Session offen).
+
+    Wird vom Timer-Tick ca. minütlich aufgerufen; nach Absturz/SIGKILL schließt
+    ``close_stale_sessions`` verwaiste Starts auf diesen Zeitpunkt statt mit
+    Null-Dauer. Alt-DB ohne ``app_state``-Tabelle: stiller No-Op (False).
+    """
+    if not conn:
+        return False
+    ts = (timestamp or datetime.now()).strftime(TIMESTAMP_FORMAT)
+    cursor = None
+    try:
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO app_state (key, value) VALUES ('last_seen', ?)", (ts,))
+        conn.commit()
+        return True
+    except Error as e:
+        logger.debug("Heartbeat nicht geschrieben (Alt-DB ohne app_state?): %s", e)
+        return False
+    finally:
+        if cursor is not None:
+            cursor.close()
+
+
+def read_heartbeat(conn: sqlite3.Connection | None) -> datetime | None:
+    """Liest den letzten ``last_seen``-Heartbeat.
+
+    ``None`` bei fehlender ``app_state``-Tabelle (Alt-DB), fehlendem oder
+    unlesbarem Wert.
+    """
+    if not conn:
+        return None
+    cursor = None
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM app_state WHERE key = 'last_seen'")
+        row = cursor.fetchone()
+        if not row or not row[0]:
+            return None
+        return datetime.strptime(row[0], TIMESTAMP_FORMAT)
+    except (Error, ValueError) as e:
+        logger.debug("Heartbeat nicht lesbar (Alt-DB ohne app_state?): %s", e)
+        return None
+    finally:
+        if cursor is not None:
+            cursor.close()
+
+
+def clear_heartbeat(conn: sqlite3.Connection | None) -> bool:
+    """Entfernt den ``last_seen``-Heartbeat.
+
+    Aufgerufen nach sauberem Beenden sowie nach dem Verbrauch durch
+    ``close_stale_sessions`` — ein Heartbeat gilt immer nur für den einen
+    unsauber beendeten Lauf, sonst könnte ein veralteter ``last_seen`` später
+    einen manuell nachgetragenen offenen Start künstlich verlängern.
+    """
+    if not conn:
+        return False
+    cursor = None
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM app_state WHERE key = 'last_seen'")
+        conn.commit()
+        return True
+    except Error as e:
+        logger.debug("Heartbeat nicht gelöscht (Alt-DB ohne app_state?): %s", e)
+        return False
+    finally:
+        if cursor is not None:
+            cursor.close()
 
 
 def _DAILY_META_DEFAULT() -> dict:  # noqa: N802
@@ -1364,8 +1453,14 @@ def close_stale_sessions(conn: sqlite3.Connection | None) -> int:
     """Schließt verwaiste Start-Events ohne passenden Stopp (z. B. nach Absturz).
 
     Paart je (user, project) per LIFO-Stack über alle Events und schließt JEDEN
-    übrig gebliebenen offenen Start mit einem Null-Dauer-Stopp am selben
-    Zeitstempel. Im Gegensatz zur früheren ``NOT EXISTS (späterer Stopp)``-Prüfung
+    übrig gebliebenen offenen Start. Liegt ein ``last_seen``-Heartbeat (siehe
+    ``write_heartbeat``) NACH dem Start, endet die Session dort — dem letzten
+    Lebenszeichen des unsauber beendeten Laufs — statt mit einem
+    Null-Dauer-Stopp am Start-Zeitstempel selbst (Fallback ohne bzw. mit
+    älterem Heartbeat, ebenso bei Alt-DBs ohne ``app_state``-Tabelle).
+    Der Heartbeat wird dabei verbraucht (``clear_heartbeat``).
+
+    Im Gegensatz zur früheren ``NOT EXISTS (späterer Stopp)``-Prüfung
     erkennt das auch *verschachtelte Doppel-Starts* (start, start, stop, stop),
     bei denen ein Start unpaarig bleibt, obwohl es einen späteren Stopp gibt.
     Idempotent: ist alles gepaart, passiert nichts. Gibt die Anzahl geschlossener
@@ -1374,6 +1469,8 @@ def close_stale_sessions(conn: sqlite3.Connection | None) -> int:
     if not conn:
         return 0
     closed = 0
+    heartbeat = read_heartbeat(conn)
+    hb_ts_str = heartbeat.strftime(TIMESTAMP_FORMAT) if heartbeat else None
     try:
         from collections import defaultdict
 
@@ -1401,14 +1498,28 @@ def close_stale_sessions(conn: sqlite3.Connection | None) -> int:
                 leftover_starts.append((uid, project, ts_str, date_str))
 
         for uid, project, ts_str, date_str in leftover_starts:
+            # Zeitstempel-Strings sind ISO-sortierbar: Heartbeat nur verwenden,
+            # wenn er NACH dem Start liegt (sonst Null-Dauer wie bisher).
+            if hb_ts_str is not None and hb_ts_str > ts_str:
+                stop_ts, stop_date = hb_ts_str, heartbeat.strftime(UI_DATE_FORMAT)
+            else:
+                stop_ts, stop_date = ts_str, date_str
             cursor.execute(
                 "INSERT INTO events (user_id, project, event_type, timestamp, date) VALUES (?, ?, 'stop', ?, ?)",
-                (uid, project, ts_str, date_str),
+                (uid, project, stop_ts, stop_date),
             )
             closed += 1
-            logger.info("Closed stale session: open start at %s (user_id=%s, project=%s)", ts_str, uid, project)
+            logger.info(
+                "Closed stale session: open start at %s -> stop at %s (user_id=%s, project=%s)",
+                ts_str,
+                stop_ts,
+                uid,
+                project,
+            )
         if closed:
             conn.commit()
+        if heartbeat is not None:
+            clear_heartbeat(conn)
     except Error as e:
         logger.error("Error closing stale sessions: %s", e)
     return closed

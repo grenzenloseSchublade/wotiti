@@ -1328,3 +1328,112 @@ def test_toggle_row_transferred_roundtrip(app_instance):
 
     app_instance._toggle_row_transferred(session, False)
     assert get_daily_meta(app_instance.db_conn, name, "1", iso_today)["transferred"] is False
+
+
+def test_timer_tick_writes_heartbeat_when_session_active(app_instance):
+    """Der Timer-Tick persistiert bei aktiver Session einen last_seen-Heartbeat."""
+    from db_helper import read_heartbeat
+
+    assert read_heartbeat(app_instance.db_conn) is None
+    app_instance.session_active[("test_user", "1")] = True
+    app_instance._last_heartbeat_ts = 0.0
+    app_instance.update_timer_realtime()
+    assert read_heartbeat(app_instance.db_conn) is not None
+
+
+def test_timer_tick_no_heartbeat_when_idle(app_instance):
+    """Ohne aktive Session/Pause schreibt der Tick keinen Heartbeat (Standby-Hygiene)."""
+    from db_helper import read_heartbeat
+
+    app_instance._last_heartbeat_ts = 0.0
+    app_instance.update_timer_realtime()
+    assert read_heartbeat(app_instance.db_conn) is None
+
+
+def test_on_closing_aborts_when_stop_fails(app_instance, monkeypatch):
+    """Fehlgeschlagener log_stop beim Beenden: 'Nein' bricht das Schließen ab."""
+    import app as app_module
+
+    app_instance.session_active[("test_user", "1")] = True
+    monkeypatch.setattr(app_module, "log_stop", lambda **kw: False)
+    # 1. Dialog (aktive Arbeit): Ja; 2. Dialog (Stop nicht gespeichert): Nein.
+    answers = iter([True, False])
+    monkeypatch.setattr(app_module.messagebox, "askyesno", lambda *a, **kw: next(answers))
+
+    app_instance._on_closing()
+
+    assert app_instance._closing is False
+    assert app_instance.master.winfo_exists()
+    assert app_instance.db_conn is not None
+
+
+def test_on_closing_signal_mode_asks_nothing(app_instance, monkeypatch):
+    """ask=False (SIGTERM-Pfad): keine Dialoge, Session gestoppt, Fenster zerstört."""
+    import app as app_module
+
+    app_instance.name_entry.set("sig_user")
+    app_instance.project_entry.set("1")
+    app_instance.date_entry.delete(0, END)
+    app_instance.date_entry.insert(0, datetime.today().strftime("%d-%m-%Y"))
+    app_instance.start_session()
+    assert app_instance.session_active.get(("sig_user", "1")) is True
+
+    def _kein_dialog(*a, **kw):
+        raise AssertionError("Dialog im nicht-interaktiven Shutdown")
+
+    monkeypatch.setattr(app_module.messagebox, "askyesno", _kein_dialog)
+    destroyed = []
+    monkeypatch.setattr(app_instance.master, "destroy", lambda: destroyed.append(True))
+
+    db_conn = app_instance.db_conn
+    app_instance._on_closing(ask=False)
+
+    assert destroyed == [True]
+    assert app_instance._closing is True
+    # DB-Verbindung wurde im Stop-Pfad regulär geschlossen.
+    import sqlite3
+
+    with pytest.raises(sqlite3.ProgrammingError):
+        db_conn.execute("SELECT 1")
+
+
+def test_shutdown_from_signal_delegates_without_dialogs(app_instance, monkeypatch):
+    """shutdown_from_signal ruft _on_closing(ask=False) und ist nach _closing ein No-Op."""
+    calls = []
+    monkeypatch.setattr(app_instance, "_on_closing", lambda ask=True: calls.append(ask))
+
+    app_instance.shutdown_from_signal()
+    assert calls == [False]
+
+    app_instance._closing = True
+    app_instance.shutdown_from_signal()
+    assert calls == [False]
+
+
+def test_stale_cleanup_visible_in_console_after_crash():
+    """Nach Absturz: Start-Aufräumen meldet sich sichtbar in der App-Konsole.
+
+    Simuliert einen unsauber beendeten Lauf (offener Start + last_seen-Heartbeat
+    2 h später) und prüft, dass der nächste App-Start die Schließung samt
+    Heartbeat-Zeitpunkt in der Konsole ausweist — nicht nur im Logfile.
+    """
+    import utils
+    from db_helper import create_connection, create_main_table, log_start, write_heartbeat
+
+    db_path = utils.load_config()["database_path"]
+    conn = create_connection(db_path)
+    create_main_table(conn)
+    log_start(project="1", name="crash_user", timestamp=datetime(2026, 6, 23, 10, 0), conn=conn)
+    write_heartbeat(conn, datetime(2026, 6, 23, 12, 0))
+    conn.close()
+
+    root = Tk()
+    try:
+        app = App(root)
+        console_text = app.console.get("1.0", END)
+        assert "verwaiste Session(s)" in console_text
+        assert "23-06-2026 12:00:00" in console_text
+        row = app.db_conn.execute("SELECT timestamp FROM events WHERE event_type = 'stop'").fetchone()
+        assert row == ("2026-06-23 12:00:00",)
+    finally:
+        root.destroy()

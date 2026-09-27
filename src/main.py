@@ -3,6 +3,7 @@ import logging
 import logging.handlers
 import multiprocessing
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -90,6 +91,28 @@ def _configure_windows_taskbar_icon(root: tk.Tk) -> None:
             root.iconbitmap(default=icon_path)
 
 
+def _install_signal_handlers(root: tk.Tk, app) -> None:
+    """SIGTERM/SIGINT → sauberer Stop-Pfad der App statt harter Abbruch.
+
+    Ohne Handler umgehen Logout/Shutdown/Ctrl+C ``_on_closing`` komplett — der
+    offene Start bliebe in der DB und würde beim nächsten Launch nur noch per
+    Heartbeat repariert. Python führt Signal-Handler im Hauptthread zwischen
+    Bytecodes aus; der periodische Timer-Tick garantiert das binnen weniger
+    Sekunden auch während ``mainloop``. Der Handler delegiert per ``after`` in
+    die Event-Loop und stellt keine Rückfragen (SIGTERM beim Logout darf nicht
+    blocken — auch unter Windows keine askyesno-Dialoge).
+    """
+
+    def _graceful(signum, _frame):
+        logger.info("Signal %d empfangen — sauberes Beenden wird eingeleitet.", signum)
+        with contextlib.suppress(Exception):
+            root.after(0, app.shutdown_from_signal)
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        with contextlib.suppress(ValueError, OSError, AttributeError):
+            signal.signal(sig, _graceful)
+
+
 def main():
     """Main function to start both the Tkinter app and the statistics dashboard."""
     multiprocessing.freeze_support()
@@ -152,7 +175,8 @@ def main():
         # Start the Tkinter app in the main thread
         root = tk.Tk()
         _configure_windows_taskbar_icon(root)
-        app = App(root, stats_port=stats_port, start_stats_dashboard=start_stats_dashboard)  # noqa: F841
+        app = App(root, stats_port=stats_port, start_stats_dashboard=start_stats_dashboard)
+        _install_signal_handlers(root, app)
 
         if si.listen_socket and si.stop_event:
             logger.info("Single-Instance aktiv (IPC 127.0.0.1:%s, nur Hauptfenster).", si.port)

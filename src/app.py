@@ -52,6 +52,7 @@ from db_helper import (
     calculate_duration,
     check_project,
     check_user,
+    clear_heartbeat,
     close_stale_breaks,
     close_stale_sessions,
     create_break_events_table,
@@ -72,11 +73,13 @@ from db_helper import (
     migrate_legacy_user_tables,
     migrate_projects_to_table,
     migrate_repair_dates,
+    read_heartbeat,
     set_archived,
     set_daily_note,
     set_daily_transferred,
     update_event,
     validate_event_pair,
+    write_heartbeat,
 )
 from idle_monitor import get_idle_seconds
 from ui_widgets import WEEK_PROJECT_COLORS, _ToolTip, project_color  # noqa: F401  (Re-Export für bestehende Importe)
@@ -116,6 +119,12 @@ SUSPEND_GAP_SECONDS = 180
 # Maximale Zeilen der In-App-Konsole (älteste werden verworfen).
 CONSOLE_MAX_LINES = 500
 
+# Heartbeat-Intervall: bei offener Session persistiert der Timer-Tick ca.
+# minütlich einen last_seen-Zeitstempel — nach Absturz/SIGKILL schließt
+# close_stale_sessions den verwaisten Start auf diesen Zeitpunkt statt mit
+# Null-Dauer (max. ~1 min Verlust statt der ganzen Session).
+HEARTBEAT_INTERVAL_SECONDS = 60
+
 
 class App:
     def __init__(self, master, stats_port=None, start_stats_dashboard=None):
@@ -150,6 +159,8 @@ class App:
         self._current_break_source = "pomodoro_break"
         self._pomodoro_cycles = 0
         self._session_started_ts = 0.0
+        # Wanduhr-Zeit des letzten geschriebenen last_seen-Heartbeats.
+        self._last_heartbeat_ts = 0.0
         self._pomodoro_work_deadline_ts = 0.0
         self._paused_pomodoro_remaining_seconds = 0
         self._last_break_project = None
@@ -711,9 +722,13 @@ class App:
                 create_events_table(self.db_conn)
                 create_break_events_table(self.db_conn)
                 close_stale_breaks(self.db_conn)
+                # Heartbeat VOR dem Aufräumen lesen — close_stale_sessions
+                # verbraucht ihn; für die Konsolen-Meldung wird er gebraucht.
+                last_seen = read_heartbeat(self.db_conn)
                 stale_count = close_stale_sessions(self.db_conn)
                 if stale_count:
                     logger.info("Bereinigt: %d verwaiste Session(s) geschlossen.", stale_count)
+                self._report_stale_sessions(stale_count, last_seen)
                 default_user = self.config.get("default_user", "Hans")
                 migrate_legacy_user_tables(self.db_conn)
                 migrate_projects_to_table(self.db_conn)
@@ -868,14 +883,18 @@ class App:
         if path:
             self._activate_database(path)
 
-    def _on_closing(self):
-        """Handle window close — stop active sessions and breaks first."""
+    def _on_closing(self, ask: bool = True):
+        """Handle window close — stop active sessions and breaks first.
+
+        ``ask=False``: nicht-interaktiver Shutdown (SIGTERM/SIGINT, Logout) —
+        es erscheinen keine Dialoge, Sessions werden bestmöglich gestoppt.
+        """
         # Getippte, noch nicht gespeicherte Notiz sichern, bevor irgendetwas
         # anderes passiert (auch bei Abbruch des Dialogs kein Verlust).
         self._flush_pending_note()
         active = [k for k, v in self.session_active.items() if v]
 
-        if self._break_active or active:
+        if ask and (self._break_active or active):
             msg_parts = []
             if self._break_active:
                 msg_parts.append("Eine Pause ist aktiv.")
@@ -899,10 +918,32 @@ class App:
 
         # Re-check: manual break may have closed the session already.
         active = [k for k, v in self.session_active.items() if v]
-        if active:
-            for n, p in active:
-                date = datetime.today().strftime(UI_DATE_FORMAT)
-                log_stop(project=p, name=n, date=date, conn=self.db_conn)
+        stops_ok = True
+        for n, p in active:
+            date = datetime.today().strftime(UI_DATE_FORMAT)
+            if not log_stop(project=p, name=n, date=date, conn=self.db_conn):
+                stops_ok = False
+                logger.error("Stop beim Beenden fehlgeschlagen: user=%s, project=%s", n, p)
+        # Ohne diese Rückfrage ginge die Session-Zeit still verloren: der
+        # offene Start würde beim nächsten Launch automatisch geschlossen,
+        # ohne dass der Nutzer je vom DB-Fehler erfahren hat.
+        if (
+            not stops_ok
+            and ask
+            and not messagebox.askyesno(
+                "Stop nicht gespeichert",
+                "Der Session-Stop konnte nicht in der Datenbank gespeichert werden.\n"
+                "Trotzdem beenden? Die Session wird beim nächsten Start "
+                "auf den letzten Heartbeat geschlossen.",
+            )
+        ):
+            return  # Abbruch: App und Session laufen weiter
+        if stops_ok:
+            # Sauberes Ende: Heartbeat austragen — er gilt nur für unsauber
+            # beendete Läufe (close_stale_sessions schlösse sonst später einen
+            # manuell nachgetragenen offenen Start auf einen veralteten
+            # last_seen).
+            clear_heartbeat(self.db_conn)
 
         self._closing = True
         if self.db_conn:
@@ -915,6 +956,17 @@ class App:
             with contextlib.suppress(Exception):
                 self._mini_toplevel.destroy()
         self.master.destroy()
+
+    def shutdown_from_signal(self):
+        """Sauberer Stop-Pfad für SIGTERM/SIGINT (siehe main.py).
+
+        Bewusst ohne Rückfragen — beim Logout/Shutdown darf nichts blocken,
+        auch unter Windows keine askyesno-Dialoge.
+        """
+        if self._closing:
+            return
+        logger.info("Shutdown-Signal empfangen — Sessions werden gestoppt.")
+        self._on_closing(ask=False)
 
     def _ensure_mini_toplevel(self):
         """Create the mini-mode Toplevel and its widgets on first use."""
@@ -2983,6 +3035,23 @@ class App:
         except Exception:
             self._fallback_write(message, error=error)
 
+    def _report_stale_sessions(self, stale_count: int, last_seen: datetime | None) -> None:
+        """Macht das Aufräumen verwaister Sessions in der App-Konsole sichtbar.
+
+        Nur ins Logfile zu schreiben hieße: der Nutzer erfährt nie, dass (und
+        bis wann) eine unsauber beendete Session automatisch geschlossen wurde.
+        """
+        if not stale_count:
+            return
+        if last_seen is not None:
+            ende = f"Ende: letzter Heartbeat {last_seen.strftime('%d-%m-%Y %H:%M:%S')}"
+        else:
+            ende = "Ende = Start (Null-Dauer, kein Heartbeat vorhanden)"
+        self.write(
+            f"{stale_count} verwaiste Session(s) nach unsauberem Beenden geschlossen — {ende}.",
+            error=True,
+        )
+
     def _open_database(self, path: str) -> bool:
         """Schließt die aktuelle DB-Verbindung und öffnet ``path`` (inkl. Schema/Migration).
 
@@ -3002,7 +3071,8 @@ class App:
                 migrate_repair_dates(self.db_conn)
                 # Gleiches Aufräumen wie beim App-Start: verwaiste Sessions/
                 # Pausen der neu geladenen DB schließen.
-                close_stale_sessions(self.db_conn)
+                last_seen = read_heartbeat(self.db_conn)
+                self._report_stale_sessions(close_stale_sessions(self.db_conn), last_seen)
                 close_stale_breaks(self.db_conn)
             return self.db_conn is not None
         except Exception as e:  # noqa: BLE001
@@ -4111,6 +4181,17 @@ class App:
 
             # Auto-Stop bei langer systemweiter Inaktivität (~alle 30 s geprüft).
             self._maybe_auto_stop_idle()
+
+        # Heartbeat: bei offener Session/Pause ca. minütlich last_seen
+        # persistieren — nach Absturz/SIGKILL schließt close_stale_sessions
+        # den verwaisten Start auf diesen Zeitpunkt statt mit Null-Dauer.
+        # Im Leerlauf bewusst keine Schreibzugriffe (Standby-Hygiene).
+        if (any(self.session_active.values()) or self._break_active) and (
+            time.time() - self._last_heartbeat_ts >= HEARTBEAT_INTERVAL_SECONDS
+        ):
+            self._last_heartbeat_ts = time.time()
+            write_heartbeat(self.db_conn)
+
         if self._db_dirty and (time.time() - self._db_dirty_since) >= 2:
             self._force_date_refresh()
 

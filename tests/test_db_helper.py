@@ -243,6 +243,84 @@ def test_close_stale_sessions_single_orphan(db_conn):
     assert close_stale_sessions(db_conn) == 0
 
 
+def test_write_read_clear_heartbeat(db_conn):
+    """write_heartbeat persistiert genau einen last_seen; Überschreiben und Löschen."""
+    from datetime import datetime as _dt
+
+    from db_helper import clear_heartbeat, read_heartbeat, write_heartbeat
+
+    assert read_heartbeat(db_conn) is None
+    assert write_heartbeat(db_conn, _dt(2026, 6, 23, 10, 0)) is True
+    assert read_heartbeat(db_conn) == _dt(2026, 6, 23, 10, 0)
+    assert write_heartbeat(db_conn, _dt(2026, 6, 23, 10, 1)) is True
+    assert read_heartbeat(db_conn) == _dt(2026, 6, 23, 10, 1)
+    row_count = db_conn.execute("SELECT COUNT(*) FROM app_state WHERE key = 'last_seen'").fetchone()[0]
+    assert row_count == 1
+    assert clear_heartbeat(db_conn) is True
+    assert read_heartbeat(db_conn) is None
+
+
+def test_close_stale_sessions_uses_heartbeat(db_conn):
+    """Verwaister Start endet auf dem letzten Heartbeat statt mit Null-Dauer."""
+    from datetime import datetime as _dt
+
+    from db_helper import (
+        calculate_daily_duration,
+        close_stale_sessions,
+        read_heartbeat,
+        write_heartbeat,
+    )
+
+    check_user(db_conn, "test_user")
+    log_start(project="P", name="test_user", timestamp=_dt(2026, 6, 23, 10, 0), conn=db_conn)
+    write_heartbeat(db_conn, _dt(2026, 6, 23, 12, 0))
+
+    assert close_stale_sessions(db_conn) == 1
+    # Stop-Event liegt auf dem Heartbeat, date-Spalte konsistent dazu.
+    row = db_conn.execute("SELECT timestamp, date FROM events WHERE event_type = 'stop'").fetchone()
+    assert row == ("2026-06-23 12:00:00", "23-06-2026")
+    assert calculate_daily_duration(project="P", name="test_user", date="23-06-2026", conn=db_conn) == 7200
+    # Heartbeat ist verbraucht — ein zweiter Lauf schließt nichts erneut.
+    assert read_heartbeat(db_conn) is None
+    assert close_stale_sessions(db_conn) == 0
+
+
+def test_close_stale_sessions_heartbeat_before_start(db_conn):
+    """Heartbeat VOR dem verwaisten Start: Fallback auf Null-Dauer am Start."""
+    from datetime import datetime as _dt
+
+    from db_helper import calculate_daily_duration, close_stale_sessions, write_heartbeat
+
+    check_user(db_conn, "test_user")
+    log_start(project="P", name="test_user", timestamp=_dt(2026, 6, 23, 10, 0), conn=db_conn)
+    write_heartbeat(db_conn, _dt(2026, 6, 23, 9, 0))
+
+    assert close_stale_sessions(db_conn) == 1
+    row = db_conn.execute("SELECT timestamp FROM events WHERE event_type = 'stop'").fetchone()
+    assert row == ("2026-06-23 10:00:00",)
+    assert calculate_daily_duration(project="P", name="test_user", date="23-06-2026", conn=db_conn) == 0
+
+
+def test_stale_sessions_and_heartbeat_on_legacy_db_without_app_state(db_conn):
+    """Alt-DB ohne app_state-Tabelle läuft unverändert (Guards, Null-Dauer)."""
+    from datetime import datetime as _dt
+
+    from db_helper import close_stale_sessions, read_heartbeat, write_heartbeat
+
+    db_conn.execute("DROP TABLE app_state")
+    db_conn.commit()
+
+    assert read_heartbeat(db_conn) is None
+    assert write_heartbeat(db_conn, _dt(2026, 6, 23, 12, 0)) is False
+
+    check_user(db_conn, "test_user")
+    log_start(project="P", name="test_user", timestamp=_dt(2026, 6, 23, 10, 0), conn=db_conn)
+    assert close_stale_sessions(db_conn) == 1
+    row = db_conn.execute("SELECT timestamp FROM events WHERE event_type = 'stop'").fetchone()
+    assert row == ("2026-06-23 10:00:00",)
+    assert close_stale_sessions(db_conn) == 0
+
+
 def test_get_all_users(db_conn):
     """Test getting all users."""
     check_user(db_conn, "alice")
