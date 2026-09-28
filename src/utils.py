@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # unten gebraucht (Annotations bleiben dank `from __future__ import
 # annotations` unausgewertet). Der tkinter-Prozess startet so ohne polars.
 
-APP_VERSION = "2.5.0"
+APP_VERSION = "2.5.1"
 APP_AUTHOR = "grenzenloseSchublade"
 APP_LICENSE = "MIT"
 
