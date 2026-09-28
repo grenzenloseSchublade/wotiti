@@ -67,6 +67,9 @@ class SettingsDialog:
         win = Toplevel(self.app.master)
         win.title("Einstellungen")
         win.configure(bg="#C0C0C0")
+        # Unsichtbar aufbauen, erst fertig zentriert zeigen (kein Aufblitzen
+        # oben links) — siehe App._show_modal.
+        win.withdraw()
         win.transient(self.app.master)
         # Geometrie wird am Ende aus dem tatsächlichen Inhalt berechnet
         # (winfo_reqheight), damit das Fenster auf Windows wie Linux trotz
@@ -861,5 +864,4 @@ class SettingsDialog:
         y = max(0, self.app.master.winfo_y() + (self.app.master.winfo_height() - h) // 2)
         win.geometry(f"{w}x{h}+{x}+{y}")
         win.minsize(w, min(h, 560))
-        win.wait_visibility()
-        win.grab_set()
+        self.app._show_modal(win)

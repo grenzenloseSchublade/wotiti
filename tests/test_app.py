@@ -1280,7 +1280,7 @@ def test_day_list_limit_truncates_and_hint_matches(app_instance):
 
     assert len(app_instance._day_sessions) == 250  # genau 500 Events sichtbar
     text = app_instance.day_list.get("1.0", "end-1c")
-    assert "… 1 weitere Session ausgeblendet (Limit 500 Events/Tag)" in text
+    assert "... 1 weitere Session ausgeblendet (Limit 500 Events/Tag)" in text
     assert "23:00" not in text  # die gekürzte Session ist wirklich weg
     assert "unvollständig" not in text  # Ladefenster-Deckel griff hier nicht
 

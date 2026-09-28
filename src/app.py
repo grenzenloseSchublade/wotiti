@@ -105,7 +105,7 @@ logger = logging.getLogger(__name__)
 # Sentinel-Eintrag in der Projekt-Combobox, der den "Neues Projekt"-Dialog öffnet.
 # So ist das Anlegen eines Projekts direkt im Dropdown sichtbar/auffindbar.
 # Bewusst nur Standard-Zeichen (kein Emoji).
-NEW_PROJECT_LABEL = "+ Neues Projekt …"
+NEW_PROJECT_LABEL = "+ Neues Projekt ..."
 
 # Standby-Erkennung: Klafft zwischen zwei Timer-Ticks die Wanduhr um mehr als
 # diese Spanne weiter auseinander als die Monotonic-Uhr, war das System im
@@ -478,7 +478,7 @@ class App:
         # Platzhalter als Overlay-Label ÜBER dem Feld — bewusst KEIN Text im
         # Widget-Inhalt (der würde mit _flush_pending_note/clamp_note kollidieren).
         self._note_placeholder = Label(
-            self.entry_frame, text="Notiz…", bg="#FFFFFF", fg="#909090", font=("MS Sans Serif", 10)
+            self.entry_frame, text="Notiz...", bg="#FFFFFF", fg="#909090", font=("MS Sans Serif", 10)
         )
         self._note_placeholder.bind("<Button-1>", lambda _e: self.note_entry.focus_set())
         self.note_entry.bind("<KeyRelease>", lambda _e: self._update_note_placeholder(), add="+")
@@ -896,6 +896,9 @@ class App:
         schief: ``wait_visibility()`` pumpt die Idle-Queue schon vor dem
         Inhalt leer — gemessen würde ein leerer Toplevel (200x200) und die
         explizite Geometrie friert diese Größe dauerhaft ein.
+
+        Zeigt den (per ``withdraw()`` versteckt aufgebauten) Dialog danach
+        modal an — siehe ``_show_modal``.
         """
         anchor = ref or self.master
         win.update_idletasks()
@@ -905,6 +908,22 @@ class App:
         x = anchor.winfo_x() + (anchor.winfo_width() - width) // 2
         y = max(0, anchor.winfo_y() + (anchor.winfo_height() - height) // 2)
         win.geometry(f"{width}x{height}+{x}+{y}")
+        self._show_modal(win)
+
+    @staticmethod
+    def _show_modal(win) -> None:
+        """Zeigt einen per ``withdraw()`` unsichtbar aufgebauten Dialog modal an.
+
+        Die Dialoge werden direkt nach ``Toplevel(...)`` versteckt und erst
+        hier — mit bereits gesetzter Geometrie — gemappt. Früher lief
+        ``wait_visibility()`` vor dem Inhaltsaufbau: der leere Dialog war dann
+        für einige Millisekunden oben links zu sehen, bevor er in die Mitte
+        sprang. ``grab_set`` braucht ein sichtbares Fenster, daher erst nach
+        ``wait_visibility``.
+        """
+        win.deiconify()
+        win.wait_visibility()
+        win.grab_set()
 
     def _build_menubar(self, master) -> None:
         """Native Menüleiste: Datei / Ansicht / Extras / Hilfe.
@@ -1318,9 +1337,10 @@ class App:
         win = Toplevel(self.master)
         win.title("Neues Projekt")
         win.configure(bg="#C0C0C0")
+        # Unsichtbar aufbauen: _fit_and_center zeigt den Dialog erst fertig
+        # zentriert — sonst blitzt er leer an der WM-Standardposition auf.
+        win.withdraw()
         win.transient(self.master)
-        win.wait_visibility()
-        win.grab_set()
 
         lbl_cfg = {"bg": "#C0C0C0", "fg": "black", "font": ("MS Sans Serif", 10)}
         btn_cfg = {"bg": "#D4D0C8", "fg": "black", "font": ("MS Sans Serif", 10), "relief": "raised", "borderwidth": 2}
@@ -1378,9 +1398,8 @@ class App:
         about.title("Über WoTITI")
         about.configure(bg="#C0C0C0")
         ref = parent or self.master
+        about.withdraw()  # erst fertig zentriert zeigen (s. _fit_and_center)
         about.transient(ref)
-        about.wait_visibility()
-        about.grab_set()
         about.bind("<Escape>", lambda _e: about.destroy())
         about.resizable(False, False)
 
@@ -2175,9 +2194,10 @@ class App:
         win = Toplevel(self.master)
         win.title("Eintrag anlegen")
         win.configure(bg="#C0C0C0")
+        # Unsichtbar aufbauen: _fit_and_center zeigt den Dialog erst fertig
+        # zentriert — sonst blitzt er leer an der WM-Standardposition auf.
+        win.withdraw()
         win.transient(self.master)
-        win.wait_visibility()
-        win.grab_set()
 
         lbl_cfg = {"bg": "#C0C0C0", "fg": "black", "font": ("MS Sans Serif", 10)}
         entry_cfg = {
@@ -2445,7 +2465,7 @@ class App:
                 self._apply_console_collapsed()
             text = " ".join(message.split())
             if len(text) > 80:
-                text = text[:79] + "…"
+                text = text[:77] + "..."
             self._status_error_label.config(text=text)
             if self._status_error_after_id is not None:
                 self.master.after_cancel(self._status_error_after_id)
@@ -2750,8 +2770,8 @@ class App:
         Die Dauer wird als **H:MM** ausgegeben (echte Minuten, 60 min = 1 h) statt
         als Dezimalstunde — 55 min sind „0:55 h", nicht „0.92 h".
         """
-        start = s["start_ts"].strftime("%H:%M") if s["start_ts"] else "…"
-        stop = s["stop_ts"].strftime("%H:%M") if s["stop_ts"] else "…"
+        start = s["start_ts"].strftime("%H:%M") if s["start_ts"] else "..."
+        stop = s["stop_ts"].strftime("%H:%M") if s["stop_ts"] else "..."
         if s["dur_h"] is None:
             return f"{start} → {stop}", "läuft"
         return f"{start} → {stop}", App._fmt_hours_hm(s["dur_h"])
@@ -2866,9 +2886,10 @@ class App:
         win = Toplevel(self.master)
         win.title("Session bearbeiten")
         win.configure(bg="#C0C0C0")
+        # Unsichtbar aufbauen: _fit_and_center zeigt den Dialog erst fertig
+        # zentriert — sonst blitzt er leer an der WM-Standardposition auf.
+        win.withdraw()
         win.transient(self.master)
-        win.wait_visibility()
-        win.grab_set()
 
         lbl_cfg = {"bg": "#C0C0C0", "fg": "black", "font": ("MS Sans Serif", 10)}
         entry_cfg = {
@@ -3644,7 +3665,7 @@ class App:
             return  # Start läuft bereits; Browser öffnet, sobald der Port antwortet.
         self._stats_dashboard_pending = True
         self._set_stats_menu_state("disabled")
-        self.write("Dashboard wird gestartet …")
+        self.write("Dashboard wird gestartet ...")
         self._start_stats_dashboard()
         self._poll_stats_dashboard_ready(time.time() + 30.0)
 

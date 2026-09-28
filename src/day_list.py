@@ -49,6 +49,11 @@ class DayListView:
             state="disabled",
             cursor="arrow",
             takefocus=0,
+            # Kein Innenabstand/Fokusrahmen: die Zeilen-Hervorhebung (hover/
+            # active_line) reicht so bündig von Rand zu Rand; die Einrückung
+            # des Inhalts übernehmen die lmargin-Werte der Tags.
+            padx=0,
+            highlightthickness=0,
         )
         self.widget.grid(row=0, column=0, sticky="nsew")
         # Fokus sofort wegleiten: Tks tk::TextButton1 setzt bei Mausklick
@@ -85,12 +90,15 @@ class DayListView:
         das Grau von ``note``.
         """
         tw = self.widget
+        # Basis-Einzug für jede Zeile (Widget hat padx=0, s. __init__). Als
+        # erster Tag definiert = niedrigste Priorität: times/note überschreiben.
+        tw.tag_configure("base", lmargin1=4, lmargin2=4)
         tw.tag_configure("user", font=("MS Sans Serif", 9), foreground="#404040", spacing1=6, spacing3=2)
-        tw.tag_configure("proj_head", font=("MS Sans Serif", 10, "bold"), spacing1=8, lmargin1=2)
+        tw.tag_configure("proj_head", font=("MS Sans Serif", 10, "bold"), spacing1=8)
         tw.tag_configure("dur", font=("MS Sans Serif", 10))
         tw.tag_configure("check", foreground="#008000")
-        tw.tag_configure("times", lmargin1=22, lmargin2=22)
-        tw.tag_configure("note", lmargin1=22, lmargin2=22, foreground="#606060")
+        tw.tag_configure("times", lmargin1=24, lmargin2=24)
+        tw.tag_configure("note", lmargin1=24, lmargin2=24, foreground="#606060")
         tw.tag_configure("dim", foreground="#808080")
         tw.tag_configure("hover", background="#ECECEC")
         tw.tag_configure("active_line", background="#D8D8D8")
@@ -249,14 +257,14 @@ class DayListView:
                     """Fügt eine Zeile aus (Text, Tags)-Segmenten ein + Mapping."""
                     line_no = int(tw.index("end-1c").split(".")[0])
                     for text, tags in segments:
-                        tw.insert(END, text, tags)
+                        tw.insert(END, text, ("base", *tags))
                     tw.insert(END, "\n")
                     if session is not None:
                         self._line_sessions[line_no] = session
 
                 def _range_str(s):
-                    start = s["start_ts"].strftime("%H:%M") if s["start_ts"] else "…"
-                    stop = s["stop_ts"].strftime("%H:%M") if s["stop_ts"] else "…"
+                    start = s["start_ts"].strftime("%H:%M") if s["start_ts"] else "..."
+                    stop = s["stop_ts"].strftime("%H:%M") if s["stop_ts"] else "..."
                     return f"{start}–{stop}"
 
                 def _note_line(note):
@@ -365,18 +373,18 @@ class DayListView:
                 # separaten COUNT, der davon abweichen könnte.
                 if hidden_sessions:
                     word = "weitere Session" if hidden_sessions == 1 else "weitere Sessions"
-                    _emit([(f"… {hidden_sessions} {word} ausgeblendet (Limit {limit} Events/Tag)", ("dim",))])
+                    _emit([(f"... {hidden_sessions} {word} ausgeblendet (Limit {limit} Events/Tag)", ("dim",))])
             else:
                 # Empty-State: sichtbar machen, dass der Tag wirklich leer ist
                 # (und nicht etwa die Liste defekt) — dezent im dim-Grau.
-                tw.insert(END, "Keine Einträge für diesen Tag\n", ("dim",))
+                tw.insert(END, "Keine Einträge für diesen Tag\n", ("base", "dim"))
             if window_truncated:
                 # Der SQL-Deckel hat zugeschlagen: das ±3-Tage-Ladefenster war
                 # voll, auch Sessions des Anzeigetags können fehlen.
                 tw.insert(
                     END,
-                    f"… Anzeige evtl. unvollständig: Ladefenster-Limit ({window_limit} Events) erreicht\n",
-                    ("dim",),
+                    f"... Anzeige evtl. unvollständig: Ladefenster-Limit ({window_limit} Events) erreicht\n",
+                    ("base", "dim"),
                 )
 
     def _event_session(self, event) -> dict | None:
@@ -395,6 +403,16 @@ class DayListView:
                 return self._tag_sessions[t]
         return self._line_sessions.get(int(idx.split(".")[0]))
 
+    @staticmethod
+    def _full_line(line: int) -> tuple[str, str]:
+        """Tag-Bereich einer ganzen Zeile inkl. Zeilenumbruch.
+
+        Nur mit dem ``\\n`` füllt Tk den Tag-Hintergrund bis zum rechten
+        Rand; ``line.end`` endet am letzten Zeichen — die Hervorhebung wirkte
+        dann je nach Textlänge rechts unterschiedlich abgeschnitten.
+        """
+        return f"{line}.0", f"{line + 1}.0"
+
     def _on_motion(self, event) -> None:
         """Hinterlegt die Zeile unter dem Cursor (Klick-Affordanz)."""
         tw = self.widget
@@ -403,7 +421,7 @@ class DayListView:
         info = tw.dlineinfo(idx)
         line = int(idx.split(".")[0])
         if info and info[1] <= event.y <= info[1] + info[3] and line in self._line_sessions:
-            tw.tag_add("hover", f"{line}.0", f"{line}.end")
+            tw.tag_add("hover", *self._full_line(line))
 
     def _on_leave(self, _event=None) -> None:
         self.widget.tag_remove("hover", "1.0", END)
@@ -416,7 +434,7 @@ class DayListView:
         tw = self.widget
         line = int(tw.index(f"@{event.x},{event.y}").split(".")[0])
         tw.tag_remove("active_line", "1.0", END)
-        tw.tag_add("active_line", f"{line}.0", f"{line}.end")
+        tw.tag_add("active_line", *self._full_line(line))
 
         menu = Menu(tw, tearoff=0)
         # Tk räumt Menü-Widgets nicht selbst ab — ohne destroy akkumuliert
